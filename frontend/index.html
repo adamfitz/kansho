@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Wails GUI Example</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="app">
+        <header>
+            <h1>🚀 Wails GUI Example</h1>
+            <p>A cross-platform desktop application built with Go and Wails</p>
+        </header>
+
+        <main>
+            <div class="card">
+                <h2>Greeting Section</h2>
+                <div class="input-group">
+                    <label for="name">Enter your name:</label>
+                    <input type="text" id="name" placeholder="Enter your name..." value="World">
+                    <button id="greetBtn" class="btn btn-primary">Greet Me!</button>
+                </div>
+                <div id="greetResult" class="result"></div>
+            </div>
+
+            <div class="card">
+                <h2>System Information</h2>
+                <div class="button-group">
+                    <button id="timeBtn" class="btn btn-secondary">Get Current Time</button>
+                    <button id="sysInfoBtn" class="btn btn-secondary">System Info</button>
+                </div>
+                <div id="sysInfoResult" class="result"></div>
+            </div>
+
+            <div class="card">
+                <h2>Dialog Examples</h2>
+                <div class="button-group">
+                    <button id="messageBtn" class="btn btn-success">Show Message</button>
+                    <button id="fileBtn" class="btn btn-warning">Open File Dialog</button>
+                </div>
+                <div id="dialogResult" class="result"></div>
+            </div>
+
+            <div class="card">
+                <h2>Interactive Demo</h2>
+                <div class="demo-controls">
+                    <button id="counterBtn" class="btn btn-info">Click Counter: <span id="counter">0</span></button>
+                    <button id="resetBtn" class="btn btn-danger">Reset</button>
+                </div>
+                <div class="progress-section">
+                    <label for="progressRange">Progress Bar:</label>
+                    <input type="range" id="progressRange" min="0" max="100" value="50">
+                    <div class="progress-bar">
+                        <div id="progressFill" class="progress-fill" style="width: 50%"></div>
+                    </div>
+                    <span id="progressValue">50%</span>
+                </div>
+            </div>
+        </main>
+
+        <footer>
+            <p>Built with ❤️ using Wails v2 and Go</p>
+        </footer>
+    </div>
+
+    <script src="main.js"></script>
+</body>
+</html>

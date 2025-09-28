@@ -1,0 +1,16 @@
+{
+  "name": "wails-gui-example-frontend",
+  "version": "1.0.0",
+  "description": "Frontend for Wails GUI Example",
+  "main": "main.js",
+  "scripts": {
+    "build": "mkdir -p dist && cp *.html *.css *.js dist/",
+    "dev": "mkdir -p dist && cp *.html *.css *.js dist/ && echo 'Frontend built for development'",
+    "watch": "npm run build"
+  },
+  "keywords": ["wails", "frontend", "gui"],
+  "author": "Your Name",
+  "license": "MIT",
+  "devDependencies": {},
+  "dependencies": {}
+}
