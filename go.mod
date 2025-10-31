@@ -1,4 +1,4 @@
-module kanshov2
+module kansho
 
 go 1.25.3
 
