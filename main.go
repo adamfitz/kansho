@@ -121,12 +121,14 @@ func main() {
 			return
 		}
 		
-		// Create a label with the added URL
-		title := fmt.Sprintf("Added: %s", url)
-		mangaListBox.Add(widget.NewLabel(title))
+		// Show success dialog with the added URL
+		dialog.ShowInformation("Success", fmt.Sprintf("Manga URL added successfully!\n\n%s", url), myWindow)
 		
 		// Clear the entry field after adding
 		urlEntry.SetText("")
+		
+		// TODO: In the future, this will actually save the manga to a database/file
+		// and refresh the manga list to show the new entry
 	})
 
 	// Create the content for the Add Manga URL card
