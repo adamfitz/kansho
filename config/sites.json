@@ -1,0 +1,44 @@
+{
+  "sites": [
+    {
+      "name": "rizzfables",
+      "display_name": "Rizz Fables",
+      "required_fields": {
+        "url": true,
+        "shortname": false,
+        "title": true,
+        "location": true
+      }
+    },
+    {
+      "name": "xbato",
+      "display_name": "XBato",
+      "required_fields": {
+        "url": false,
+        "shortname": true,
+        "title": true,
+        "location": true
+      }
+    },
+    {
+      "name": "manganato",
+      "display_name": "Manganato",
+      "required_fields": {
+        "url": true,
+        "shortname": true,
+        "title": true,
+        "location": true
+      }
+    },
+    {
+      "name": "generic",
+      "display_name": "Generic Site",
+      "required_fields": {
+        "url": false,
+        "shortname": false,
+        "title": true,
+        "location": true
+      }
+    }
+  ]
+}

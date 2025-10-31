@@ -3,7 +3,10 @@ package main
 // NOTE: This code uses the kansho/bookmarks package for loading manga data from JSON
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
+	"os"
 	"sort"
 
 	"fyne.io/fyne/v2"
@@ -17,6 +20,47 @@ import (
 	"image/color"
 	"kansho/bookmarks"
 )
+
+// RequiredFields defines which fields are required for a specific site
+type RequiredFields struct {
+	URL       bool `json:"url"`
+	Shortname bool `json:"shortname"`
+	Title     bool `json:"title"`
+	Location  bool `json:"location"`
+}
+
+// Site represents a manga site configuration
+type Site struct {
+	Name           string         `json:"name"`
+	DisplayName    string         `json:"display_name"`
+	RequiredFields RequiredFields `json:"required_fields"`
+}
+
+// SitesConfig represents the root structure of sites.json
+type SitesConfig struct {
+	Sites []Site `json:"sites"`
+}
+
+// LoadSitesConfig loads the site configuration from config/sites.json
+func LoadSitesConfig() SitesConfig {
+	sitesLocation := "./config/sites.json"
+
+	file, err := os.Open(sitesLocation)
+	if err != nil {
+		fmt.Printf("error loading sites config file: %v\n", err)
+		return SitesConfig{}
+	}
+	defer file.Close()
+
+	byteValues, _ := io.ReadAll(file)
+
+	var sitesConfig SitesConfig
+	if err := json.Unmarshal(byteValues, &sitesConfig); err != nil {
+		fmt.Printf("error unmarshalling sites config: %v\n", err)
+	}
+
+	return sitesConfig
+}
 
 // createCard wraps content in a white card-like container
 // This creates a visual card effect with a white background and padding
@@ -121,6 +165,37 @@ func main() {
 	mangaCard := createCard(mangaListContent)
 
 	// === ADD MANGA URL CARD ===
+	// Load sites configuration
+	sitesConfig := LoadSitesConfig()
+
+	// Create slice of site display names for the dropdown
+	siteNames := make([]string, len(sitesConfig.Sites))
+	for i, site := range sitesConfig.Sites {
+		siteNames[i] = site.DisplayName
+	}
+
+	// Create a dropdown/select widget for site selection
+	siteSelect := widget.NewSelect(siteNames, func(selected string) {
+		// Find the selected site
+		var selectedSite Site
+		for _, site := range sitesConfig.Sites {
+			if site.DisplayName == selected {
+				selectedSite = site
+				break
+			}
+		}
+
+		fmt.Printf("Selected site: %s\n", selectedSite.Name)
+		fmt.Printf("Required fields - URL: %v, Shortname: %v, Title: %v, Location: %v\n",
+			selectedSite.RequiredFields.URL,
+			selectedSite.RequiredFields.Shortname,
+			selectedSite.RequiredFields.Title,
+			selectedSite.RequiredFields.Location)
+
+		// TODO: Show/hide input fields based on selectedSite.RequiredFields
+	})
+	siteSelect.PlaceHolder = "Select a site..."
+
 	// Create a text entry field for users to paste manga URLs
 	urlEntry := widget.NewEntry()
 	urlEntry.SetPlaceHolder("Paste manga URL") // Placeholder text when empty
@@ -130,15 +205,20 @@ func main() {
 		// Get the text from the URL entry field
 		url := urlEntry.Text
 
-		// Validate that the URL is not empty
+		// Validate that a site is selected
+		if siteSelect.Selected == "" {
+			dialog.ShowInformation("Add Manga", "Please select a site first.", myWindow)
+			return
+		}
+
+		// Validate that the URL is not empty (for now, will be dynamic later)
 		if url == "" {
-			// Show an information dialog if URL is empty
 			dialog.ShowInformation("Add Manga", "Please provide Manga URL.", myWindow)
 			return
 		}
 
 		// Show success dialog with the added URL
-		dialog.ShowInformation("Success", fmt.Sprintf("Manga URL added successfully!\n\n%s", url), myWindow)
+		dialog.ShowInformation("Success", fmt.Sprintf("Manga URL added successfully!\n\nSite: %s\nURL: %s", siteSelect.Selected, url), myWindow)
 
 		// Clear the entry field after adding
 		urlEntry.SetText("")
@@ -151,11 +231,13 @@ func main() {
 	urlContent := container.NewVBox(
 		// Card title in bold
 		widget.NewLabelWithStyle("Add Manga URL", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		widget.NewSeparator(),         // Horizontal line separator
-		layout.NewSpacer(),            // Push content down
-		widget.NewLabel("Enter URL:"), // Label for the input field
-		urlEntry,                      // The text entry widget
-		addButton,                     // The add button
+		widget.NewSeparator(),           // Horizontal line separator
+		layout.NewSpacer(),              // Push content down
+		widget.NewLabel("Select Site:"), // Label for site dropdown
+		siteSelect,                      // The site selection dropdown
+		widget.NewLabel("Enter URL:"),   // Label for the input field
+		urlEntry,                        // The text entry widget
+		addButton,                       // The add button
 	)
 	// Wrap the content in a white card
 	urlCard := createCard(urlContent)
