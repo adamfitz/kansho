@@ -13,8 +13,8 @@ import (
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/widget"
-	"image/color"
 
+	"image/color"
 	"kansho/bookmarks"
 )
 
@@ -75,9 +75,6 @@ func main() {
 	)
 
 	// === MANGA LIST CARD ===
-	// Create a vertical box to hold the list of manga bookmarks
-	mangaListBox := container.NewVBox()
-
 	// Load bookmarks from file using the bookmarks package
 	mangaData := bookmarks.LoadBookmarks()
 
@@ -86,19 +83,39 @@ func main() {
 		return mangaData.Manga[i].Title < mangaData.Manga[j].Title
 	})
 
-	// Populate the manga list with bookmarks loaded from the JSON file
-	// Note: LoadBookmarks() returns a Manga struct, we access the .Manga slice inside it
-	for _, b := range mangaData.Manga {
-		// Add each bookmark title as a label to the list
-		mangaListBox.Add(widget.NewLabel(b.Title))
+	// Create a selectable list widget for manga bookmarks
+	mangaList := widget.NewList(
+		// Length function - returns the number of items in the list
+		func() int {
+			return len(mangaData.Manga)
+		},
+		// CreateItem function - creates the template for each list item
+		func() fyne.CanvasObject {
+			return widget.NewLabel("template")
+		},
+		// UpdateItem function - updates each list item with actual data
+		func(id widget.ListItemID, item fyne.CanvasObject) {
+			item.(*widget.Label).SetText(mangaData.Manga[id].Title)
+		},
+	)
+
+	// OnSelected callback - called when a user clicks on a list item
+	mangaList.OnSelected = func(id widget.ListItemID) {
+		// TODO: Later you can add logic here to update other parts of the UI
+		// For example: load chapters, show details, etc.
+		// You can access the selected manga data with: mangaData.Manga[id]
 	}
 
 	// Create the content for the Manga List card
-	mangaListContent := container.NewVBox(
-		// Card title in bold
-		widget.NewLabelWithStyle("Manga List", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		widget.NewSeparator(), // Horizontal line separator
-		mangaListBox,          // The actual list of manga
+	mangaListContent := container.NewBorder(
+		// Top: Card title and separator
+		container.NewVBox(
+			widget.NewLabelWithStyle("Manga List", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+			widget.NewSeparator(),
+		),
+		nil, nil, nil,
+		// Center: The selectable list (fills remaining space)
+		mangaList,
 	)
 	// Wrap the content in a white card
 	mangaCard := createCard(mangaListContent)
