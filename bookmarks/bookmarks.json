@@ -63,6 +63,14 @@
       "location": "file:///home/adam/aws",
       "site": "asurascans",
       "shortname": ""
+    },
+    {
+      "title": "test Manga",
+      "url": "",
+      "chapters": "",
+      "location": "file:///home/adam/aws",
+      "site": "xbato",
+      "shortname": "asdfasdf"
     }
   ]
 }
