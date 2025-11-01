@@ -6,7 +6,6 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
-	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/widget"
 
 	"kansho/bookmarks"
@@ -18,7 +17,7 @@ import (
 // This view allows users to add new manga to their library by:
 // 1. Selecting a manga site from a dropdown
 // 2. Entering the manga URL (and potentially other fields based on site requirements)
-// 3. Clicking the ADD URL button to save
+// 3. Clicking the Add Manga button to save
 //
 // The form fields shown are dynamic based on the selected site's requirements.
 // For example, some sites might need a shortname while others don't.
@@ -27,9 +26,13 @@ type AddMangaView struct {
 	Card fyne.CanvasObject
 
 	// UI components that need to be accessed after creation
-	siteSelect *widget.Select // Dropdown for site selection
-	urlEntry   *widget.Entry  // Text input for manga URL
-	addButton  *widget.Button // Button to add the manga
+	siteSelect     *widget.Select // Dropdown for site selection
+	shortnameEntry *widget.Entry  // Text input for manga shortname
+	urlEntry       *widget.Entry  // Text input for manga URL
+	addButton      *widget.Button // Button to add the manga
+
+	// Container for dynamic fields that may be shown/hidden
+	shortnameContainer *fyne.Container
 
 	// state is a reference to the shared application state
 	state *KanshoAppState
@@ -70,28 +73,50 @@ func NewAddMangaView(state *KanshoAppState) *AddMangaView {
 		// This callback is triggered when the user selects a site
 		view.onSiteSelected(selected)
 	})
-	view.siteSelect.PlaceHolder = "Select a site..."
+	view.siteSelect.PlaceHolder = "Site name"
+
+	// Create the shortname input field
+	view.shortnameEntry = widget.NewEntry()
+	view.shortnameEntry.SetPlaceHolder("Short Name value")
 
 	// Create the URL input field
 	view.urlEntry = widget.NewEntry()
 	view.urlEntry.SetPlaceHolder("Paste manga URL")
 
-	// Create the ADD URL button
-	view.addButton = widget.NewButton("ADD URL", func() {
+	// Create the Add Manga button
+	view.addButton = widget.NewButton("Add Manga", func() {
 		view.onAddButtonClicked()
 	})
 
-	// Build the card content
-	// NewVBox arranges items vertically with spacing
+	// Create the first row with Select Site and Short Name fields
+	// Using NewGridWithColumns to get equal-width columns
+	firstRow := container.NewGridWithColumns(2,
+		container.NewVBox(
+			widget.NewLabel("Select Site:"),
+			view.siteSelect,
+		),
+		container.NewVBox(
+			widget.NewLabel("Short Name:"),
+			view.shortnameEntry,
+		),
+	)
+
+	// Create the second row with URL field (spans full width)
+	secondRow := container.NewVBox(
+		widget.NewLabel("URL:"),
+		view.urlEntry,
+	)
+
+	// Create container for the button, centered
+	buttonRow := container.NewCenter(view.addButton)
+
+	// Build the card content with horizontal layout
 	cardContent := container.NewVBox(
 		NewBoldLabel("Add Manga URL"),
 		NewSeparator(),
-		layout.NewSpacer(),              // Push content down from top
-		widget.NewLabel("Select Site:"), // Label for dropdown
-		view.siteSelect,                 // Site dropdown
-		widget.NewLabel("Enter URL:"),   // Label for URL field
-		view.urlEntry,                   // URL input field
-		view.addButton,                  // Add button
+		firstRow,
+		secondRow,
+		buttonRow,
 	)
 
 	// Wrap the content in a card
@@ -101,7 +126,7 @@ func NewAddMangaView(state *KanshoAppState) *AddMangaView {
 }
 
 // onSiteSelected is called when the user selects a site from the dropdown.
-// In the future, this will show/hide input fields based on the site's requirements.
+// This shows/hides input fields based on the site's requirements.
 //
 // Parameters:
 //   - selected: The display name of the selected site
@@ -116,7 +141,6 @@ func (v *AddMangaView) onSiteSelected(selected string) {
 	}
 
 	// Log the site requirements (for debugging)
-	// In the future, this information will be used to dynamically show/hide form fields
 	fmt.Printf("Selected site: %s\n", selectedSite.Name)
 	fmt.Printf("Required fields - URL: %v, Shortname: %v, Title: %v, Location: %v\n",
 		selectedSite.RequiredFields.URL,
@@ -124,19 +148,18 @@ func (v *AddMangaView) onSiteSelected(selected string) {
 		selectedSite.RequiredFields.Title,
 		selectedSite.RequiredFields.Location)
 
-	// TODO: Implement dynamic form fields
-	// Future implementation:
-	// - Show/hide shortname field based on selectedSite.RequiredFields.Shortname
-	// - Show/hide title field based on selectedSite.RequiredFields.Title
-	// - Show/hide location field based on selectedSite.RequiredFields.Location
-	// - Update validation logic in onAddButtonClicked
+	// TODO: Implement dynamic field visibility
+	// Show/hide shortname field based on selectedSite.RequiredFields.Shortname
+	// Show/hide title field based on selectedSite.RequiredFields.Title
+	// Show/hide location field based on selectedSite.RequiredFields.Location
 }
 
-// onAddButtonClicked is called when the user clicks the ADD URL button.
+// onAddButtonClicked is called when the user clicks the Add Manga button.
 // This validates the input and adds the manga to the library.
 func (v *AddMangaView) onAddButtonClicked() {
-	// Get the entered URL
+	// Get the entered values
 	url := v.urlEntry.Text
+	shortname := v.shortnameEntry.Text
 
 	// Validate that a site is selected
 	if v.siteSelect.Selected == "" {
@@ -149,7 +172,6 @@ func (v *AddMangaView) onAddButtonClicked() {
 	}
 
 	// Validate that the URL is not empty
-	// In the future, this will validate based on site requirements
 	if url == "" {
 		dialog.ShowInformation(
 			"Add Manga",
@@ -161,12 +183,17 @@ func (v *AddMangaView) onAddButtonClicked() {
 
 	// TODO: Implement proper validation based on site requirements
 	// TODO: Extract manga title from URL or require user input
-	// TODO: Handle shortname and location fields when implemented
+	// TODO: Handle location field when implemented
 
 	// For now, create a basic manga entry
-	// In the future, this will be more sophisticated and use site-specific parsing
+	// Use shortname as title if provided, otherwise use default
+	title := "New Manga"
+	if shortname != "" {
+		title = shortname
+	}
+
 	newManga := bookmarks.Bookmarks{
-		Title: "New Manga", // TODO: Get real title
+		Title: title,
 		Url:   url,
 		Site:  v.siteSelect.Selected,
 	}
@@ -176,10 +203,15 @@ func (v *AddMangaView) onAddButtonClicked() {
 	v.state.AddManga(newManga)
 
 	// Show success dialog
+	successMsg := fmt.Sprintf("Manga added successfully!\n\nSite: %s\nURL: %s",
+		v.siteSelect.Selected, url)
+	if shortname != "" {
+		successMsg += fmt.Sprintf("\nShort Name: %s", shortname)
+	}
+
 	dialog.ShowInformation(
 		"Success",
-		fmt.Sprintf("Manga URL added successfully!\n\nSite: %s\nURL: %s",
-			v.siteSelect.Selected, url),
+		successMsg,
 		v.state.Window,
 	)
 
@@ -191,6 +223,7 @@ func (v *AddMangaView) onAddButtonClicked() {
 // This is called after successfully adding a manga.
 func (v *AddMangaView) clearForm() {
 	v.urlEntry.SetText("")
+	v.shortnameEntry.SetText("")
 	// Note: We don't clear the site selection as users often add
 	// multiple manga from the same site
 }
