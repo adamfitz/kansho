@@ -6,6 +6,7 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/storage"
 	"fyne.io/fyne/v2/widget"
 
 	"kansho/bookmarks"
@@ -13,11 +14,12 @@ import (
 	"kansho/models"
 )
 
-// AddMangaView represents the "Add Manga URL" card component.
+// AddMangaView represents the "Manage Manga" card component.
 // This view allows users to add new manga to their library by:
 // 1. Selecting a manga site from a dropdown
 // 2. Entering the manga URL (and potentially other fields based on site requirements)
-// 3. Clicking the Add Manga button to save
+// 3. Selecting a target directory for manga storage
+// 4. Clicking the Add Manga button to save
 //
 // The form fields shown are dynamic based on the selected site's requirements.
 // For example, some sites might need a shortname while others don't.
@@ -26,10 +28,13 @@ type AddMangaView struct {
 	Card fyne.CanvasObject
 
 	// UI components that need to be accessed after creation
-	siteSelect     *widget.Select // Dropdown for site selection
-	shortnameEntry *widget.Entry  // Text input for manga shortname
-	urlEntry       *widget.Entry  // Text input for manga URL
-	addButton      *widget.Button // Button to add the manga
+	siteSelect           *widget.Select   // Dropdown for site selection
+	shortnameEntry       *widget.Entry    // Text input for manga shortname
+	urlEntry             *widget.Entry    // Text input for manga URL
+	directoryLabel       *widget.Label    // Label showing selected directory
+	directoryButton      *widget.Button   // Button to open directory picker
+	addButton            *widget.Button   // Button to add the manga
+	selectedDirectoryURI fyne.ListableURI // Stores the selected directory URI
 
 	// Container for dynamic fields that may be shown/hidden
 	shortnameContainer *fyne.Container
@@ -41,7 +46,7 @@ type AddMangaView struct {
 	sitesConfig models.SitesConfig
 }
 
-// NewAddMangaView creates a new "Add Manga URL" view component.
+// NewAddMangaView creates a new "Manage Manga" view component.
 // This form allows users to add new manga to their library.
 //
 // Parameters:
@@ -83,6 +88,13 @@ func NewAddMangaView(state *KanshoAppState) *AddMangaView {
 	view.urlEntry = widget.NewEntry()
 	view.urlEntry.SetPlaceHolder("Paste manga URL")
 
+	// Create the directory selection label and button
+	view.directoryLabel = widget.NewLabel("No directory selected")
+	view.directoryLabel.Wrapping = fyne.TextTruncate // Truncate long paths with ellipsis
+	view.directoryButton = widget.NewButton("Choose Directory...", func() {
+		view.onDirectoryButtonClicked()
+	})
+
 	// Create the Add Manga button
 	view.addButton = widget.NewButton("Add Manga", func() {
 		view.onAddButtonClicked()
@@ -107,15 +119,24 @@ func NewAddMangaView(state *KanshoAppState) *AddMangaView {
 		view.urlEntry,
 	)
 
+	// Create the third row with Directory field (button + label)
+	// Use a horizontal box to place the button and label side by side
+	directoryRow := container.NewVBox(
+		widget.NewLabel("Directory:"),
+		container.NewBorder(nil, nil, view.directoryButton, nil, view.directoryLabel),
+	)
+
 	// Create container for the button, centered
 	buttonRow := container.NewCenter(view.addButton)
 
 	// Build the card content with horizontal layout
 	cardContent := container.NewVBox(
-		NewBoldLabel("Add Manga URL"),
+		NewBoldLabel("Manage Manga"),
 		NewSeparator(),
 		firstRow,
 		secondRow,
+		directoryRow,
+		NewSeparator(),
 		buttonRow,
 	)
 
@@ -123,6 +144,43 @@ func NewAddMangaView(state *KanshoAppState) *AddMangaView {
 	view.Card = NewCard(cardContent)
 
 	return view
+}
+
+// onDirectoryButtonClicked opens a folder selection dialog.
+// When the user selects a directory, it updates the label and stores the URI.
+func (v *AddMangaView) onDirectoryButtonClicked() {
+	// Create a folder open dialog
+	folderDialog := dialog.NewFolderOpen(func(uri fyne.ListableURI, err error) {
+		if err != nil {
+			// Error occurred while opening the dialog
+			dialog.ShowError(err, v.state.Window)
+			return
+		}
+
+		if uri == nil {
+			// User cancelled the dialog
+			return
+		}
+
+		// Store the selected directory URI
+		v.selectedDirectoryURI = uri
+
+		// Update the label to show the selected path
+		// uri.Path() gives the full filesystem path
+		v.directoryLabel.SetText(uri.Path())
+	}, v.state.Window)
+
+	// Set the dialog to start at user's home directory
+	// You can also set a different starting location if desired
+	homeDir, err := storage.ListerForURI(storage.NewFileURI("~"))
+	if err == nil {
+		if listable, ok := homeDir.(fyne.ListableURI); ok {
+			folderDialog.SetLocation(listable)
+		}
+	}
+
+	// Show the dialog
+	folderDialog.Show()
 }
 
 // onSiteSelected is called when the user selects a site from the dropdown.
@@ -181,9 +239,19 @@ func (v *AddMangaView) onAddButtonClicked() {
 		return
 	}
 
+	// Validate that a directory has been selected
+	if v.selectedDirectoryURI == nil {
+		dialog.ShowInformation(
+			"Add Manga",
+			"Please select a target directory.",
+			v.state.Window,
+		)
+		return
+	}
+
 	// TODO: Implement proper validation based on site requirements
 	// TODO: Extract manga title from URL or require user input
-	// TODO: Handle location field when implemented
+	// TODO: Create subdirectory based on manga name under target directory
 
 	// For now, create a basic manga entry
 	// Use shortname as title if provided, otherwise use default
@@ -196,6 +264,8 @@ func (v *AddMangaView) onAddButtonClicked() {
 		Title: title,
 		Url:   url,
 		Site:  v.siteSelect.Selected,
+		// TODO: Store the directory path in your bookmarks structure
+		// You'll need to add a Location/Directory field to bookmarks.Bookmarks
 	}
 
 	// Add the manga to the app state
@@ -203,8 +273,8 @@ func (v *AddMangaView) onAddButtonClicked() {
 	v.state.AddManga(newManga)
 
 	// Show success dialog
-	successMsg := fmt.Sprintf("Manga added successfully!\n\nSite: %s\nURL: %s",
-		v.siteSelect.Selected, url)
+	successMsg := fmt.Sprintf("Manga added successfully!\n\nSite: %s\nURL: %s\nDirectory: %s",
+		v.siteSelect.Selected, url, v.selectedDirectoryURI.Path())
 	if shortname != "" {
 		successMsg += fmt.Sprintf("\nShort Name: %s", shortname)
 	}
@@ -224,6 +294,8 @@ func (v *AddMangaView) onAddButtonClicked() {
 func (v *AddMangaView) clearForm() {
 	v.urlEntry.SetText("")
 	v.shortnameEntry.SetText("")
+	v.directoryLabel.SetText("No directory selected")
+	v.selectedDirectoryURI = nil
 	// Note: We don't clear the site selection as users often add
 	// multiple manga from the same site
 }
