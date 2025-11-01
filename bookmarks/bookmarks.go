@@ -40,3 +40,15 @@ func LoadBookmarks() Manga {
 
 	return mangaStruct
 }
+
+// Save bookmark to file
+func SaveBookmarks(data Manga) error {
+	// Marshal to JSON
+	jsonData, err := json.MarshalIndent(data, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	// Write to file
+	return os.WriteFile("bookmarks/bookmarks.json", jsonData, 0644)
+}

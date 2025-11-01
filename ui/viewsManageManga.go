@@ -258,9 +258,10 @@ func (v *AddMangaView) onAddButtonClicked() {
 	}
 
 	newManga := bookmarks.Bookmarks{
-		Title: title,
-		Url:   url,
-		Site:  v.siteSelect.Selected,
+		Title:    title,
+		Url:      url,
+		Site:     v.siteSelect.Selected,
+		Location: v.selectedDirectoryURI.String(),
 		// TODO: Store the directory path in your bookmarks structure
 		// You'll need to add a Location/Directory field to bookmarks.Bookmarks
 	}

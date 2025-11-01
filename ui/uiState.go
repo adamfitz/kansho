@@ -1,9 +1,11 @@
 package ui
 
 import (
-	"fyne.io/fyne/v2"
 	"kansho/bookmarks"
 	"kansho/models"
+
+	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/dialog"
 )
 
 // KanshoAppState holds the shared state for the entire application.
@@ -88,8 +90,12 @@ func (s *KanshoAppState) AddManga(manga bookmarks.Bookmarks) {
 	// Add the manga to our in-memory data
 	s.MangaData.Manga = append(s.MangaData.Manga, manga)
 
-	// TODO: Save to disk/database here
-	// bookmarks.SaveBookmarks(s.MangaData)
+	// Save to disk immediately
+	err := bookmarks.SaveBookmarks(s.MangaData)
+	if err != nil {
+		// Handle error - maybe show a dialog to the user
+		dialog.ShowError(err, s.Window)
+	}
 
 	// Notify all registered callbacks that a manga was added
 	for _, callback := range s.OnMangaAdded {
