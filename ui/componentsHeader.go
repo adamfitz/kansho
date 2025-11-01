@@ -28,7 +28,7 @@ func NewHeader() fyne.CanvasObject {
 
 	// Create the subtitle describing the application
 	subtitleText := canvas.NewText(
-		"A cross-platform desktop application built with Go and fyne",
+		"Built with Go and fyne",
 		TextColorLight,
 	)
 	subtitleText.TextSize = SubtitleTextSize      // Smaller font (16pt)

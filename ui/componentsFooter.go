@@ -11,7 +11,7 @@ import (
 // Returns:
 //   - fyne.CanvasObject: A centered text label for the footer
 func NewFooter() fyne.CanvasObject {
-	footerText := canvas.NewText("Built with ❤️ using fyne and Go", TextColorLight)
+	footerText := canvas.NewText(" ", TextColorLight)
 	footerText.TextSize = FooterTextSize
 	footerText.Alignment = fyne.TextAlignCenter
 

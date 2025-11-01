@@ -18,6 +18,7 @@ type ChapterListView struct {
 	selectedMangaLabel *widget.Label   // Shows which manga is selected
 	chapterList        *widget.List    // List of chapters
 	contentContainer   *fyne.Container // Container that holds the dynamic content
+	updateButton       *widget.Button  // Button to update/refresh chapters
 
 	// Data
 	chapters []string // Store chapter names/paths
@@ -43,6 +44,13 @@ func NewChapterListView(state *KanshoAppState) *ChapterListView {
 
 	// Create the label showing which manga is selected
 	view.selectedMangaLabel = widget.NewLabel("Select a manga to view chapters")
+
+	// Create the Update Chapters button
+	view.updateButton = widget.NewButton("Update Chapters", func() {
+		view.onUpdateButtonClicked()
+	})
+	// Initially disable the update button since no manga is selected
+	view.updateButton.Disable()
 
 	// Create the chapter list widget (initially empty)
 	view.chapterList = widget.NewList(
@@ -74,7 +82,11 @@ func NewChapterListView(state *KanshoAppState) *ChapterListView {
 			NewBoldLabel("Chapter List"),
 			NewSeparator(),
 		),
-		nil, // Bottom
+		// Bottom: Update button
+		container.NewVBox(
+			NewSeparator(),
+			container.NewCenter(view.updateButton),
+		),
 		nil, // Left
 		nil, // Right
 		// Center: Dynamic content (will show list or status message)
@@ -117,6 +129,9 @@ func (v *ChapterListView) onMangaSelected(id int) {
 
 	// Update the label to show which manga is selected
 	v.selectedMangaLabel.SetText("Chapters for: " + manga.Title)
+
+	// Enable the update button since a manga is now selected
+	v.updateButton.Enable()
 
 	// TODO: YOUR CODE GOES HERE
 	// Load chapters from disk using the manga's location
@@ -169,6 +184,9 @@ func (v *ChapterListView) showNoSelection() {
 	v.selectedMangaLabel.SetText("Select a manga to view chapters")
 	v.chapters = []string{} // Clear chapters
 
+	// Disable the update button since no manga is selected
+	v.updateButton.Disable()
+
 	// Show just the label
 	v.contentContainer.Objects = []fyne.CanvasObject{
 		v.selectedMangaLabel,
@@ -200,4 +218,29 @@ func (v *ChapterListView) showNoChapters() {
 		widget.NewLabel("No chapters found for this manga"),
 	}
 	v.contentContainer.Refresh()
+}
+
+// onUpdateButtonClicked is called when the user clicks the Update Chapters button.
+// This reloads the chapter list from disk for the currently selected manga.
+func (v *ChapterListView) onUpdateButtonClicked() {
+	// Get the currently selected manga
+	manga := v.state.GetSelectedManga()
+	if manga == nil {
+		// No manga selected (shouldn't happen since button is disabled)
+		return
+	}
+
+	// TODO: YOUR UPDATE CODE GOES HERE
+	// Reload chapters from disk
+	// Example:
+	// chapters := YourLoadChaptersFunction(manga.Location)
+	// v.updateChapterList(chapters)
+
+	// For now, just refresh the placeholder
+	v.showPlaceholder()
+
+	// WHEN YOU IMPLEMENT YOUR CHAPTER LOADING:
+	// Replace the v.showPlaceholder() line above with:
+	//    loadedChapters := LoadChaptersFromDisk(manga.Location)
+	//    v.updateChapterList(loadedChapters)
 }
