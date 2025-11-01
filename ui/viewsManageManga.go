@@ -29,6 +29,7 @@ type AddMangaView struct {
 
 	// UI components that need to be accessed after creation
 	siteSelect           *widget.Select   // Dropdown for site selection
+	Title                *widget.Entry    // Text input for manga name
 	shortnameEntry       *widget.Entry    // Text input for manga shortname
 	urlEntry             *widget.Entry    // Text input for manga URL
 	directoryLabel       *widget.Label    // Label showing selected directory
@@ -80,6 +81,10 @@ func NewAddMangaView(state *KanshoAppState) *AddMangaView {
 	})
 	view.siteSelect.PlaceHolder = "Site name"
 
+	// Create the title/name input field
+	view.Title = widget.NewEntry()
+	view.Title.SetPlaceHolder("Full Manga Name")
+
 	// Create the shortname input field
 	view.shortnameEntry = widget.NewEntry()
 	view.shortnameEntry.SetPlaceHolder("Short Name value")
@@ -99,6 +104,15 @@ func NewAddMangaView(state *KanshoAppState) *AddMangaView {
 	view.addButton = widget.NewButton("Add Manga", func() {
 		view.onAddButtonClicked()
 	})
+
+	// Create the name/title row with label on the left, entry on the right
+	nameRow := container.NewBorder(
+		nil,                      // Top
+		nil,                      // Bottom
+		widget.NewLabel("Name:"), // Left - the label
+		nil,                      // Right
+		view.Title,               // Center - the entry field (fills remaining space)
+	)
 
 	// Create the first row with Select Site and Short Name fields
 	// Using NewGridWithColumns to get equal-width columns
@@ -133,6 +147,7 @@ func NewAddMangaView(state *KanshoAppState) *AddMangaView {
 	cardContent := container.NewVBox(
 		NewBoldLabel("Manage Manga"),
 		NewSeparator(),
+		nameRow,
 		firstRow,
 		secondRow,
 		directoryRow,
@@ -171,9 +186,12 @@ func (v *AddMangaView) onDirectoryButtonClicked() {
 	}, v.state.Window)
 
 	// Set the dialog to start at user's home directory
+	// You can also set a different starting location if desired
 	homeDir, err := storage.ListerForURI(storage.NewFileURI("~"))
 	if err == nil {
-		folderDialog.SetLocation(homeDir)
+		if listable, ok := homeDir.(fyne.ListableURI); ok {
+			folderDialog.SetLocation(listable)
+		}
 	}
 
 	// Show the dialog
@@ -212,84 +230,49 @@ func (v *AddMangaView) onSiteSelected(selected string) {
 // onAddButtonClicked is called when the user clicks the Add Manga button.
 // This validates the input and adds the manga to the library.
 func (v *AddMangaView) onAddButtonClicked() {
-	// Get the entered values
-	url := v.urlEntry.Text
-	shortname := v.shortnameEntry.Text
-
-	// Validate that a site is selected
-	if v.siteSelect.Selected == "" {
-		dialog.ShowInformation(
-			"Add Manga",
-			"Please select a site first.",
-			v.state.Window,
-		)
+	// Centralized validation
+	if !ValidateAddMangaWithDialog(v) {
 		return
 	}
 
-	// Validate that the URL is not empty
-	if url == "" {
-		dialog.ShowInformation(
-			"Add Manga",
-			"Please provide Manga URL.",
-			v.state.Window,
-		)
-		return
-	}
-
-	// Validate that a directory has been selected
-	if v.selectedDirectoryURI == nil {
-		dialog.ShowInformation(
-			"Add Manga",
-			"Please select a target directory.",
-			v.state.Window,
-		)
-		return
-	}
-
-	// TODO: Implement proper validation based on site requirements
-	// TODO: Extract manga title from URL or require user input
-	// TODO: Create subdirectory based on manga name under target directory
-
-	// For now, create a basic manga entry
-	// Use shortname as title if provided, otherwise use default
-	title := "New Manga"
-	if shortname != "" {
-		title = shortname
-	}
-
+	// Create new manga safely
 	newManga := bookmarks.Bookmarks{
-		Title:    title,
-		Url:      url,
-		Site:     v.siteSelect.Selected,
-		Location: v.selectedDirectoryURI.String(),
-		// TODO: Store the directory path in your bookmarks structure
-		// You'll need to add a Location/Directory field to bookmarks.Bookmarks
+		Title:     "",
+		Shortname: "",
+		Url:       "",
+		Site:      v.siteSelect.Selected,
+		Location:  "",
 	}
 
-	// Add the manga to the app state
-	// This will trigger callbacks that refresh the manga list
+	if v.Title != nil {
+		newManga.Title = v.Title.Text
+	}
+	if v.shortnameEntry != nil {
+		newManga.Shortname = v.shortnameEntry.Text
+	}
+	if v.urlEntry != nil {
+		newManga.Url = v.urlEntry.Text
+	}
+	if v.selectedDirectoryURI != nil {
+		newManga.Location = v.selectedDirectoryURI.String()
+	}
+
 	v.state.AddManga(newManga)
-
-	// Show success dialog
-	successMsg := fmt.Sprintf("Manga added successfully!\n\nSite: %s\nURL: %s\nDirectory: %s",
-		v.siteSelect.Selected, url, v.selectedDirectoryURI.Path())
-	if shortname != "" {
-		successMsg += fmt.Sprintf("\nShort Name: %s", shortname)
-	}
 
 	dialog.ShowInformation(
 		"Success",
-		successMsg,
+		fmt.Sprintf("Manga added successfully!\n\nTitle: %s\nSite: %s\nURL: %s\nDirectory: %s",
+			newManga.Title, newManga.Site, newManga.Url, newManga.Location),
 		v.state.Window,
 	)
 
-	// Clear the form after successful addition
 	v.clearForm()
 }
 
 // clearForm resets all input fields to their default state.
 // This is called after successfully adding a manga.
 func (v *AddMangaView) clearForm() {
+	v.Title.SetText("")
 	v.urlEntry.SetText("")
 	v.shortnameEntry.SetText("")
 	v.directoryLabel.SetText("No directory selected")

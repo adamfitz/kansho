@@ -1,17 +1,68 @@
-{ "manga": [
-        {
-            "title": "Job Change Log",
-            "shortname": "183101",
-            "chapters": "",
-            "location": "'/mangaDir/Job Change Log/'",
-            "site": "xbato"
-        },
-        {
-            "title": "Absolute dominion",
-            "url": "https://rizzfables.com/series/r2311170-absolute-dominion",
-            "chapters": "",
-            "location": "'/mangaDir/Absolute Dominion/'",
-            "site": "rizzfables"
-        }
-    ]
+{
+  "manga": [
+    {
+      "title": "Absolute dominion",
+      "url": "https://rizzfables.com/series/r2311170-absolute-dominion",
+      "chapters": "",
+      "location": "'/mangaDir/Absolute Dominion/'",
+      "site": "rizzfables",
+      "shortname": ""
+    },
+    {
+      "title": "Job Change Log",
+      "url": "",
+      "chapters": "",
+      "location": "'/mangaDir/Job Change Log/'",
+      "site": "xbato",
+      "shortname": "183101"
+    },
+    {
+      "title": "asdfas",
+      "url": "asdfasdf",
+      "chapters": "",
+      "location": "/home/adam/aws",
+      "site": "XBato",
+      "shortname": ""
+    },
+    {
+      "title": "asdfasdf",
+      "url": "adfasdfasdf",
+      "chapters": "",
+      "location": "file:///home/adam",
+      "site": "hls",
+      "shortname": ""
+    },
+    {
+      "title": "asdfasdf",
+      "url": "asdfasdf",
+      "chapters": "",
+      "location": "/home/adam/aws",
+      "site": "stonescape",
+      "shortname": ""
+    },
+    {
+      "title": "asdfasf",
+      "url": "asaasdf",
+      "chapters": "",
+      "location": "file:///home/adam/aws",
+      "site": "ravenscans",
+      "shortname": ""
+    },
+    {
+      "title": "test Manga",
+      "url": "",
+      "chapters": "",
+      "location": "file:///home/adam/aws",
+      "site": "xbato",
+      "shortname": "snameTest"
+    },
+    {
+      "title": "testmanga2",
+      "url": "testurl.com",
+      "chapters": "",
+      "location": "file:///home/adam/aws",
+      "site": "asurascans",
+      "shortname": ""
+    }
+  ]
 }

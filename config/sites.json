@@ -2,7 +2,7 @@
   "sites": [
     {
       "name": "rizzfables",
-      "display_name": "Rizz Fables",
+      "display_name": "rizzfables",
       "required_fields": {
         "url": true,
         "shortname": false,
@@ -12,7 +12,7 @@
     },
     {
       "name": "xbato",
-      "display_name": "XBato",
+      "display_name": "xbato",
       "required_fields": {
         "url": false,
         "shortname": true,
