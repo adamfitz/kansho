@@ -21,18 +21,88 @@
       }
     },
     {
-      "name": "manganato",
-      "display_name": "Manganato",
+      "name": "asurascans",
+      "display_name": "asurascans",
       "required_fields": {
         "url": true,
-        "shortname": true,
+        "shortname": false,
         "title": true,
         "location": true
       }
     },
     {
-      "name": "generic",
-      "display_name": "Generic Site",
+      "name": "mgeko",
+      "display_name": "mgeko",
+      "required_fields": {
+        "url": true,
+        "shortname": false,
+        "title": true,
+        "location": true
+      }
+    },
+    {
+      "name": "stonescape",
+      "display_name": "stonescape",
+      "required_fields": {
+        "url": true,
+        "shortname": false,
+        "title": true,
+        "location": true
+      }
+    },
+    {
+      "name": "ravenscans",
+      "display_name": "ravenscans",
+      "required_fields": {
+        "url": true,
+        "shortname": false,
+        "title": true,
+        "location": true
+      }
+    },
+    {
+      "name": "hls",
+      "display_name": "hls",
+      "required_fields": {
+        "url": false,
+        "shortname": false,
+        "title": true,
+        "location": true
+      }
+    },
+    {
+      "name": "cfotz",
+      "display_name": "cfotz",
+      "required_fields": {
+        "url": false,
+        "shortname": false,
+        "title": true,
+        "location": true
+      }
+    },
+    {
+      "name": "pmuig",
+      "display_name": "pmuig",
+      "required_fields": {
+        "url": false,
+        "shortname": false,
+        "title": true,
+        "location": true
+      }
+    },
+    {
+      "name": "orv",
+      "display_name": "orv",
+      "required_fields": {
+        "url": false,
+        "shortname": false,
+        "title": true,
+        "location": true
+      }
+    },
+    {
+      "name": "iluim",
+      "display_name": "iluim",
       "required_fields": {
         "url": false,
         "shortname": false,
