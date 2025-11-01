@@ -71,7 +71,7 @@ func NewKanshoAppState(window fyne.Window) *KanshoAppState {
 func (s *KanshoAppState) SelectManga(id int) {
 	s.SelectedMangaID = id
 
-	// Notify all registered callbacks that the selection changed
+	// Trigger all registered callbacks
 	for _, callback := range s.OnMangaSelected {
 		callback(id)
 	}
@@ -133,7 +133,7 @@ func (s *KanshoAppState) DeleteManga(id int) {
 // GetSelectedManga returns the currently selected manga, or nil if none is selected.
 //
 // Returns:
-//   - *bookmarks.Manga: Pointer to the selected manga, or nil if no selection
+//   - *bookmarks.Bookmarks: Pointer to the selected manga, or nil if no selection
 func (s *KanshoAppState) GetSelectedManga() *bookmarks.Bookmarks {
 	if s.SelectedMangaID < 0 || s.SelectedMangaID >= len(s.MangaData.Manga) {
 		return nil

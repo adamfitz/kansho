@@ -171,12 +171,9 @@ func (v *AddMangaView) onDirectoryButtonClicked() {
 	}, v.state.Window)
 
 	// Set the dialog to start at user's home directory
-	// You can also set a different starting location if desired
 	homeDir, err := storage.ListerForURI(storage.NewFileURI("~"))
 	if err == nil {
-		if listable, ok := homeDir.(fyne.ListableURI); ok {
-			folderDialog.SetLocation(listable)
-		}
+		folderDialog.SetLocation(homeDir)
 	}
 
 	// Show the dialog
