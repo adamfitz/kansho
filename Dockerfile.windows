@@ -1,0 +1,60 @@
+# Start from Debian Bullseye
+FROM debian:bullseye
+
+# Install dependencies for Go, wget, tar, and Windows cross-compiler
+RUN apt-get update && apt-get install -y \
+    wget \
+    tar \
+    ca-certificates \
+    xz-utils \
+    mingw-w64 \
+    libgl1-mesa-dev \
+    libglu1-mesa-dev \
+    gcc-mingw-w64-x86-64 \
+    g++-mingw-w64-x86-64 \
+    && rm -rf /var/lib/apt/lists/*
+
+# check the mingGW version
+RUN x86_64-w64-mingw32-gcc --version
+
+# Set Go version
+ARG GO_VERSION=1.25.0
+ARG GO_ARCHIVE=go${GO_VERSION}.linux-amd64.tar.gz
+ARG GO_URL=https://go.dev/dl/${GO_ARCHIVE}
+
+# Download and install Go
+RUN wget ${GO_URL} -O /tmp/${GO_ARCHIVE} && \
+    tar -C /usr/local -xzf /tmp/${GO_ARCHIVE} && \
+    rm /tmp/${GO_ARCHIVE}
+
+# Add Go to PATH
+ENV PATH="/usr/local/go/bin:${PATH}"
+
+# Set working directory
+WORKDIR /app
+
+# Copy your project
+COPY . .
+
+# Verify Go
+RUN go version
+
+# download dependancies
+RUN go mod tidy
+
+# Build the Fyne app for Windows
+# CGO_ENABLED=1 is required for Fyne
+# CC points to MinGW cross-compiler
+# Build Windows executable directly to /output
+# This will map to your host folder
+#RUN GOOS=windows GOARCH=amd64 CGO_ENABLED=1 CC=x86_64-w64-mingw32-gcc go build -o /output/kansho.exe
+# static linking
+RUN GOOS=windows GOARCH=amd64 CGO_ENABLED=1 CC=x86_64-w64-mingw32-gcc \
+    go build -ldflags "-s -w -linkmode external -extldflags '-static'" -o /output/kansho.exe
+
+
+# check the static linking was done correctly
+RUN x86_64-w64-mingw32-objdump -x /output/kansho.exe | grep DLL
+
+
+

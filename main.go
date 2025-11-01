@@ -22,11 +22,21 @@ import (
 func main() {
 	// Create a new Fyne application instance
 	// This initializes the application and sets up the event loop
-	myApp := app.New()
+	kanshoApp := app.NewWithID("com.backyard.kansho") // must match your AppMetadata.ID
+
+	kanshoMetadata := fyne.AppMetadata{
+		ID:      "com.backyard.kansho",
+		Name:    "Kansho",
+		Version: "0.0.1",
+		Build:   1,
+		Icon:    bundled,
+	}
+
+	app.SetMetadata(kanshoMetadata)
 
 	// Create the main application window
 	// The window title "kansho" (鑑賞) means "appreciation" or "viewing" in Japanese
-	myWindow := myApp.NewWindow("kansho")
+	myWindow := kanshoApp.NewWindow("kansho")
 
 	// Set the initial window size
 	// Users can resize the window, but this provides a good starting size
