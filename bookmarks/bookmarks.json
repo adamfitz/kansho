@@ -1,17 +1,20 @@
-{ "manga": [
-        {
-            "title": "Job Change Log",
-            "shortname": "183101",
-            "chapters": "",
-            "location": "'/mangaDir/Job Change Log/'",
-            "site": "xbato"
-        },
-        {
-            "title": "Absolute dominion",
-            "url": "https://rizzfables.com/series/r2311170-absolute-dominion",
-            "chapters": "",
-            "location": "'/mangaDir/Absolute Dominion/'",
-            "site": "rizzfables"
-        }
-    ]
+{
+  "manga": [
+    {
+      "title": "Absolute dominion",
+      "url": "https://rizzfables.com/series/r2311170-absolute-dominion",
+      "chapters": "",
+      "location": "~/test/Absolute Dominion",
+      "site": "rizzfables",
+      "shortname": ""
+    },
+    {
+      "title": "Job Change Log",
+      "url": "",
+      "chapters": "",
+      "location": "~/test/Job Change Log/",
+      "site": "xbato",
+      "shortname": "183101"
+    }
+  ]
 }

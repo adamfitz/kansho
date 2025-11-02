@@ -181,18 +181,8 @@ func (v *MangaListView) onDeleteButtonClicked() {
 		"Are you sure you want to delete \""+mangaTitle+"\"?",
 		func(confirmed bool) {
 			if confirmed {
-				// User confirmed deletion
-				// TODO: Implement actual deletion logic here
-				// For now, just show a placeholder message
-				dialog.ShowInformation(
-					"Delete Manga",
-					"Manga \""+mangaTitle+"\" will be deleted.\n\n(Deletion logic not yet implemented)",
-					v.state.Window,
-				)
-
-				// TODO: Call something like:
-				// v.state.DeleteManga(v.selectedIndex)
-				// This will trigger the RegisterMangaDeletedCallback which calls refresh()
+				// Delete the manga - this will save to disk and trigger callbacks
+				v.state.DeleteManga(v.selectedIndex)
 			}
 		},
 		v.state.Window,
