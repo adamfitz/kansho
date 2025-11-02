@@ -104,12 +104,10 @@ func (s *KanshoAppState) AddManga(manga bookmarks.Bookmarks) {
 }
 
 // DeleteManga removes a manga from the bookmarks and notifies callbacks.
-// In the future, this will update the disk/database.
+// It saves the updated bookmarks to disk immediately.
 //
 // Parameters:
 //   - id: The index of the manga to delete
-//
-// TODO: Implement actual persistence (save to file/database)
 func (s *KanshoAppState) DeleteManga(id int) {
 	// Validate the ID is within bounds
 	if id < 0 || id >= len(s.MangaData.Manga) {
@@ -119,8 +117,12 @@ func (s *KanshoAppState) DeleteManga(id int) {
 	// Remove the manga from the slice
 	s.MangaData.Manga = append(s.MangaData.Manga[:id], s.MangaData.Manga[id+1:]...)
 
-	// TODO: Save to disk/database here
-	// bookmarks.SaveBookmarks(s.MangaData)
+	// Save to disk immediately
+	err := bookmarks.SaveBookmarks(s.MangaData)
+	if err != nil {
+		// Handle error - show a dialog to the user
+		dialog.ShowError(err, s.Window)
+	}
 
 	// If the deleted manga was selected, clear the selection
 	if s.SelectedMangaID == id {

@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"strings"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
@@ -251,7 +252,9 @@ func (v *AddMangaView) onAddButtonClicked() {
 
 	location := ""
 	if v.SelectedDirectoryURI != nil {
-		location = v.SelectedDirectoryURI.String()
+		// removes the file:// from the beginning of the directory (linux only?)
+		cleanedDirectory := strings.ReplaceAll(v.SelectedDirectoryURI.String(), "file://", "")
+		location = cleanedDirectory
 	}
 
 	// Validate the input using the validation package
