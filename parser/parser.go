@@ -36,7 +36,9 @@ func LocalChapterList(rootDir string, exclusionList ...string) ([]string, error)
 		}
 	}
 
-	return fileList, nil
+	filteredFileList := filterCBZFiles(fileList)
+
+	return filteredFileList, nil
 }
 
 // expands ~ to the user's home directory, or returns the path as-is
@@ -51,4 +53,15 @@ func ExpandPath(path string) (string, error) {
 	}
 	// Path doesn't start with ~/ so return it unchanged
 	return path, nil
+}
+
+// filters out any non *.cbz file from the list
+func filterCBZFiles(files []string) []string {
+	var filtered []string
+	for _, f := range files {
+		if strings.EqualFold(filepath.Ext(f), ".cbz") {
+			filtered = append(filtered, f)
+		}
+	}
+	return filtered
 }
