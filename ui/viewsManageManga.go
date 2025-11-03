@@ -11,8 +11,8 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"kansho/bookmarks"
-	"kansho/config"
 	"kansho/models"
+	"kansho/sites"
 	"kansho/validation"
 )
 
@@ -67,7 +67,7 @@ func NewAddMangaView(State *KanshoAppState) *AddMangaView {
 
 	// Load the sites configuration
 	// This tells us which manga sites are supported and what data they need
-	view.SitesConfig = config.LoadSitesConfig()
+	view.SitesConfig = sites.LoadSitesConfig()
 
 	// Create a slice of site display names for the dropdown
 	// Extract just the user-facing names from the config

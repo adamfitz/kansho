@@ -1,4 +1,4 @@
-package config
+package sites
 
 import (
 	"encoding/json"
@@ -20,7 +20,7 @@ import (
 // The function logs any errors to stdout but does not halt execution.
 func LoadSitesConfig() models.SitesConfig {
 	// Define the path to the sites configuration file
-	sitesLocation := "./config/sites.json"
+	sitesLocation := "./sites/sites.json"
 
 	// Open the configuration file
 	file, err := os.Open(sitesLocation)
