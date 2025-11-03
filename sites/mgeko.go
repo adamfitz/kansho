@@ -15,8 +15,9 @@ import (
 )
 
 // downloads manga chapters from mgeko website
-// manga parameter should be retrieved from state.GetSelectedManga()
-func MgekoDownloadChapters(manga *config.Bookmarks) error {
+// progressCallback is called with status updates during download
+// Parameters: status string, progress (0.0-1.0), current chapter, total chapters
+func MgekoDownloadChapters(manga *config.Bookmarks, progressCallback func(string, float64, int, int)) error {
 	if manga == nil {
 		return fmt.Errorf("no manga provided")
 	}
@@ -30,6 +31,9 @@ func MgekoDownloadChapters(manga *config.Bookmarks) error {
 	}
 
 	log.Printf("Starting download for manga: %s", manga.Title)
+	if progressCallback != nil {
+		progressCallback(fmt.Sprintf("Fetching chapter list for %s...", manga.Title), 0, 0, 0)
+	}
 
 	// Step 1: Get all chapter URLs
 	chapterUrls, err := chapterUrls(manga.Url)
@@ -51,7 +55,18 @@ func MgekoDownloadChapters(manga *config.Bookmarks) error {
 		delete(chapterMap, chapter)
 	}
 
-	log.Printf("[%s] %d chapters to download", manga.Shortname, len(chapterMap))
+	totalChapters := len(chapterMap)
+	if totalChapters == 0 {
+		if progressCallback != nil {
+			progressCallback("No new chapters to download", 1.0, 0, 0)
+		}
+		return nil
+	}
+
+	log.Printf("[%s] %d chapters to download", manga.Shortname, totalChapters)
+	if progressCallback != nil {
+		progressCallback(fmt.Sprintf("Found %d new chapters to download", totalChapters), 0, 0, totalChapters)
+	}
 
 	// Step 5: Sort chapter keys
 	sortedChapters, sortError := parser.SortKeys(chapterMap)
@@ -60,9 +75,17 @@ func MgekoDownloadChapters(manga *config.Bookmarks) error {
 	}
 
 	// Step 6: Iterate over sorted chapter keys
-	for _, cbzName := range sortedChapters {
+	for idx, cbzName := range sortedChapters {
 		chapterURL := chapterMap[cbzName]
-		fmt.Printf("[%s] Downloading chapter %s -> %s\n", manga.Shortname, cbzName, chapterURL)
+
+		currentChapter := idx + 1
+		progress := float64(currentChapter) / float64(totalChapters)
+
+		if progressCallback != nil {
+			progressCallback(fmt.Sprintf("Downloading chapter %d/%d: %s", currentChapter, totalChapters, cbzName), progress, currentChapter, totalChapters)
+		}
+
+		//fmt.Printf("[%s] Downloading chapter %s -> %s\n", manga.Shortname, cbzName, chapterURL)
 
 		// Colly to scrape image URLs inside #chapter-reader
 		var imgURLs []string
@@ -100,8 +123,13 @@ func MgekoDownloadChapters(manga *config.Bookmarks) error {
 		}
 
 		// Download and convert each image using DownloadAndConvertToJPG
-		for idx, imgURL := range imgURLs {
-			log.Printf("[%s:%s] Downloading image %d/%d: %s", manga.Shortname, cbzName, idx+1, len(imgURLs), imgURL)
+		for imgIdx, imgURL := range imgURLs {
+			if progressCallback != nil {
+				imgProgress := progress + (float64(imgIdx) / float64(len(imgURLs)) / float64(totalChapters))
+				progressCallback(fmt.Sprintf("Chapter %d/%d: Downloading image %d/%d", currentChapter, totalChapters, imgIdx+1, len(imgURLs)), imgProgress, currentChapter, totalChapters)
+			}
+
+			log.Printf("[%s:%s] Downloading image %d/%d: %s", manga.Shortname, cbzName, imgIdx+1, len(imgURLs), imgURL)
 			err := parser.DownloadAndConvertToJPG(imgURL, chapterDir)
 			if err != nil {
 				log.Printf("[%s:%s] Failed to download/convert image %s: %v", manga.Shortname, cbzName, imgURL, err)
@@ -111,12 +139,16 @@ func MgekoDownloadChapters(manga *config.Bookmarks) error {
 		}
 
 		// Create CBZ in the manga's location directory
+		if progressCallback != nil {
+			progressCallback(fmt.Sprintf("Chapter %d/%d: Creating CBZ file...", currentChapter, totalChapters), progress, currentChapter, totalChapters)
+		}
+
 		cbzPath := filepath.Join(manga.Location, cbzName)
 		err = parser.CreateCbzFromDir(chapterDir, cbzPath)
 		if err != nil {
 			log.Printf("[%s:%s] Failed to create CBZ %s: %v", manga.Shortname, cbzName, cbzPath, err)
 		} else {
-			fmt.Printf("[%s] Created CBZ: %s\n", manga.Shortname, cbzName)
+			log.Printf("[%s] Created CBZ: %s\n", manga.Title, cbzName)
 		}
 
 		// Remove temp directory
@@ -127,6 +159,10 @@ func MgekoDownloadChapters(manga *config.Bookmarks) error {
 	}
 
 	log.Printf("[%s] Download complete", manga.Title)
+	if progressCallback != nil {
+		progressCallback(fmt.Sprintf("Download complete! Downloaded %d chapters", totalChapters), 1.0, totalChapters, totalChapters)
+	}
+
 	return nil
 }
 
