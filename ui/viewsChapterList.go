@@ -75,18 +75,9 @@ func NewChapterListView(state *KanshoAppState) *ChapterListView {
 		},
 	)
 
-	// IMPORTANT: Use NewBorder instead of NewVBox so the list can expand
-	view.contentContainer = container.NewBorder(
-		// Top: The selected manga label
-		container.NewVBox(
-			view.selectedMangaLabel,
-			NewSeparator(),
-		),
-		nil, // Bottom
-		nil, // Left
-		nil, // Right
-		// Center: Empty for now, will be populated with list or messages
-		widget.NewLabel(""),
+	// IMPORTANT: Use NewStack so content can be fully replaced and expanded
+	view.contentContainer = container.NewStack(
+		widget.NewLabel("Select a manga to view chapters"),
 	)
 
 	// Build the card content
@@ -140,8 +131,6 @@ func (v *ChapterListView) onMangaSelected(id int) {
 		return
 	}
 
-	// Update the label to show which manga is selected
-	v.selectedMangaLabel.SetText("Chapters for: " + manga.Title)
 	log.Printf("loading local chapters for: %s", manga.Title)
 
 	// Enable the update button since a manga is now selected
@@ -149,7 +138,7 @@ func (v *ChapterListView) onMangaSelected(id int) {
 
 	// Check if manga location is valid
 	if manga.Location == "" {
-		v.showPlaceholder()
+		v.defaultChapterList()
 		return
 	}
 
@@ -158,14 +147,14 @@ func (v *ChapterListView) onMangaSelected(id int) {
 	if err != nil {
 		// Handle error - maybe the directory doesn't exist yet
 		dialog.ShowError(err, v.state.Window)
-		v.showPlaceholder() // Show placeholder if loading failed
+		v.defaultChapterList() // Show placeholder if loading failed
 		return
 	}
 
 	// Check if any chapters were found
 	if len(downloadedChapters) == 0 {
 		// No chapters downloaded yet
-		v.showPlaceholder()
+		v.defaultChapterList()
 		return
 	}
 
@@ -188,7 +177,7 @@ func (v *ChapterListView) updateChapterList(chapters []string) {
 
 	if len(chapters) == 0 {
 		// No chapters found
-		v.showNoChapters()
+		v.defaultChapterList()
 		return
 	}
 
@@ -208,83 +197,38 @@ func (v *ChapterListView) updateChapterList(chapters []string) {
 		},
 	)
 
-	// Rebuild the content container with Border layout
-	newContent := container.NewBorder(
-		// Top: manga label and separator
-		container.NewVBox(
-			v.selectedMangaLabel,
-			NewSeparator(),
-		),
-		nil, // Bottom
-		nil, // Left
-		nil, // Right
-		// Center: The list (will expand to fill)
-		v.chapterList,
-	)
-
-	// Replace the entire content container
-	v.contentContainer.Objects = []fyne.CanvasObject{newContent}
+	// Replace the entire content container with just the list
+	v.contentContainer.Objects = []fyne.CanvasObject{v.chapterList}
 	v.contentContainer.Refresh()
 }
 
 // showNoSelection displays a message when no manga is selected.
 func (v *ChapterListView) showNoSelection() {
-	v.selectedMangaLabel.SetText("Select a manga to view chapters")
 	v.chapters = []string{} // Clear chapters
 
 	// Disable the update button since no manga is selected
 	v.updateButton.Disable()
 
-	// Rebuild with just the label
-	newContent := container.NewBorder(
-		container.NewVBox(
-			v.selectedMangaLabel,
-		),
-		nil, nil, nil,
-		widget.NewLabel(""),
-	)
-
-	v.contentContainer.Objects = []fyne.CanvasObject{newContent}
+	// Show placeholder message
+	v.contentContainer.Objects = []fyne.CanvasObject{
+		widget.NewLabel("Select a manga to view chapters"),
+	}
 	v.contentContainer.Refresh()
 }
 
-func (v *ChapterListView) showPlaceholder() {
+// default message when no local chaptes aer found
+func (v *ChapterListView) defaultChapterList() {
 	v.chapters = []string{} // Clear chapters
 
-	// Rebuild with label and placeholder
-	newContent := container.NewBorder(
-		container.NewVBox(
-			v.selectedMangaLabel,
-			NewSeparator(),
-		),
-		nil, nil, nil,
-		widget.NewLabel("Chapter list functionality coming soon..."),
-	)
-
-	v.contentContainer.Objects = []fyne.CanvasObject{newContent}
+	// Show "no chapters found" message
+	v.contentContainer.Objects = []fyne.CanvasObject{
+		widget.NewLabel("No chapters found"),
+	}
 	v.contentContainer.Refresh()
 }
 
-// showNoChapters displays a message when no chapters are found.
-func (v *ChapterListView) showNoChapters() {
-	v.chapters = []string{} // Clear chapters
-
-	// Rebuild with label and "no chapters" message
-	newContent := container.NewBorder(
-		container.NewVBox(
-			v.selectedMangaLabel,
-			NewSeparator(),
-		),
-		nil, nil, nil,
-		widget.NewLabel("No chapters found for this manga"),
-	)
-
-	v.contentContainer.Objects = []fyne.CanvasObject{newContent}
-	v.contentContainer.Refresh()
-}
-
-// onUpdateButtonClicked is called when the user clicks the Update Chapters button.
-// This reloads the chapter list from disk for the currently selected manga.
+// Called when the user clicks the Update Chapters button.
+// This rstarts the check for new chapter of the existing manag entry
 func (v *ChapterListView) onUpdateButtonClicked() {
 	// Get the currently selected manga
 	manga := v.state.GetSelectedManga()
@@ -293,17 +237,6 @@ func (v *ChapterListView) onUpdateButtonClicked() {
 		return
 	}
 
-	// TODO: YOUR UPDATE CODE GOES HERE
-	// Reload chapters from disk
-	// Example:
-	// chapters := YourLoadChaptersFunction(manga.Location)
-	// v.updateChapterList(chapters)
-
 	// For now, just refresh the placeholder
-	v.showPlaceholder()
-
-	// WHEN YOU IMPLEMENT YOUR CHAPTER LOADING:
-	// Replace the v.showPlaceholder() line above with:
-	//    loadedChapters := LoadChaptersFromDisk(manga.Location)
-	//    v.updateChapterList(loadedChapters)
+	v.defaultChapterList()
 }
