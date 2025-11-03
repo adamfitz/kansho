@@ -1,4 +1,4 @@
-package bookmarks
+package config
 
 import (
 	"encoding/json"
@@ -22,7 +22,8 @@ type Bookmarks struct {
 
 // load bookmarks return custom struct
 func LoadBookmarks() Manga {
-	bookmarksLocation := "./bookmarks/bookmarks.json"
+	//bookmarksLocation := "~/.config/kansho/bookmarks.json"
+	bookmarksLocation := "./config/bookmarks.json"
 
 	file, err := os.Open(bookmarksLocation)
 	if err != nil {

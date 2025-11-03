@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"log"
 	"sort"
 
 	"kansho/parser"
@@ -141,6 +142,7 @@ func (v *ChapterListView) onMangaSelected(id int) {
 
 	// Update the label to show which manga is selected
 	v.selectedMangaLabel.SetText("Chapters for: " + manga.Title)
+	log.Printf("loading local chapters for: %s", manga.Title)
 
 	// Enable the update button since a manga is now selected
 	v.updateButton.Enable()
@@ -152,7 +154,7 @@ func (v *ChapterListView) onMangaSelected(id int) {
 	}
 
 	// Load chapters from disk using the manga's location
-	downloadedChapters, err := parser.DownloadedChapters(manga.Location)
+	downloadedChapters, err := parser.LocalChapterList(manga.Location)
 	if err != nil {
 		// Handle error - maybe the directory doesn't exist yet
 		dialog.ShowError(err, v.state.Window)
@@ -172,6 +174,7 @@ func (v *ChapterListView) onMangaSelected(id int) {
 
 	// Update the chapter list with the downloaded chapters
 	v.updateChapterList(downloadedChapters)
+	log.Printf("finished loading %s local chapters", manga.Title)
 }
 
 // updateChapterList updates the view with a new list of chapters.

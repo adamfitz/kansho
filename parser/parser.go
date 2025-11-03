@@ -6,9 +6,9 @@ import (
 	"strings"
 )
 
-// DownloadedChapters returns a list of all files from the provided rootDir.
+// LocalChapterList returns a list of all files from the provided rootDir.
 // Optionally pass an exclusion list to skip certain file names.
-func DownloadedChapters(rootDir string, exclusionList ...string) ([]string, error) {
+func LocalChapterList(rootDir string, exclusionList ...string) ([]string, error) {
 	// Expand ~ to home directory
 	expandedPath, err := expandPath(rootDir)
 	if err != nil {

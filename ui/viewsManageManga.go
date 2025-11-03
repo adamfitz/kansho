@@ -10,7 +10,7 @@ import (
 	"fyne.io/fyne/v2/storage"
 	"fyne.io/fyne/v2/widget"
 
-	"kansho/bookmarks"
+	"kansho/config"
 	"kansho/models"
 	"kansho/sites"
 	"kansho/validation"
@@ -267,7 +267,7 @@ func (v *AddMangaView) onAddButtonClicked() {
 	}
 
 	// Create the new manga entry
-	newManga := bookmarks.Bookmarks{
+	newManga := config.Bookmarks{
 		Title:     title,
 		Shortname: shortname,
 		Url:       url,
