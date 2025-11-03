@@ -10,7 +10,7 @@ import (
 // Optionally pass an exclusion list to skip certain file names.
 func LocalChapterList(rootDir string, exclusionList ...string) ([]string, error) {
 	// Expand ~ to home directory
-	expandedPath, err := expandPath(rootDir)
+	expandedPath, err := ExpandPath(rootDir)
 	if err != nil {
 		return nil, err
 	}
@@ -39,8 +39,8 @@ func LocalChapterList(rootDir string, exclusionList ...string) ([]string, error)
 	return fileList, nil
 }
 
-// ExpandPath expands ~ to the user's home directory, or returns the path as-is
-func expandPath(path string) (string, error) {
+// expands ~ to the user's home directory, or returns the path as-is
+func ExpandPath(path string) (string, error) {
 	if strings.HasPrefix(path, "~/") {
 		// Path starts with ~/ so expand it
 		homeDir, err := os.UserHomeDir()

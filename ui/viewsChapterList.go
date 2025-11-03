@@ -181,7 +181,7 @@ func (v *ChapterListView) onMangaSelected(id int) {
 // Call this method after loading chapters from disk.
 //
 // Parameters:
-//   - chapters: Slice of chapter names/paths to display
+//   - chapters: Slice of chapter names to display
 func (v *ChapterListView) updateChapterList(chapters []string) {
 	// Store the chapters
 	v.chapters = chapters
