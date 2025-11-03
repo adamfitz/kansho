@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"log"
 	"sort"
 
@@ -22,10 +23,13 @@ type ChapterListView struct {
 	Card fyne.CanvasObject
 
 	// UI components
-	selectedMangaLabel *widget.Label   // Shows which manga is selected
-	chapterList        *widget.List    // List of chapters
-	contentContainer   *fyne.Container // Container that holds the dynamic content
-	updateButton       *widget.Button  // Button to update/refresh chapters
+	selectedMangaLabel *widget.Label       // Shows which manga is selected
+	chapterList        *widget.List        // List of chapters
+	contentContainer   *fyne.Container     // Container that holds the dynamic content
+	updateButton       *widget.Button      // Button to update/refresh chapters
+	progressBar        *widget.ProgressBar // Progress bar for downloads
+	progressLabel      *widget.Label       // Label showing download status
+	progressContainer  *fyne.Container     // Container for progress UI
 
 	// Data
 	chapters []string // Store chapter names/paths
@@ -59,6 +63,18 @@ func NewChapterListView(state *KanshoAppState) *ChapterListView {
 	// Initially disable the update button since no manga is selected
 	view.updateButton.Disable()
 
+	// Create progress bar and label (initially hidden)
+	view.progressBar = widget.NewProgressBar()
+	view.progressBar.Min = 0
+	view.progressBar.Max = 1
+	view.progressLabel = widget.NewLabel("")
+
+	view.progressContainer = container.NewVBox(
+		view.progressLabel,
+		view.progressBar,
+	)
+	view.progressContainer.Hide() // Hidden by default
+
 	// Create the chapter list widget (initially empty)
 	view.chapterList = widget.NewList(
 		// Length: Return the number of chapters
@@ -88,8 +104,9 @@ func NewChapterListView(state *KanshoAppState) *ChapterListView {
 			NewBoldLabel("Chapter List"),
 			NewSeparator(),
 		),
-		// Bottom: Update button
+		// Bottom: Progress bar and Update button
 		container.NewVBox(
+			view.progressContainer, // Progress section (hidden by default)
 			NewSeparator(),
 			container.NewCenter(view.updateButton),
 		),
@@ -178,7 +195,7 @@ func (v *ChapterListView) updateChapterList(chapters []string) {
 
 	if len(chapters) == 0 {
 		// No chapters found
-		v.defaultChapterList()
+		v.showNoChapters()
 		return
 	}
 
@@ -217,7 +234,6 @@ func (v *ChapterListView) showNoSelection() {
 	v.contentContainer.Refresh()
 }
 
-// default message when no local chaptes aer found
 func (v *ChapterListView) defaultChapterList() {
 	v.chapters = []string{} // Clear chapters
 
@@ -228,23 +244,76 @@ func (v *ChapterListView) defaultChapterList() {
 	v.contentContainer.Refresh()
 }
 
-// Called when the user clicks the Update Chapters button.
-// This rstarts the check for new chapter of the existing manag entry
+// showNoChapters displays a message when no chapters are found.
+func (v *ChapterListView) showNoChapters() {
+	v.chapters = []string{} // Clear chapters
+
+	// Show message
+	v.contentContainer.Objects = []fyne.CanvasObject{
+		widget.NewLabel("No chapters found for this manga"),
+	}
+	v.contentContainer.Refresh()
+}
+
+// onUpdateButtonClicked is called when the user clicks the Update Chapters button.
+// This reloads the chapter list from disk for the currently selected manga.
 func (v *ChapterListView) onUpdateButtonClicked() {
 	// Get the currently selected manga
 	manga := v.state.GetSelectedManga()
 	if manga == nil {
-		// No manga selected (shouldn't happen since button is disabled)
 		return
 	}
 
-	if manga.Site == "mgeko" {
-		mgekoDownloadErr := sites.MgekoDownloadChapters(manga)
-		if mgekoDownloadErr != nil {
-			log.Fatalf("error downloading chapter from %s", manga.Site)
-		}
-	}
+	// Disable button during download (already on UI thread)
+	v.updateButton.Disable()
 
-	// For now, just refresh the placeholder
-	v.defaultChapterList()
+	// Show progress bar and reset state
+	v.progressContainer.Show()
+	v.progressBar.SetValue(0)
+	v.progressLabel.SetText("Starting download...")
+
+	// Run download in a goroutine to prevent UI freezing
+	go func() {
+		var totalChapters int
+
+		// Download chapters with progress callback
+		err := sites.MgekoDownloadChapters(manga, func(status string, progress float64, current, total int) {
+			totalChapters = total
+
+			// Update progress bar and label safely on main thread
+			fyne.Do(func() {
+				v.progressLabel.SetText(status)
+				v.progressBar.SetValue(progress)
+			})
+		})
+
+		// Back on main thread for UI updates after download
+		fyne.Do(func() {
+			// Hide progress bar and re-enable button
+			v.progressContainer.Hide()
+			v.updateButton.Enable()
+
+			if err != nil {
+				// Show inline error message
+				v.progressLabel.SetText(fmt.Sprintf("Error: %v", err))
+
+				// Also show a dialog for visibility
+				dialog.ShowError(err, v.state.Window)
+				return
+			}
+
+			// Success case
+			if totalChapters > 0 {
+				v.progressLabel.SetText("Download complete.")
+				dialog.ShowInformation(
+					"Download Complete",
+					fmt.Sprintf("Successfully downloaded %d chapters for %s", totalChapters, manga.Title),
+					v.state.Window,
+				)
+			}
+
+			// Reload the chapter list after download
+			v.onMangaSelected(v.state.SelectedMangaID)
+		})
+	}()
 }
