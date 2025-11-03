@@ -16,10 +16,14 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
 
+	"kansho/config"
 	"kansho/ui"
 )
 
 func main() {
+	// setup logging
+	config.Logging()
+
 	// Create a new Fyne application instance
 	// This initializes the application and sets up the event loop
 	kanshoApp := app.NewWithID("com.backyard.kansho") // must match your AppMetadata.ID

@@ -58,7 +58,7 @@ func LoadBookmarks() Manga {
 func SaveBookmarks(data Manga) error {
 	bookmarksDir, err := verifyConfigDirectory()
 	if err != nil {
-		return fmt.Errorf("error verifying config directory: %w", err)
+		log.Fatalf("error verifying config directory: %v", err)
 	}
 
 	bookmarksFile := filepath.Join(bookmarksDir, "bookmarks.json")
@@ -77,7 +77,7 @@ func SaveBookmarks(data Manga) error {
 func verifyConfigDirectory() (string, error) {
 	configDirectory, expandError := parser.ExpandPath("~/.config/kansho")
 	if expandError != nil {
-		return "", fmt.Errorf("cannot verify local configuration directory: %w", expandError)
+		log.Fatalf("cannot verify local configuration directory: %v", expandError)
 	}
 
 	// Check if the directory exists
@@ -87,13 +87,11 @@ func verifyConfigDirectory() (string, error) {
 		// Create the directory with read/write/execute permissions for owner, and read/execute for others
 		err := os.MkdirAll(configDirectory, 0755)
 		if err != nil {
-			return "", fmt.Errorf("error creating directory %s: %w", configDirectory, err)
+			log.Fatalf("error creating directory %s: %v", configDirectory, err)
 		}
 		log.Printf("Directory %s created successfully.\n", configDirectory)
 	} else if err != nil {
-		return "", fmt.Errorf("error checking directory %s: %w", configDirectory, err)
-	} else {
-		log.Printf("Directory %s already exists.\n", configDirectory)
+		log.Fatalf("error checking directory %s: %v", configDirectory, err)
 	}
 
 	return configDirectory, nil
@@ -123,17 +121,36 @@ func verifyConfigFiles() (string, error) {
 
 		// Save the template to bookmarks.json
 		if saveErr := SaveBookmarks(templateData); saveErr != nil {
-			return "", fmt.Errorf("error creating bookmarks file: %w", saveErr)
+			log.Fatalf("error creating bookmarks file: %v", saveErr)
 		}
 		log.Printf("File '%s' created successfully.\n", bookmarksFile)
 
 	} else if err != nil {
 		// An error occurred other than the file not existing
-		return "", fmt.Errorf("error checking file existence: %w", err)
+		log.Fatalf("error checking file existence: %v", err)
 	} else {
 		// File exists
 		log.Printf("File '%s' already exists.\n", bookmarksFile)
 	}
 
 	return bookmarksFile, nil
+}
+
+// logging configuration
+func Logging() error {
+	// local config dir
+	configDir, configDirErr := verifyConfigDirectory()
+	if configDirErr != nil {
+		return configDirErr
+	}
+	// open log file or creat it if it does not exist
+	logFilePath := fmt.Sprintf("%s/kansho.log", configDir)
+	logFile, logFileErr := os.OpenFile(logFilePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if logFileErr != nil {
+		log.Fatalf("Failed to open log file: %v", logFileErr)
+	}
+
+	log.SetOutput(logFile)
+
+	return nil
 }
