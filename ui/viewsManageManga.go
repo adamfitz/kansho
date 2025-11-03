@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"fyne.io/fyne/v2"
@@ -10,9 +11,9 @@ import (
 	"fyne.io/fyne/v2/storage"
 	"fyne.io/fyne/v2/widget"
 
-	"kansho/bookmarks"
 	"kansho/config"
 	"kansho/models"
+	"kansho/sites"
 	"kansho/validation"
 )
 
@@ -67,7 +68,7 @@ func NewAddMangaView(State *KanshoAppState) *AddMangaView {
 
 	// Load the sites configuration
 	// This tells us which manga sites are supported and what data they need
-	view.SitesConfig = config.LoadSitesConfig()
+	view.SitesConfig = sites.LoadSitesConfig()
 
 	// Create a slice of site display names for the dropdown
 	// Extract just the user-facing names from the config
@@ -254,7 +255,7 @@ func (v *AddMangaView) onAddButtonClicked() {
 	if v.SelectedDirectoryURI != nil {
 		// removes the file:// from the beginning of the directory (linux only?)
 		cleanedDirectory := strings.ReplaceAll(v.SelectedDirectoryURI.String(), "file://", "")
-		location = cleanedDirectory
+		location = fmt.Sprintf("%s/%s", cleanedDirectory, title)
 	}
 
 	// Validate the input using the validation package
@@ -266,8 +267,20 @@ func (v *AddMangaView) onAddButtonClicked() {
 		return
 	}
 
+	// Create the directory for the manga
+	err = os.MkdirAll(location, 0755)
+	if err != nil {
+		if v.State != nil && v.State.Window != nil {
+			dialog.ShowError(
+				fmt.Errorf("failed to create manga directory: %v", err),
+				v.State.Window,
+			)
+		}
+		return
+	}
+
 	// Create the new manga entry
-	newManga := bookmarks.Bookmarks{
+	newManga := config.Bookmarks{
 		Title:     title,
 		Shortname: shortname,
 		Url:       url,

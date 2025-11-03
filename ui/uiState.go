@@ -1,7 +1,7 @@
 package ui
 
 import (
-	"kansho/bookmarks"
+	"kansho/config"
 	"kansho/models"
 
 	"fyne.io/fyne/v2"
@@ -20,7 +20,7 @@ type KanshoAppState struct {
 	Window fyne.Window
 
 	// MangaData contains all loaded manga bookmarks
-	MangaData bookmarks.Manga
+	MangaData config.Manga
 
 	// SitesConfig contains configuration for all supported manga sites
 	SitesConfig models.SitesConfig
@@ -56,7 +56,7 @@ type KanshoAppState struct {
 func NewKanshoAppState(window fyne.Window) *KanshoAppState {
 	return &KanshoAppState{
 		Window:          window,
-		MangaData:       bookmarks.LoadBookmarks(),
+		MangaData:       config.LoadBookmarks(),
 		SitesConfig:     models.SitesConfig{}, // Will be loaded by config package
 		SelectedMangaID: -1,                   // No selection initially
 		OnMangaSelected: make([]func(int), 0),
@@ -86,12 +86,12 @@ func (s *KanshoAppState) SelectManga(id int) {
 //   - manga: The manga bookmark to add
 //
 // TODO: Implement actual persistence (save to file/database)
-func (s *KanshoAppState) AddManga(manga bookmarks.Bookmarks) {
+func (s *KanshoAppState) AddManga(manga config.Bookmarks) {
 	// Add the manga to our in-memory data
 	s.MangaData.Manga = append(s.MangaData.Manga, manga)
 
 	// Save to disk immediately
-	err := bookmarks.SaveBookmarks(s.MangaData)
+	err := config.SaveBookmarks(s.MangaData)
 	if err != nil {
 		// Handle error - maybe show a dialog to the user
 		dialog.ShowError(err, s.Window)
@@ -118,7 +118,7 @@ func (s *KanshoAppState) DeleteManga(id int) {
 	s.MangaData.Manga = append(s.MangaData.Manga[:id], s.MangaData.Manga[id+1:]...)
 
 	// Save to disk immediately
-	err := bookmarks.SaveBookmarks(s.MangaData)
+	err := config.SaveBookmarks(s.MangaData)
 	if err != nil {
 		// Handle error - show a dialog to the user
 		dialog.ShowError(err, s.Window)
@@ -141,8 +141,8 @@ func (s *KanshoAppState) DeleteManga(id int) {
 // GetSelectedManga returns the currently selected manga, or nil if none is selected.
 //
 // Returns:
-//   - *bookmarks.Bookmarks: Pointer to the selected manga, or nil if no selection
-func (s *KanshoAppState) GetSelectedManga() *bookmarks.Bookmarks {
+//   - *config.Bookmarks: Pointer to the selected manga, or nil if no selection
+func (s *KanshoAppState) GetSelectedManga() *config.Bookmarks {
 	if s.SelectedMangaID < 0 || s.SelectedMangaID >= len(s.MangaData.Manga) {
 		return nil
 	}

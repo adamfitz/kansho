@@ -6,20 +6,23 @@ package main
 //
 // Package structure:
 // - models/        : Data structures (Site, SitesConfig, RequiredFields)
-// - config/        : Configuration loading (sites.json)
-// - ui/            : UI state management and theme constants
-// - ui/components/ : Reusable UI components (cards, header, footer)
-// - ui/views/      : View components (manga list, add manga, chapter list)
+// - config/        : Configuration (verification, save and load bookmarks, logging)
+// - ui/            : UI state management and theme constants, reusable UI components (cards, header, footer,
+// 						manga list, add manga, chapter list)
 // - bookmarks/     : Manga data loading (existing package)
 
 import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
 
+	"kansho/config"
 	"kansho/ui"
 )
 
 func main() {
+	// setup logging
+	config.Logging()
+
 	// Create a new Fyne application instance
 	// This initializes the application and sets up the event loop
 	kanshoApp := app.NewWithID("com.backyard.kansho") // must match your AppMetadata.ID
