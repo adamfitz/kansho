@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"fyne.io/fyne/v2"
@@ -254,7 +255,7 @@ func (v *AddMangaView) onAddButtonClicked() {
 	if v.SelectedDirectoryURI != nil {
 		// removes the file:// from the beginning of the directory (linux only?)
 		cleanedDirectory := strings.ReplaceAll(v.SelectedDirectoryURI.String(), "file://", "")
-		location = cleanedDirectory
+		location = fmt.Sprintf("%s/%s", cleanedDirectory, title)
 	}
 
 	// Validate the input using the validation package
@@ -262,6 +263,18 @@ func (v *AddMangaView) onAddButtonClicked() {
 	if err != nil {
 		if v.State != nil && v.State.Window != nil {
 			dialog.ShowError(err, v.State.Window) // UI-specific
+		}
+		return
+	}
+
+	// Create the directory for the manga
+	err = os.MkdirAll(location, 0755)
+	if err != nil {
+		if v.State != nil && v.State.Window != nil {
+			dialog.ShowError(
+				fmt.Errorf("failed to create manga directory: %v", err),
+				v.State.Window,
+			)
 		}
 		return
 	}

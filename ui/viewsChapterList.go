@@ -5,6 +5,7 @@ import (
 	"sort"
 
 	"kansho/parser"
+	"kansho/sites"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
@@ -235,6 +236,13 @@ func (v *ChapterListView) onUpdateButtonClicked() {
 	if manga == nil {
 		// No manga selected (shouldn't happen since button is disabled)
 		return
+	}
+
+	if manga.Site == "mgeko" {
+		mgekoDownloadErr := sites.MgekoDownloadChapters(manga)
+		if mgekoDownloadErr != nil {
+			log.Fatalf("error downloading chapter from %s", manga.Site)
+		}
 	}
 
 	// For now, just refresh the placeholder
