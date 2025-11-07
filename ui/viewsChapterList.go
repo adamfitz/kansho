@@ -67,7 +67,11 @@ func NewChapterListView(state *KanshoAppState) *ChapterListView {
 	view.progressBar = widget.NewProgressBar()
 	view.progressBar.Min = 0
 	view.progressBar.Max = 1
+
+	// Create progress label with truncation to prevent card expansion
 	view.progressLabel = widget.NewLabel("")
+	view.progressLabel.Truncation = fyne.TextTruncateEllipsis // Prevent long manga names from expanding the card
+	view.progressLabel.Wrapping = fyne.TextWrapWord           // Wrap if needed
 
 	view.progressContainer = container.NewVBox(
 		view.progressLabel,
@@ -77,15 +81,14 @@ func NewChapterListView(state *KanshoAppState) *ChapterListView {
 
 	// Create the chapter list widget (initially empty)
 	view.chapterList = widget.NewList(
-		// Length: Return the number of chapters
 		func() int {
 			return len(view.chapters)
 		},
-		// CreateItem: Create a template label
 		func() fyne.CanvasObject {
-			return widget.NewLabel("template")
+			label := widget.NewLabel("template")
+			label.Truncation = fyne.TextTruncateEllipsis // Add truncation
+			return label
 		},
-		// UpdateItem: Fill in the label with chapter data
 		func(id widget.ListItemID, item fyne.CanvasObject) {
 			label := item.(*widget.Label)
 			label.SetText(view.chapters[id])
@@ -205,7 +208,9 @@ func (v *ChapterListView) updateChapterList(chapters []string) {
 			return len(v.chapters)
 		},
 		func() fyne.CanvasObject {
-			return widget.NewLabel("template")
+			label := widget.NewLabel("template")
+			label.Truncation = fyne.TextTruncateEllipsis // Add truncation
+			return label
 		},
 		func(id widget.ListItemID, item fyne.CanvasObject) {
 			label := item.(*widget.Label)

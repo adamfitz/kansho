@@ -79,7 +79,9 @@ func NewMangaListView(state *KanshoAppState) *MangaListView {
 		// CreateItem: Create a template label that will be reused
 		// This is called once to create the item template
 		func() fyne.CanvasObject {
-			return widget.NewLabel("template")
+			label := widget.NewLabel("template")
+			label.Truncation = fyne.TextTruncateEllipsis // Prevent long titles from expanding the card
+			return label
 		},
 		// UpdateItem: Fill in the label with actual manga data
 		// This is called for each visible list item
