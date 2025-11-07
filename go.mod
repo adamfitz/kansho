@@ -4,14 +4,16 @@ go 1.25.3
 
 require (
 	fyne.io/fyne/v2 v2.7.0
+	github.com/PuerkitoBio/goquery v1.10.3
+	github.com/andybalholm/brotli v1.2.0
 	github.com/chai2010/webp v1.4.0
 	github.com/gocolly/colly v1.2.0
+	golang.design/x/clipboard v0.7.1
 )
 
 require (
 	fyne.io/systray v1.11.1-0.20250603113521-ca66a66d8b58 // indirect
 	github.com/BurntSushi/toml v1.5.0 // indirect
-	github.com/PuerkitoBio/goquery v1.10.3 // indirect
 	github.com/andybalholm/cascadia v1.3.3 // indirect
 	github.com/antchfx/htmlquery v1.3.4 // indirect
 	github.com/antchfx/xmlquery v1.5.0 // indirect
@@ -47,7 +49,9 @@ require (
 	github.com/stretchr/testify v1.11.1 // indirect
 	github.com/temoto/robotstxt v1.1.2 // indirect
 	github.com/yuin/goldmark v1.7.8 // indirect
+	golang.org/x/exp/shiny v0.0.0-20250606033433-dcc06ee1d476 // indirect
 	golang.org/x/image v0.28.0 // indirect
+	golang.org/x/mobile v0.0.0-20250606033058-a2a15c67f36f // indirect
 	golang.org/x/net v0.41.0 // indirect
 	golang.org/x/sys v0.35.0 // indirect
 	golang.org/x/text v0.26.0 // indirect

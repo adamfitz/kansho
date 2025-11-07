@@ -130,7 +130,7 @@ func verifyConfigFiles() (string, error) {
 		log.Fatalf("error checking file existence: %v", err)
 	} else {
 		// File exists
-		log.Printf("File '%s' already exists.\n", bookmarksFile)
+		log.Printf("Found bookmarks file: ['%s']", bookmarksFile)
 	}
 
 	return bookmarksFile, nil
