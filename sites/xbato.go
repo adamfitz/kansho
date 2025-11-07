@@ -39,20 +39,25 @@ func XbatoDownloadChapters(manga *config.Bookmarks, progressCallback func(string
 	}
 
 	// Ensure required fields are present
-	if manga.Url == "" {
-		return fmt.Errorf("manga URL is empty")
+	// Note: Xbato uses shortname instead of URL for chapter lookups
+	if manga.Shortname == "" {
+		return fmt.Errorf("manga shortname is empty")
 	}
 	if manga.Location == "" {
 		return fmt.Errorf("manga location is empty")
 	}
 
-	log.Printf("Starting download for manga: %s", manga.Title)
+	log.Printf("<%s> Starting download [%s]", manga.Site, manga.Title)
 	if progressCallback != nil {
 		progressCallback(fmt.Sprintf("Fetching chapter list for %s...", manga.Title), 0, 0, 0)
 	}
 
-	// Step 1: Get all chapter URLs from the manga's main page
-	chapterUrls, err := xbatoChapterUrls(manga.Url)
+	// Step 1: Build the manga URL from shortname
+	// Xbato URL pattern: https://xbato.com/series/<shortname>
+	mangaUrl := fmt.Sprintf("https://xbato.com/series/%s", manga.Shortname)
+
+	// Get all chapter URLs from the manga's main page
+	chapterUrls, err := xbatoChapterUrls(mangaUrl)
 	if err != nil {
 		return fmt.Errorf("failed to fetch chapter URLs: %v", err)
 	}
@@ -76,13 +81,14 @@ func XbatoDownloadChapters(manga *config.Bookmarks, progressCallback func(string
 
 	totalChapters := len(chapterMap)
 	if totalChapters == 0 {
+		log.Printf("No new chapters found [%s]", manga.Title)
 		if progressCallback != nil {
 			progressCallback("No new chapters to download", 1.0, 0, 0)
 		}
 		return nil
 	}
 
-	log.Printf("[%s] %d chapters to download", manga.Shortname, totalChapters)
+	log.Printf("%d chapters to download [%s]", totalChapters, manga.Title)
 	if progressCallback != nil {
 		progressCallback(fmt.Sprintf("Found %d new chapters to download", totalChapters), 0, 0, totalChapters)
 	}
@@ -291,8 +297,6 @@ func xbatoChapterMap(urls []string) map[string]string {
 			chapterMap[filename] = url
 		}
 	}
-
-	log.Printf("found chapters: %v", chapterMap)
 
 	return chapterMap
 }
