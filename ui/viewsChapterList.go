@@ -183,7 +183,7 @@ func (v *ChapterListView) onMangaSelected(id int) {
 	// Update the chapter list with the downloaded chapters
 	v.updateChapterList(downloadedChapters)
 	numLocalChapters := len(downloadedChapters)
-	log.Printf("Loaded %d local chapters [%s]", numLocalChapters, manga.Title)
+	log.Printf("Found %d local chapters [%s]", numLocalChapters, manga.Title)
 }
 
 // updateChapterList updates the view with a new list of chapters.
