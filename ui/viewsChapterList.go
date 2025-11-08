@@ -152,8 +152,6 @@ func (v *ChapterListView) onMangaSelected(id int) {
 		return
 	}
 
-	log.Printf("loading local chapters for: %s", manga.Title)
-
 	// Enable the update button since a manga is now selected
 	v.updateButton.Enable()
 
@@ -184,7 +182,8 @@ func (v *ChapterListView) onMangaSelected(id int) {
 
 	// Update the chapter list with the downloaded chapters
 	v.updateChapterList(downloadedChapters)
-	log.Printf("finished loading %s local chapters", manga.Title)
+	numLocalChapters := len(downloadedChapters)
+	log.Printf("Found %d local chapters [%s]", numLocalChapters, manga.Title)
 }
 
 // updateChapterList updates the view with a new list of chapters.
@@ -261,7 +260,7 @@ func (v *ChapterListView) showNoChapters() {
 }
 
 // onUpdateButtonClicked is called when the user clicks the Update Chapters button.
-// This reloads the chapter list from disk for the currently selected manga.
+// This dispatches to the appropriate download function based on the manga's site.
 func (v *ChapterListView) onUpdateButtonClicked() {
 	// Get the currently selected manga
 	manga := v.state.GetSelectedManga()
@@ -280,17 +279,47 @@ func (v *ChapterListView) onUpdateButtonClicked() {
 	// Run download in a goroutine to prevent UI freezing
 	go func() {
 		var totalChapters int
+		var err error
 
-		// Download chapters with progress callback
-		err := sites.MgekoDownloadChapters(manga, func(status string, progress float64, current, total int) {
-			totalChapters = total
-
-			// Update progress bar and label safely on main thread
-			fyne.Do(func() {
-				v.progressLabel.SetText(status)
-				v.progressBar.SetValue(progress)
+		// Dispatch to the correct download function based on manga's site
+		switch manga.Site {
+		case "mgeko":
+			err = sites.MgekoDownloadChapters(manga, func(status string, progress float64, current, total int) {
+				totalChapters = total
+				// Update progress bar and label safely on main thread
+				fyne.Do(func() {
+					v.progressLabel.SetText(status)
+					v.progressBar.SetValue(progress)
+				})
 			})
-		})
+
+		case "xbato":
+			err = sites.XbatoDownloadChapters(manga, func(status string, progress float64, current, total int) {
+				totalChapters = total
+				// Update progress bar and label safely on main thread
+				fyne.Do(func() {
+					v.progressLabel.SetText(status)
+					v.progressBar.SetValue(progress)
+				})
+			})
+
+		// Add more sites here as you implement them
+		// case "asurascans":
+		// 	err = sites.AsurascansDownloadChapters(manga, ...)
+		// case "rizzfables":
+		// 	err = sites.RizzfablesDownloadChapters(manga, ...)
+
+		default:
+			// Site not supported yet
+			fyne.Do(func() {
+				v.progressContainer.Hide()
+				v.updateButton.Enable()
+				err := fmt.Errorf("download not supported for site: %s", manga.Site)
+				v.progressLabel.SetText(fmt.Sprintf("Error: %v", err))
+				dialog.ShowError(err, v.state.Window)
+			})
+			return
+		}
 
 		// Back on main thread for UI updates after download
 		fyne.Do(func() {

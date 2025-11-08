@@ -30,7 +30,7 @@ func MgekoDownloadChapters(manga *config.Bookmarks, progressCallback func(string
 		return fmt.Errorf("manga location is empty")
 	}
 
-	log.Printf("Starting download for manga: %s", manga.Title)
+	log.Printf("<%s> Starting download [%s]", manga.Site, manga.Title)
 	if progressCallback != nil {
 		progressCallback(fmt.Sprintf("Fetching chapter list for %s...", manga.Title), 0, 0, 0)
 	}
@@ -57,13 +57,14 @@ func MgekoDownloadChapters(manga *config.Bookmarks, progressCallback func(string
 
 	totalChapters := len(chapterMap)
 	if totalChapters == 0 {
+		log.Printf("No new chapters found [%s]", manga.Title)
 		if progressCallback != nil {
 			progressCallback("No new chapters to download", 1.0, 0, 0)
 		}
 		return nil
 	}
 
-	log.Printf("[%s] %d chapters to download", manga.Shortname, totalChapters)
+	log.Printf("%d chapters to download [%s]", totalChapters, manga.Title)
 	if progressCallback != nil {
 		progressCallback(fmt.Sprintf("Found %d new chapters to download", totalChapters), 0, 0, totalChapters)
 	}
@@ -84,8 +85,6 @@ func MgekoDownloadChapters(manga *config.Bookmarks, progressCallback func(string
 		if progressCallback != nil {
 			progressCallback(fmt.Sprintf("Downloading chapter %d/%d: %s", currentChapter, totalChapters, cbzName), progress, currentChapter, totalChapters)
 		}
-
-		//fmt.Printf("[%s] Downloading chapter %s -> %s\n", manga.Shortname, cbzName, chapterURL)
 
 		// Colly to scrape image URLs inside #chapter-reader
 		var imgURLs []string
@@ -231,20 +230,5 @@ func chapterMap(urls []string) map[string]string {
 		}
 	}
 
-	log.Printf("found chapters: %v", chapterMap)
-
 	return chapterMap
 }
-
-// // parses chapter HTML and returns slice of image URLs
-// func extractChapterImageUrls(html string) []string {
-// 	var urls []string
-// 	re := regexp.MustCompile(`<img\s+[^>]*id="image-[0-9]+"[^>]*src="([^"]+)"`)
-// 	matches := re.FindAllStringSubmatch(html, -1)
-// 	for _, m := range matches {
-// 		if len(m) > 1 {
-// 			urls = append(urls, m[1])
-// 		}
-// 	}
-// 	return urls
-// }

@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"strings"
 
@@ -190,10 +191,20 @@ func (v *AddMangaView) onDirectoryButtonClicked() {
 
 	// Set the dialog to start at user's home directory
 	// You can also set a different starting location if desired
-	homeDir, err := storage.ListerForURI(storage.NewFileURI("~"))
-	if err == nil {
-		if listable, ok := homeDir.(fyne.ListableURI); ok {
-			folderDialog.SetLocation(listable)
+	// Get the user's home directory
+	homePath, err := os.UserHomeDir()
+	if err != nil {
+		log.Printf("Failed to get home directory: %v", err)
+	} else {
+		// Create a File URI for the home directory
+		homeURI := storage.NewFileURI(homePath)
+
+		// Get a ListableURI for the folder dialog
+		homeDir, err := storage.ListerForURI(homeURI)
+		if err != nil {
+			log.Printf("Failed to get ListableURI for %s: %v", homePath, err)
+		} else {
+			folderDialog.SetLocation(homeDir) // no type assertion needed
 		}
 	}
 
