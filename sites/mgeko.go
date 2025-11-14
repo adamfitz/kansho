@@ -143,10 +143,17 @@ func MgekoDownloadChapters(manga *config.Bookmarks, progressCallback func(string
 
 		// Log successful response
 		c.OnResponse(func(r *colly.Response) {
+			// DECOMPRESS THE CHAPTER PAGE TOO!
+			if decompressed, err := cloudflare.DecompressResponse(r, fmt.Sprintf("[%s]", cbzName)); err != nil {
+				log.Printf("[%s:%s] ERROR: Failed to decompress: %v", manga.Shortname, cbzName, err)
+				return
+			} else if decompressed {
+				log.Printf("[%s:%s] ✓ Chapter page decompressed", manga.Shortname, cbzName)
+			}
+
 			log.Printf("[%s:%s] Chapter page response: status=%d, size=%d bytes",
 				manga.Shortname, cbzName, r.StatusCode, len(r.Body))
 		})
-
 		// Visit the chapter page to scrape images
 		err = c.Visit(chapterURL)
 		if err != nil {
@@ -361,6 +368,9 @@ func chapterUrls(url string) ([]string, error) {
 
 	// Log the final count
 	log.Printf("<mgeko> Successfully scraped %d chapter URLs", len(chapters))
+	// for key, value := range chapters {
+	// 	log.Printf("Chapter: %d -> %s", key, value)
+	// }
 
 	return chapters, nil
 }
@@ -394,6 +404,9 @@ func chapterMap(urls []string) map[string]string {
 			filename += ".cbz"
 
 			chapterMap[filename] = url
+			log.Printf("<mgeko> Mapped: %s → %s", filename, url) // ADD THIS DEBUG LINE
+		} else {
+			log.Printf("<mgeko> WARNING: Could not parse chapter number from URL: %s", url) // ADD THIS TOO
 		}
 	}
 
