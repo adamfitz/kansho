@@ -5,6 +5,7 @@ go 1.25.3
 require (
 	fyne.io/fyne/v2 v2.7.0
 	github.com/PuerkitoBio/goquery v1.10.3
+	github.com/andybalholm/brotli v1.2.0
 	github.com/chai2010/webp v1.4.0
 	github.com/gocolly/colly v1.2.0
 	golang.design/x/clipboard v0.7.1

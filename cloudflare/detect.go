@@ -89,7 +89,6 @@ func DetectCloudflare(resp *http.Response) (bool, *CloudflareInfo, error) {
 		"challenge-form":               "Cloudflare challenge form",
 		"/cdn-cgi/challenge-platform/": "Cloudflare challenge JS",
 		"cf-chl-":                      "Cloudflare challenge token",
-		"cloudflare":                   "Contains 'cloudflare'",
 		"attention required":           "Cloudflare BIC",
 	}
 
@@ -114,9 +113,10 @@ func DetectCloudflare(resp *http.Response) (bool, *CloudflareInfo, error) {
 	info.JSChallenges = jsRe.FindAllString(body, -1)
 
 	// Extract challenge form action
-	formRe := regexp.MustCompile(`<form[^>]+action="([^"]+)"`)
+	formRe := regexp.MustCompile(`<form[^>]+id="challenge-form"[^>]+action="([^"]+)"`)
 	if m := formRe.FindStringSubmatch(body); len(m) > 1 {
 		info.FormAction = m[1]
+		info.Indicators = append(info.Indicators, "Cloudflare challenge form detected")
 	}
 
 	// Extract meta redirect
