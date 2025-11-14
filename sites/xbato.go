@@ -197,7 +197,7 @@ func XbatoDownloadChapters(manga *config.Bookmarks, progressCallback func(string
 func xbatoChapterUrls(url string) ([]string, error) {
 	var chapters []string
 
-	log.Printf("[xbato] Fetching chapter list from: %s", url)
+	log.Printf("<xbato> Fetching chapter list from: %s", url)
 
 	// Create a new Colly collector with a realistic User-Agent
 	c := colly.NewCollector(
@@ -206,7 +206,7 @@ func xbatoChapterUrls(url string) ([]string, error) {
 
 	// Log when the page is successfully visited
 	c.OnResponse(func(r *colly.Response) {
-		log.Printf("[xbato] Successfully fetched page, status: %d, size: %d bytes", r.StatusCode, len(r.Body))
+		log.Printf("<xbato> Successfully fetched page, status: %d, size: %d bytes", r.StatusCode, len(r.Body))
 	})
 
 	// Xbato stores chapter links in <a> tags with class "chapt"
@@ -222,28 +222,28 @@ func xbatoChapterUrls(url string) ([]string, error) {
 			// Store as "chapterText|URL" so we can parse the chapter number later
 			chapterEntry := fmt.Sprintf("%s|%s", chapterText, fullURL)
 			chapters = append(chapters, chapterEntry)
-			log.Printf("[xbato] Added chapter entry: '%s' -> %s", chapterText, fullURL)
+			log.Printf("<xbato> Added chapter entry: '%s' -> %s", chapterText, fullURL)
 		} else if href != "" {
-			log.Printf("[xbato] WARNING: Skipped href that doesn't start with /chapter/: '%s'", href)
+			log.Printf("<xbato> WARNING: Skipped href that doesn't start with /chapter/: '%s'", href)
 		}
 	})
 
 	// Capture any scraping errors
 	var scrapeErr error
 	c.OnError(func(r *colly.Response, err error) {
-		log.Printf("[xbato] ERROR during scraping: %v, Status: %d", err, r.StatusCode)
+		log.Printf("<xbato> ERROR during scraping: %v, Status: %d", err, r.StatusCode)
 		scrapeErr = err
 	})
 
 	// Visit the manga page to trigger scraping
 	err := c.Visit(url)
 	if err != nil {
-		log.Printf("[xbato] Failed to visit URL %s: %v", url, err)
+		log.Printf("<xbato> Failed to visit URL %s: %v", url, err)
 		return nil, err
 	}
 
 	// Log final result
-	log.Printf("[xbato] Scraping complete. Found %d chapters", len(chapters))
+	log.Printf("<xbato> Scraping complete. Found %d chapters", len(chapters))
 
 	// Return any error that occurred during OnError callback
 	if scrapeErr != nil {
@@ -252,7 +252,7 @@ func xbatoChapterUrls(url string) ([]string, error) {
 
 	// If no chapters found, log a warning
 	if len(chapters) == 0 {
-		log.Printf("[xbato] WARNING: No chapters found at %s - check if the HTML selector 'a.chapt' is correct", url)
+		log.Printf("<xbato> WARNING: No chapters found at %s - check if the HTML selector 'a.chapt' is correct", url)
 	}
 
 	return chapters, nil
@@ -278,7 +278,7 @@ func xbatoChapterUrls(url string) ([]string, error) {
 func xbatoChapterMap(entries []string) map[string]string {
 	chapterMap := make(map[string]string)
 
-	log.Printf("[xbato] Processing %d chapter entries", len(entries))
+	log.Printf("<xbato> Processing %d chapter entries", len(entries))
 
 	// Regex to extract chapter numbers from text like "Chapter 1", "Chapter 1.5", "Chapter 123"
 	re := regexp.MustCompile(`Chapter\s+(\d+)(?:\.(\d+))?`)
@@ -287,7 +287,7 @@ func xbatoChapterMap(entries []string) map[string]string {
 		// Split the entry into text and URL
 		parts := strings.Split(entry, "|")
 		if len(parts) != 2 {
-			log.Printf("[xbato] WARNING: Invalid entry format: %s", entry)
+			log.Printf("<xbato> WARNING: Invalid entry format: %s", entry)
 			continue
 		}
 
@@ -311,13 +311,13 @@ func xbatoChapterMap(entries []string) map[string]string {
 			filename += ".cbz"
 
 			chapterMap[filename] = url
-			log.Printf("[xbato] Mapped '%s' -> %s (URL: %s)", chapterText, filename, url)
+			log.Printf("<xbato> Mapped '%s' -> %s (URL: %s)", chapterText, filename, url)
 		} else {
-			log.Printf("[xbato] WARNING: Could not parse chapter number from text: %s", chapterText)
+			log.Printf("<xbato> WARNING: Could not parse chapter number from text: %s", chapterText)
 		}
 	}
 
-	log.Printf("[xbato] Created chapter map with %d entries", len(chapterMap))
+	log.Printf("<xbato> Created chapter map with %d entries", len(chapterMap))
 
 	return chapterMap
 }

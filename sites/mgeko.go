@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 
+	"kansho/cloudflare"
 	"kansho/config"
 	"kansho/parser"
 
@@ -173,6 +174,27 @@ func chapterUrls(url string) ([]string, error) {
 		colly.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"),
 	)
 
+	var cfDetected bool
+	var cfInfo *cloudflare.CloudflareInfo
+	var scrapeErr error
+
+	// -------------------------
+	// OnResponse (200 / HTML)
+	// -------------------------
+	c.OnResponse(func(r *colly.Response) {
+		log.Printf("<mgeko> Chapter Urls page response, status: %d, size: %d bytes", r.StatusCode, len(r.Body))
+
+		isCF, info, _ := cloudflare.DetectFromColly(r)
+		if isCF {
+			cfDetected = true
+			cfInfo = info
+			log.Printf("<mgeko> CF detected (OnResponse): %v", info.Indicators)
+		}
+	})
+
+	// -------------------------
+	// OnHTML
+	// -------------------------
 	c.OnHTML("ul.chapter-list li a", func(e *colly.HTMLElement) {
 		href := e.Attr("href")
 		if href != "" {
@@ -181,18 +203,44 @@ func chapterUrls(url string) ([]string, error) {
 		}
 	})
 
-	var scrapeErr error
-	c.OnError(func(_ *colly.Response, err error) {
+	// -------------------------
+	// OnError (403, 503, etc.)
+	// -------------------------
+	c.OnError(func(r *colly.Response, err error) {
+		log.Printf("<mgeko> ERROR during scraping: %v, Status: %d", err, r.StatusCode)
+
+		isCF, info, _ := cloudflare.DetectFromColly(r)
+		if isCF {
+			cfDetected = true
+			cfInfo = info
+			log.Printf("<mgeko> CF detected (OnError): %v", info.Indicators)
+		}
+
 		scrapeErr = err
 	})
 
-	err := c.Visit(url)
-	if err != nil {
-		return nil, err
+	// -------------------------
+	// Visit
+	// -------------------------
+	if err := c.Visit(url); err != nil {
+		return nil, fmt.Errorf("visit error: %w", err)
 	}
 
+	// -------------------------
+	// Cloudflare block detected
+	// -------------------------
+	if cfDetected {
+		return nil, fmt.Errorf(
+			"Cloudflare blocked request: status=%d indicators=%v",
+			cfInfo.StatusCode, cfInfo.Indicators,
+		)
+	}
+
+	// -------------------------
+	// Other scraping errors
+	// -------------------------
 	if scrapeErr != nil {
-		return nil, scrapeErr
+		return nil, fmt.Errorf("scrape error: %w", scrapeErr)
 	}
 
 	return chapters, nil
