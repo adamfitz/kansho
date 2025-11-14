@@ -6,7 +6,7 @@ import (
 	"sort"
 	"time"
 
-	"kansho/cloudflare"
+	"kansho/cf"
 	"kansho/parser"
 	"kansho/sites"
 
@@ -330,14 +330,14 @@ func (v *ChapterListView) onUpdateButtonClicked() {
 			v.updateButton.Enable()
 
 			if err != nil {
-				// Check if this is a Cloudflare challenge error
-				if cfErr, ok := cloudflare.IsCloudflareChallenge(err); ok {
-					// Show custom Cloudflare dialog with import button
-					v.progressLabel.SetText("Cloudflare challenge detected")
+				// Check if this is a cf challenge error
+				if cfErr, ok := cf.IscfChallenge(err); ok {
+					// Show custom cf dialog with import button
+					v.progressLabel.SetText("cf challenge detected")
 
 					// Success callback - retry the download after successful import
 					onSuccess := func() {
-						v.progressLabel.SetText("Cloudflare data imported. Retrying download...")
+						v.progressLabel.SetText("cf data imported. Retrying download...")
 						// Retry the download by calling the button click handler again
 						go func() {
 							// Small delay to let user see the message
@@ -350,7 +350,7 @@ func (v *ChapterListView) onUpdateButtonClicked() {
 						}()
 					}
 
-					ShowCloudflareDialog(v.state.Window, cfErr.URL, onSuccess)
+					ShowcfDialog(v.state.Window, cfErr.URL, onSuccess)
 					return
 				}
 

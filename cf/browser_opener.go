@@ -1,4 +1,4 @@
-package cloudflare
+package cf
 
 import (
 	"fmt"
@@ -27,8 +27,8 @@ func OpenInBrowser(url string) error {
 }
 
 // GetChallengeURL extracts the best URL to open in the browser
-// based on the CloudflareInfo detection
-func GetChallengeURL(info *CloudflareInfo, originalURL string) string {
+// based on the cfInfo detection
+func GetChallengeURL(info *CfInfo, originalURL string) string {
 	// Priority 1: Meta redirect (most direct)
 	if info.MetaRedirect != "" {
 		return info.MetaRedirect

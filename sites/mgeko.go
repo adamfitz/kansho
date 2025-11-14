@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"kansho/cloudflare"
+	"kansho/cf"
 	"kansho/config"
 	"kansho/parser"
 
@@ -41,7 +41,7 @@ func MgekoDownloadChapters(manga *config.Bookmarks, progressCallback func(string
 	// Step 1: Get all chapter URLs
 	chapterUrls, err := chapterUrls(manga.Url)
 	if err != nil {
-		// Just pass the error up - it will be a CloudflareChallengeError if CF was detected
+		// Just pass the error up - it will be a cfChallengeError if CF was detected
 		// The UI layer will handle it appropriately
 		return err
 	}
@@ -105,16 +105,16 @@ func MgekoDownloadChapters(manga *config.Bookmarks, progressCallback func(string
 		)
 
 		// -------------------------------------------------------------------------
-		// APPLY CLOUDFLARE BYPASS TO THIS CHAPTER'S COLLECTOR
+		// APPLY cf BYPASS TO THIS CHAPTER'S COLLECTOR
 		// -------------------------------------------------------------------------
-		log.Printf("[%s:%s] Applying Cloudflare bypass for chapter page", manga.Shortname, cbzName)
+		log.Printf("[%s:%s] Applying cf bypass for chapter page", manga.Shortname, cbzName)
 
 		// Apply the bypass data to this collector (ApplyToCollector loads the data internally)
-		if applyErr := cloudflare.ApplyToCollector(c, chapterURL); applyErr != nil {
+		if applyErr := cf.ApplyToCollector(c, chapterURL); applyErr != nil {
 			log.Printf("[%s:%s] WARNING: Failed to apply bypass data: %v", manga.Shortname, cbzName, applyErr)
-			log.Printf("[%s:%s] Chapter download may fail due to Cloudflare protection", manga.Shortname, cbzName)
+			log.Printf("[%s:%s] Chapter download may fail due to cf protection", manga.Shortname, cbzName)
 		} else {
-			log.Printf("[%s:%s] ✓ Cloudflare bypass applied to chapter collector", manga.Shortname, cbzName)
+			log.Printf("[%s:%s] ✓ cf bypass applied to chapter collector", manga.Shortname, cbzName)
 		}
 
 		// Scrape image URLs from #chapter-reader
@@ -132,10 +132,10 @@ func MgekoDownloadChapters(manga *config.Bookmarks, progressCallback func(string
 			log.Printf("[%s:%s] ERROR fetching chapter page %s: %v (status: %d)",
 				manga.Shortname, cbzName, chapterURL, err, r.StatusCode)
 
-			// Check if this is a Cloudflare challenge
-			isCF, cfInfo, _ := cloudflare.DetectFromColly(r)
+			// Check if this is a cf challenge
+			isCF, cfInfo, _ := cf.DetectFromColly(r)
 			if isCF {
-				log.Printf("[%s:%s] ⚠️ Cloudflare challenge detected on chapter page!", manga.Shortname, cbzName)
+				log.Printf("[%s:%s] ⚠️ cf challenge detected on chapter page!", manga.Shortname, cbzName)
 				log.Printf("[%s:%s] Indicators: %v", manga.Shortname, cbzName, cfInfo.Indicators)
 				log.Printf("[%s:%s] This chapter may fail to download", manga.Shortname, cbzName)
 			}
@@ -144,7 +144,7 @@ func MgekoDownloadChapters(manga *config.Bookmarks, progressCallback func(string
 		// Log successful response
 		c.OnResponse(func(r *colly.Response) {
 			// DECOMPRESS THE CHAPTER PAGE TOO!
-			if decompressed, err := cloudflare.DecompressResponse(r, fmt.Sprintf("[%s]", cbzName)); err != nil {
+			if decompressed, err := cf.DecompressResponse(r, fmt.Sprintf("[%s]", cbzName)); err != nil {
 				log.Printf("[%s:%s] ERROR: Failed to decompress: %v", manga.Shortname, cbzName, err)
 				return
 			} else if decompressed {
@@ -162,7 +162,7 @@ func MgekoDownloadChapters(manga *config.Bookmarks, progressCallback func(string
 		}
 
 		if len(imgURLs) == 0 {
-			log.Printf("[%s:%s] ⚠️ WARNING: No images found for chapter (Cloudflare may be blocking)", manga.Shortname, cbzName)
+			log.Printf("[%s:%s] ⚠️ WARNING: No images found for chapter (cf may be blocking)", manga.Shortname, cbzName)
 			continue
 		}
 
@@ -241,11 +241,11 @@ func chapterUrls(url string) ([]string, error) {
 		colly.AllowURLRevisit(),
 	)
 
-	// Check for stored Cloudflare data
+	// Check for stored cf data
 	parsedURL, _ := url2.Parse(url)
 	domain := parsedURL.Hostname()
 
-	bypassData, err := cloudflare.LoadFromFile(domain)
+	bypassData, err := cf.LoadFromFile(domain)
 	hasStoredData := (err == nil)
 
 	if hasStoredData {
@@ -264,7 +264,7 @@ func chapterUrls(url string) ([]string, error) {
 
 		if hasStoredData {
 			// Apply the stored data
-			if err := cloudflare.ApplyToCollector(c, url); err != nil {
+			if err := cf.ApplyToCollector(c, url); err != nil {
 				log.Printf("<mgeko> Failed to apply bypass data: %v", err)
 				hasStoredData = false
 			} else {
@@ -276,12 +276,12 @@ func chapterUrls(url string) ([]string, error) {
 	}
 
 	var cfDetected bool
-	var cfInfo *cloudflare.CloudflareInfo
+	var cfInfo *cf.CfInfo
 	var scrapeErr error
 
 	c.OnResponse(func(r *colly.Response) {
 		// Automatically decompress the response (handles gzip and Brotli)
-		if decompressed, err := cloudflare.DecompressResponse(r, "<mgeko>"); err != nil {
+		if decompressed, err := cf.DecompressResponse(r, "<mgeko>"); err != nil {
 			log.Printf("<mgeko> ERROR: Failed to decompress response: %v", err)
 			return
 		} else if decompressed {
@@ -290,11 +290,11 @@ func chapterUrls(url string) ([]string, error) {
 
 		log.Printf("<mgeko> Chapter list response: status=%d, size=%d bytes", r.StatusCode, len(r.Body))
 
-		isCF, info, _ := cloudflare.DetectFromColly(r)
+		isCF, info, _ := cf.DetectFromColly(r)
 		if isCF {
 			cfDetected = true
 			cfInfo = info
-			log.Printf("<mgeko> ⚠️ Cloudflare challenge detected despite using stored cookie!")
+			log.Printf("<mgeko> ⚠️ cf challenge detected despite using stored cookie!")
 			log.Printf("<mgeko> Indicators that triggered detection: %v", info.Indicators)
 			log.Printf("<mgeko> StatusCode: %d", info.StatusCode)
 			log.Printf("<mgeko> RayID: %s", info.RayID)
@@ -323,11 +323,11 @@ func chapterUrls(url string) ([]string, error) {
 	c.OnError(func(r *colly.Response, err error) {
 		log.Printf("<mgeko> ERROR: %v, Status: %d", err, r.StatusCode)
 
-		isCF, info, _ := cloudflare.DetectFromColly(r)
+		isCF, info, _ := cf.DetectFromColly(r)
 		if isCF {
 			cfDetected = true
 			cfInfo = info
-			log.Printf("<mgeko> Cloudflare block detected: %v", info.Indicators)
+			log.Printf("<mgeko> cf block detected: %v", info.Indicators)
 		}
 		scrapeErr = err
 	})
@@ -338,24 +338,24 @@ func chapterUrls(url string) ([]string, error) {
 		log.Printf("<mgeko> Visit error: %v", visitErr)
 	}
 
-	// Handle Cloudflare detection
+	// Handle cf detection
 	if cfDetected {
 		if hasStoredData {
 			log.Printf("<mgeko> ⚠️ Stored cf_clearance failed validation - cookie is expired/invalid")
 			log.Printf("<mgeko> Deleting invalid data and requesting fresh challenge")
 
 			// Delete the invalid stored data
-			cloudflare.DeleteDomain(domain)
+			cf.DeleteDomain(domain)
 		}
 
-		log.Printf("<mgeko> Opening browser for Cloudflare challenge...")
-		challengeURL := cloudflare.GetChallengeURL(cfInfo, url)
+		log.Printf("<mgeko> Opening browser for cf challenge...")
+		challengeURL := cf.GetChallengeURL(cfInfo, url)
 
-		if err := cloudflare.OpenInBrowser(challengeURL); err != nil {
-			return nil, fmt.Errorf("cloudflare detected but failed to open browser: %w", err)
+		if err := cf.OpenInBrowser(challengeURL); err != nil {
+			return nil, fmt.Errorf("cf detected but failed to open browser: %w", err)
 		}
 
-		return nil, &cloudflare.CloudflareChallengeError{
+		return nil, &cf.CfChallengeError{
 			URL:        challengeURL,
 			StatusCode: cfInfo.StatusCode,
 			Indicators: cfInfo.Indicators,

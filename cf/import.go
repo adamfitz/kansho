@@ -1,4 +1,4 @@
-package cloudflare
+package cf
 
 import (
 	"fmt"
@@ -7,7 +7,7 @@ import (
 	"golang.design/x/clipboard"
 )
 
-// ImportFromClipboard reads Cloudflare bypass data from the clipboard,
+// ImportFromClipboard reads cf bypass data from the clipboard,
 // parses it, and saves it to file. Returns the domain on success.
 func ImportFromClipboard() (string, error) {
 	// Initialize clipboard
@@ -34,7 +34,7 @@ func ImportFromClipboard() (string, error) {
 	log.Printf("  - Protection type: %s", data.Type)
 
 	if len(data.Cookies) > 0 {
-		log.Printf("  - Cloudflare cookies: %d", len(data.Cookies))
+		log.Printf("  - cf cookies: %d", len(data.Cookies))
 		log.Printf("  - Total cookies: %d", len(data.AllCookies))
 	}
 

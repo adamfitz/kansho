@@ -1,4 +1,4 @@
-package cloudflare
+package cf
 
 import (
 	"bytes"
@@ -27,7 +27,7 @@ import (
 // Example usage:
 //
 //	c.OnResponse(func(r *colly.Response) {
-//	    if decompressed, err := cloudflare.DecompressResponse(r, "<mysite>"); err != nil {
+//	    if decompressed, err := cf.DecompressResponse(r, "<mysite>"); err != nil {
 //	        log.Printf("Decompression error: %v", err)
 //	        return
 //	    } else if decompressed {
@@ -42,7 +42,7 @@ func DecompressResponse(r *colly.Response, logPrefix string) (bool, error) {
 
 	// Add default log prefix if none provided
 	if logPrefix == "" {
-		logPrefix = "<cloudflare>"
+		logPrefix = "<cf>"
 	}
 
 	originalSize := len(r.Body)

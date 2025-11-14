@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"log"
 
-	"kansho/cloudflare"
+	"kansho/cf"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
@@ -12,17 +12,17 @@ import (
 	"fyne.io/fyne/v2/widget"
 )
 
-// ShowCloudflareDialog displays a dialog when Cloudflare challenge is detected
-// It includes instructions and an "Import Cloudflare Data" button
-func ShowCloudflareDialog(window fyne.Window, challengeURL string, onSuccess func()) {
+// ShowcfDialog displays a dialog when cf challenge is detected
+// It includes instructions and an "Import cf Data" button
+func ShowcfDialog(window fyne.Window, challengeURL string, onSuccess func()) {
 	// Create instruction text
 	instructions := widget.NewLabel(
-		"A Cloudflare challenge was detected and opened in your browser.\n\n" +
+		"A cf challenge was detected and opened in your browser.\n\n" +
 			"Please complete the following steps:\n\n" +
 			"1. Complete the challenge in your browser\n" +
 			"2. Make sure you can see the actual manga page\n" +
 			"3. Click the Kansho browser extension icon\n" +
-			"4. Click 'Copy Cloudflare Data' in the extension\n" +
+			"4. Click 'Copy cf Data' in the extension\n" +
 			"5. Return here and click 'Import Data' below\n\n" +
 			"The browser extension must be installed first!\n" +
 			"See: extensions/README.md for installation instructions.",
@@ -43,22 +43,22 @@ func ShowCloudflareDialog(window fyne.Window, challengeURL string, onSuccess fun
 	var customDialog dialog.Dialog
 
 	// Import button handler
-	importButton = widget.NewButton("Import Cloudflare Data", func() {
+	importButton = widget.NewButton("Import cf Data", func() {
 		importButton.Disable()
 		statusLabel.SetText("Reading clipboard...")
 		statusLabel.Show()
 
 		// Import from clipboard
-		domain, err := cloudflare.ImportFromClipboard()
+		domain, err := cf.ImportFromClipboard()
 		if err != nil {
-			log.Printf("Failed to import Cloudflare data: %v", err)
+			log.Printf("Failed to import cf data: %v", err)
 			statusLabel.SetText(fmt.Sprintf("❌ Error: %v", err))
 			importButton.Enable()
 			return
 		}
 
 		// Success!
-		log.Printf("Successfully imported Cloudflare data for: %s", domain)
+		log.Printf("Successfully imported cf data for: %s", domain)
 		statusLabel.SetText(fmt.Sprintf("✅ Success! Imported data for: %s", domain))
 
 		// Change import button to "Done"
@@ -81,7 +81,7 @@ func ShowCloudflareDialog(window fyne.Window, challengeURL string, onSuccess fun
 
 	// Layout
 	content := container.NewVBox(
-		widget.NewLabel("🔒 Cloudflare Challenge Detected"),
+		widget.NewLabel("🔒 cf Challenge Detected"),
 		widget.NewSeparator(),
 		instructions,
 		widget.NewSeparator(),
@@ -96,7 +96,7 @@ func ShowCloudflareDialog(window fyne.Window, challengeURL string, onSuccess fun
 
 	// Create custom dialog
 	customDialog = dialog.NewCustom(
-		"Cloudflare Challenge",
+		"cf Challenge",
 		"", // No dismiss button text (we have our own buttons)
 		content,
 		window,

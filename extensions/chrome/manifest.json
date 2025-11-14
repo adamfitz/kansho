@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Kansho Cloudflare Helper",
+  "name": "Kansho cf Helper",
   "version": "1.0.0",
-  "description": "Captures Cloudflare cookies and browser data for Kansho manga downloader",
+  "description": "Captures cf cookies and browser data for Kansho manga downloader",
   "permissions": [
     "cookies",
     "tabs",

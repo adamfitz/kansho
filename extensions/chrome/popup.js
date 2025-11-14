@@ -1,8 +1,8 @@
 /**
- * Kansho Cloudflare Helper - Browser Extension
+ * Kansho cf Helper - Browser Extension
  * 
  * This script runs when the user clicks the extension icon and opens the popup.
- * It captures Cloudflare cookies and browser fingerprint data from the current tab,
+ * It captures cf cookies and browser fingerprint data from the current tab,
  * then copies it to the clipboard in JSON format for use by the Kansho application.
  */
 
@@ -10,7 +10,7 @@
 // MAIN FUNCTIONALITY: Capture Button Click Handler
 // ============================================================================
 
-// Get the "Copy Cloudflare Data" button from popup.html and add a click listener
+// Get the "Copy cf Data" button from popup.html and add a click listener
 // addEventListener is like a callback in Go - it runs the function when the event happens
 document.getElementById('captureBtn').addEventListener('click', async () => {
   // Get references to HTML elements we'll update during the process
@@ -83,17 +83,17 @@ document.getElementById('captureBtn').addEventListener('click', async () => {
     }, new Map());  // Start with an empty Map
     
     // -------------------------------------------------------------------------
-    // Step 5: Filter for Cloudflare-specific cookies
+    // Step 5: Filter for cf-specific cookies
     // -------------------------------------------------------------------------
     // Array.from() converts the Map to an array (like converting Go map to slice)
     // .values() gets just the cookie objects (not the keys)
     // .filter() is like Go's for loop with append if condition is true
     const cfCookies = Array.from(allCookies.values()).filter(cookie => 
-      // Check if cookie name contains Cloudflare-related strings
+      // Check if cookie name contains cf-related strings
       cookie.name.toLowerCase().includes('cf_') ||          // cf_clearance, cf_chl_*, etc.
       cookie.name.toLowerCase().includes('clearance') ||    // Alternative naming
-      cookie.name === '__cfduid' ||                         // Old Cloudflare cookie
-      cookie.name === '__cf_bm'                             // Cloudflare Bot Management
+      cookie.name === '__cfduid' ||                         // Old cf cookie
+      cookie.name === '__cf_bm'                             // cf Bot Management
     );
     
     // -------------------------------------------------------------------------
@@ -177,7 +177,7 @@ document.getElementById('captureBtn').addEventListener('click', async () => {
         target: { tabId: tab.id },
         func: () => {
           // Look for Turnstile challenge form or iframe
-          const turnstileIframe = document.querySelector('iframe[src*="challenges.cloudflare.com"]');
+          const turnstileIframe = document.querySelector('iframe[src*="challenges.cf.com"]');
           
           // Look for form with Turnstile data
           const forms = document.querySelectorAll('form');
@@ -187,7 +187,7 @@ document.getElementById('captureBtn').addEventListener('click', async () => {
           for (const form of forms) {
             const inputs = form.querySelectorAll('input[type="hidden"]');
             for (const input of inputs) {
-              // Cloudflare typically uses very long hex names for form fields
+              // cf typically uses very long hex names for form fields
               if (input.name.length > 30 && input.value.length > 100) {
                 formData[input.name] = input.value;
                 foundTurnstile = true;
@@ -251,7 +251,7 @@ document.getElementById('captureBtn').addEventListener('click', async () => {
       // Protection type (will be determined by Go code)
       type: turnstileData && turnstileData.hasTurnstile ? "turnstile" : "cookie",
       
-      // Cloudflare-specific cookies (filtered list)
+      // cf-specific cookies (filtered list)
       // .map() transforms each cookie object, keeping only needed fields
       cookies: cfCookies.map(c => ({
         name: c.name,
@@ -264,7 +264,7 @@ document.getElementById('captureBtn').addEventListener('click', async () => {
         expirationDate: c.expirationDate
       })),
       
-      // ALL cookies from the domain (not just Cloudflare ones)
+      // ALL cookies from the domain (not just cf ones)
       allCookies: Array.from(allCookies.values()).map(c => ({
         name: c.name,
         value: c.value,
@@ -282,7 +282,7 @@ document.getElementById('captureBtn').addEventListener('click', async () => {
       turnstileRequestUrl: turnstileStored.turnstileUrl || "",
       turnstileCapturedAt: turnstileStored.turnstileCapturedAt || "",
 
-      // Cloudflare clearance data, captured by background.js
+      // cf clearance data, captured by background.js
       cfClearance: cfClearanceStored.cfClearanceRaw || "",
       cfClearanceCapturedAt: cfClearanceStored.cfClearanceCapturedAt || "",
       cfClearanceUrl: cfClearanceStored.cfClearanceUrl || "",
@@ -347,7 +347,7 @@ document.getElementById('captureBtn').addEventListener('click', async () => {
 });
 
 // ============================================================================
-// AUTO-DETECT: Check if current page is a Cloudflare challenge
+// AUTO-DETECT: Check if current page is a cf challenge
 // ============================================================================
 // This runs immediately when the popup opens (not on button click)
 
@@ -357,23 +357,23 @@ chrome.tabs.query({ active: true, currentWindow: true }, async ([tab]) => {
   if (!tab) return;
   
   try {
-    // Execute script in the target tab to detect Cloudflare challenge
+    // Execute script in the target tab to detect cf challenge
     const result = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
       func: () => {
-        // Check if the page contains Cloudflare-related text or elements
+        // Check if the page contains cf-related text or elements
         // This returns true/false
-        return document.body.textContent.toLowerCase().includes('cloudflare') ||
+        return document.body.textContent.toLowerCase().includes('cf') ||
                document.body.textContent.toLowerCase().includes('checking your browser') ||
                document.querySelector('[class*="cf-"]') !== null;
       }
     });
     
-    // If Cloudflare challenge was detected, show an info message
+    // If cf challenge was detected, show an info message
     if (result && result[0] && result[0].result) {
       const statusDiv = document.getElementById('status');
       statusDiv.className = 'info';
-      statusDiv.textContent = '⚠️ Cloudflare challenge detected on this page';
+      statusDiv.textContent = '⚠️ cf challenge detected on this page';
     }
   } catch (e) {
     // Ignore errors - this can happen on special pages like chrome:// URLs

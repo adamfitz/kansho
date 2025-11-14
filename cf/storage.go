@@ -1,4 +1,4 @@
-package cloudflare
+package cf
 
 import (
 	"encoding/json"
@@ -173,7 +173,7 @@ func SaveToFile(data *BypassData, domain string) error {
 		return fmt.Errorf("failed to get config directory: %w", err)
 	}
 
-	cfDir := filepath.Join(configDir, "kansho", "cloudflare")
+	cfDir := filepath.Join(configDir, "kansho", "cf")
 	if err := os.MkdirAll(cfDir, 0755); err != nil {
 		return fmt.Errorf("failed to create directory: %w", err)
 	}
@@ -206,10 +206,10 @@ func LoadFromFile(domain string) (*BypassData, error) {
 		return nil, fmt.Errorf("failed to get config directory: %w", err)
 	}
 
-	filename := filepath.Join(configDir, "kansho", "cloudflare", fmt.Sprintf("%s.json", domain))
+	filename := filepath.Join(configDir, "kansho", "cf", fmt.Sprintf("%s.json", domain))
 
 	if _, err := os.Stat(filename); os.IsNotExist(err) {
-		return nil, fmt.Errorf("no cloudflare data found for domain: %s", domain)
+		return nil, fmt.Errorf("no cf data found for domain: %s", domain)
 	}
 
 	jsonData, err := os.ReadFile(filename)
@@ -225,14 +225,14 @@ func LoadFromFile(domain string) (*BypassData, error) {
 	return &data, nil
 }
 
-// ListStoredDomains returns a list of all domains that have stored Cloudflare data
+// ListStoredDomains returns a list of all domains that have stored cf data
 func ListStoredDomains() ([]string, error) {
 	configDir, err := os.UserConfigDir()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get config directory: %w", err)
 	}
 
-	cfDir := filepath.Join(configDir, "kansho", "cloudflare")
+	cfDir := filepath.Join(configDir, "kansho", "cf")
 
 	if _, err := os.Stat(cfDir); os.IsNotExist(err) {
 		return []string{}, nil
@@ -254,14 +254,14 @@ func ListStoredDomains() ([]string, error) {
 	return domains, nil
 }
 
-// DeleteDomain removes stored Cloudflare data for a specific domain
+// DeleteDomain removes stored cf data for a specific domain
 func DeleteDomain(domain string) error {
 	configDir, err := os.UserConfigDir()
 	if err != nil {
 		return fmt.Errorf("failed to get config directory: %w", err)
 	}
 
-	filename := filepath.Join(configDir, "kansho", "cloudflare", fmt.Sprintf("%s.json", domain))
+	filename := filepath.Join(configDir, "kansho", "cf", fmt.Sprintf("%s.json", domain))
 
 	if err := os.Remove(filename); err != nil {
 		if os.IsNotExist(err) {

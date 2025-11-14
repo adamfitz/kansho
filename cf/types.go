@@ -1,8 +1,8 @@
-package cloudflare
+package cf
 
 import "time"
 
-// ProtectionType indicates which Cloudflare protection is active
+// ProtectionType indicates which cf protection is active
 type ProtectionType string
 
 const (
@@ -73,7 +73,7 @@ type BypassData struct {
 	Entropy Entropy           `json:"entropy"`
 	Headers map[string]string `json:"headers"`
 
-	// --- new Cloudflare cfClearance fields ---
+	// --- new cf cfClearance fields ---
 	CfClearance           string             `json:"cfClearance,omitempty"`    // convenience string
 	CfClearanceRaw        string             `json:"cfClearanceRaw,omitempty"` // full raw string from headers
 	CfClearanceUrl        string             `json:"cfClearanceUrl,omitempty"`

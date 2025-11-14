@@ -1,11 +1,11 @@
 // ============================================================================
-// Cloudflare Turnstile POST Payload Capture
+// cf Turnstile POST Payload Capture
 // ============================================================================
 
 chrome.webRequest.onBeforeRequest.addListener(
   (details) => {
     try {
-      // Cloudflare Managed Challenge POST request
+      // cf Managed Challenge POST request
       if (
         details.method === "POST" &&
         details.url.includes("challenge-platform")
@@ -31,7 +31,7 @@ chrome.webRequest.onBeforeRequest.addListener(
   },
   {
     urls: [
-      "*://challenges.cloudflare.com/*",
+      "*://challenges.cf.com/*",
       "*://*.mgeko.cc/*"
     ]
   },
@@ -39,7 +39,7 @@ chrome.webRequest.onBeforeRequest.addListener(
 );
 
 // ============================================================================
-// Cloudflare cf_clearance Cookie Capture
+// cf cf_clearance Cookie Capture
 // ============================================================================
 
 chrome.webRequest.onHeadersReceived.addListener(
@@ -70,7 +70,7 @@ chrome.webRequest.onHeadersReceived.addListener(
   {
     urls: [
       "*://*.mgeko.cc/*",
-      "*://challenges.cloudflare.com/*"
+      "*://challenges.cf.com/*"
     ]
   },
   ["responseHeaders", "extraHeaders"]

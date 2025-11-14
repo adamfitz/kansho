@@ -1,4 +1,4 @@
-package cloudflare
+package cf
 
 import (
 	"bytes"
@@ -10,7 +10,7 @@ import (
 	"github.com/gocolly/colly"
 )
 
-type CloudflareInfo struct {
+type CfInfo struct {
 	StatusCode int
 	Reason     string
 	Indicators []string
@@ -27,9 +27,9 @@ type CloudflareInfo struct {
 	IsBIC        bool // Browser Integrity Check
 }
 
-// DetectCloudflare inspects the HTTP response and determines
-// whether Cloudflare is blocking or challenging the request.
-func DetectCloudflare(resp *http.Response) (bool, *CloudflareInfo, error) {
+// Detectcf inspects the HTTP response and determines
+// whether cf is blocking or challenging the request.
+func Detectcf(resp *http.Response) (bool, *CfInfo, error) {
 	if resp == nil {
 		return false, nil, nil
 	}
@@ -43,7 +43,7 @@ func DetectCloudflare(resp *http.Response) (bool, *CloudflareInfo, error) {
 
 	body := strings.ToLower(string(bodyBytes))
 
-	info := &CloudflareInfo{
+	info := &CfInfo{
 		StatusCode:   resp.StatusCode,
 		Indicators:   []string{},
 		Body:         string(bodyBytes),
@@ -67,16 +67,16 @@ func DetectCloudflare(resp *http.Response) (bool, *CloudflareInfo, error) {
 		info.Indicators = append(info.Indicators, "429 Rate limit")
 	}
 
-	// Identify Cloudflare Server Header
-	if strings.Contains(strings.ToLower(info.ServerHeader), "cloudflare") {
-		info.Indicators = append(info.Indicators, "Cloudflare server header")
+	// Identify cf Server Header
+	if strings.Contains(strings.ToLower(info.ServerHeader), "cf") {
+		info.Indicators = append(info.Indicators, "cf server header")
 		match = true
 	}
 
-	// Ray ID (Cloudflare always includes this)
+	// Ray ID (cf always includes this)
 	if ray := resp.Header.Get("CF-Ray"); ray != "" {
 		info.RayID = ray
-		info.Indicators = append(info.Indicators, "Cloudflare Ray ID")
+		info.Indicators = append(info.Indicators, "cf Ray ID")
 		match = true
 	}
 
@@ -86,10 +86,10 @@ func DetectCloudflare(resp *http.Response) (bool, *CloudflareInfo, error) {
 
 	checks := map[string]string{
 		"cf-browser-verification":      "JS browser verification challenge",
-		"challenge-form":               "Cloudflare challenge form",
-		"/cdn-cgi/challenge-platform/": "Cloudflare challenge JS",
-		"cf-chl-":                      "Cloudflare challenge token",
-		"attention required":           "Cloudflare BIC",
+		"challenge-form":               "cf challenge form",
+		"/cdn-cgi/challenge-platform/": "cf challenge JS",
+		"cf-chl-":                      "cf challenge token",
+		"attention required":           "cf BIC",
 	}
 
 	for subs, reason := range checks {
@@ -116,7 +116,7 @@ func DetectCloudflare(resp *http.Response) (bool, *CloudflareInfo, error) {
 	formRe := regexp.MustCompile(`<form[^>]+id="challenge-form"[^>]+action="([^"]+)"`)
 	if m := formRe.FindStringSubmatch(body); len(m) > 1 {
 		info.FormAction = m[1]
-		info.Indicators = append(info.Indicators, "Cloudflare challenge form detected")
+		info.Indicators = append(info.Indicators, "cf challenge form detected")
 	}
 
 	// Extract meta redirect
@@ -137,16 +137,16 @@ func DetectCloudflare(resp *http.Response) (bool, *CloudflareInfo, error) {
 	// Final match?
 	// ---------------------------
 	if match {
-		info.Reason = "Cloudflare anti-bot challenge detected"
+		info.Reason = "cf anti-bot challenge detected"
 		return true, info, nil
 	}
 
 	return false, nil, nil
 }
 
-// Wraps DetectCloudflare so it can be used directly
+// Wraps Detectcf so it can be used directly
 // with Colly scrapers without duplicating conversion code.
-func DetectFromColly(r *colly.Response) (bool, *CloudflareInfo, error) {
+func DetectFromColly(r *colly.Response) (bool, *CfInfo, error) {
 	if r == nil {
 		return false, nil, nil
 	}
@@ -158,5 +158,5 @@ func DetectFromColly(r *colly.Response) (bool, *CloudflareInfo, error) {
 		Header:     make(http.Header),
 	}
 
-	return DetectCloudflare(httpResp)
+	return Detectcf(httpResp)
 }

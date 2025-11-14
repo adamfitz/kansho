@@ -1,13 +1,13 @@
 # Kansho Browser Extensions
 
-Browser extensions to capture Cloudflare cookies and entropy data for use with the Kansho manga downloader.
+Browser extensions to capture cf cookies and entropy data for use with the Kansho manga downloader.
 
 ## Why is this needed?
 
-Some manga sites use Cloudflare protection. When Kansho detects this, it will:
+Some manga sites use cf protection. When Kansho detects this, it will:
 1. Open the challenge page in your browser
 2. You solve the challenge manually
-3. Use this extension to capture the Cloudflare data
+3. Use this extension to capture the cf data
 4. Import it into Kansho to continue downloading
 
 ## Installation Instructions
@@ -34,7 +34,7 @@ Some manga sites use Cloudflare protection. When Kansho detects this, it will:
 
 6. **Pin the extension** (recommended):
    - Click the puzzle piece icon in your browser toolbar
-   - Find "Kansho Cloudflare Helper"
+   - Find "Kansho cf Helper"
    - Click the pin icon to keep it visible
 
 ### Firefox
@@ -61,24 +61,24 @@ Some manga sites use Cloudflare protection. When Kansho detects this, it will:
 
 ## How to Use
 
-1. When Kansho detects a Cloudflare challenge, it will automatically open the page in your browser
+1. When Kansho detects a cf challenge, it will automatically open the page in your browser
 
-2. Complete the Cloudflare challenge (checkbox, CAPTCHA, etc.)
+2. Complete the cf challenge (checkbox, CAPTCHA, etc.)
 
-3. Once you're on the actual manga page (behind Cloudflare), click the **Kansho extension icon** in your browser toolbar
+3. Once you're on the actual manga page (behind cf), click the **Kansho extension icon** in your browser toolbar
 
-4. Click **"Copy Cloudflare Data"** button
+4. Click **"Copy cf Data"** button
 
-5. You should see a success message: "✓ Copied! Found X Cloudflare cookies..."
+5. You should see a success message: "✓ Copied! Found X cf cookies..."
 
-6. Return to Kansho and click **"Import Cloudflare Data"** (we'll add this button in the next step)
+6. Return to Kansho and click **"Import cf Data"** (we'll add this button in the next step)
 
 7. The data will be imported and Kansho can continue downloading
 
 ## What Data is Captured?
 
 The extension captures:
-- **Cloudflare cookies** (cf_clearance, __cf_bm, etc.)
+- **cf cookies** (cf_clearance, __cf_bm, etc.)
 - **All cookies** from the domain (some sites use additional cookies)
 - **Browser fingerprint data**:
   - User agent
@@ -88,7 +88,7 @@ The extension captures:
   - Language settings
   - Hardware info
 
-This data is used to make Kansho's requests appear identical to your browser, bypassing Cloudflare's bot detection.
+This data is used to make Kansho's requests appear identical to your browser, bypassing cf's bot detection.
 
 ## Privacy & Security
 
@@ -105,8 +105,8 @@ This data is used to make Kansho's requests appear identical to your browser, by
 - Try restarting your browser
 - Check the browser console for errors
 
-**"No Cloudflare cookies found":**
-- Make sure you've completed the Cloudflare challenge
+**"No cf cookies found":**
+- Make sure you've completed the cf challenge
 - Verify you're on the actual site (not still on the challenge page)
 - Try refreshing the page and clicking the extension again
 
