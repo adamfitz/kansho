@@ -73,11 +73,12 @@ type BypassData struct {
 	Entropy Entropy           `json:"entropy"`
 	Headers map[string]string `json:"headers"`
 
-	// --- Cloudflare bypass fields ---
-	CfClearance           string    `json:"cfClearance,omitempty"`           // parsed cookie value
-	CfClearanceRaw        string    `json:"cfClearanceRaw,omitempty"`        // raw clipboard string
-	CfClearanceCapturedAt time.Time `json:"cfClearanceCapturedAt,omitempty"` // parsed timestamp
-	CfClearanceUrl        string    `json:"cfClearanceUrl,omitempty"`        // challenge URL
+	// --- new Cloudflare cfClearance fields ---
+	CfClearance           string             `json:"cfClearance,omitempty"`    // convenience string
+	CfClearanceRaw        string             `json:"cfClearanceRaw,omitempty"` // full raw string from headers
+	CfClearanceUrl        string             `json:"cfClearanceUrl,omitempty"`
+	CfClearanceCapturedAt time.Time          `json:"cfClearanceCapturedAt"`
+	CfClearanceStruct     *CfClearanceCookie `json:"cfClearanceStruct,omitempty"` // structured cf_clearance
 }
 
 // IsExpired checks if the bypass data is too old
