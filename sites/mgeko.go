@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"kansho/cloudflare"
 	"kansho/config"
@@ -174,51 +175,59 @@ func chapterUrls(url string) ([]string, error) {
 	var chapters []string
 
 	c := colly.NewCollector(
-		colly.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"),
+		colly.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"),
 	)
 
-	// -------------------------------------------------------------------------
-	// APPLY CLOUDFLARE DATA (if available and valid)
-	// -------------------------------------------------------------------------
-	log.Printf("<mgeko> Checking for stored Cloudflare bypass data...")
-
-	// Check if we have bypass data and what type
+	// Check for stored Cloudflare data
 	parsedURL, _ := url2.Parse(url)
 	domain := parsedURL.Hostname()
+
 	bypassData, err := cloudflare.LoadFromFile(domain)
+	hasStoredData := (err == nil)
 
-	var needsTurnstilePost bool
-	if err == nil {
-		log.Printf("<mgeko> Found bypass data: type=%s", bypassData.Type)
-		if bypassData.Type == cloudflare.ProtectionTurnstile {
-			needsTurnstilePost = true
-			log.Printf("<mgeko> Turnstile protection detected - will use POST request")
+	if hasStoredData {
+		log.Printf("<mgeko> Found stored bypass data for %s (type: %s)", domain, bypassData.Type)
+
+		// Check if cf_clearance exists
+		if bypassData.CfClearanceStruct != nil {
+			log.Printf("<mgeko> cf_clearance found, expires: %v", bypassData.CfClearanceStruct.Expires)
+
+			// Check expiration
+			if bypassData.CfClearanceStruct.Expires != nil && time.Now().After(*bypassData.CfClearanceStruct.Expires) {
+				log.Printf("<mgeko> ⚠️ cf_clearance has EXPIRED!")
+				hasStoredData = false // Force browser challenge
+			}
 		}
-	}
 
-	cloudflare.ApplyToCollector(c, url) // Apply cookies/headers
+		if hasStoredData {
+			// Apply the stored data
+			if err := cloudflare.ApplyToCollector(c, url); err != nil {
+				log.Printf("<mgeko> Failed to apply bypass data: %v", err)
+				hasStoredData = false
+			} else {
+				log.Printf("<mgeko> ✓ Applied stored cf_clearance cookie")
+			}
+		}
+	} else {
+		log.Printf("<mgeko> No stored bypass data found for %s", domain)
+	}
 
 	var cfDetected bool
 	var cfInfo *cloudflare.CloudflareInfo
 	var scrapeErr error
 
-	// -------------------------
-	// OnResponse (200 / HTML)
-	// -------------------------
 	c.OnResponse(func(r *colly.Response) {
-		log.Printf("<mgeko> Chapter Urls page response, status: %d, size: %d bytes", r.StatusCode, len(r.Body))
+		log.Printf("<mgeko> Response: status=%d, size=%d bytes", r.StatusCode, len(r.Body))
 
 		isCF, info, _ := cloudflare.DetectFromColly(r)
 		if isCF {
 			cfDetected = true
 			cfInfo = info
-			log.Printf("<mgeko> CF detected (OnResponse): %v", info.Indicators)
+			log.Printf("<mgeko> ⚠️ Cloudflare challenge detected despite using stored cookie!")
+			log.Printf("<mgeko> This means the stored cf_clearance is invalid/expired")
 		}
 	})
 
-	// -------------------------
-	// OnHTML
-	// -------------------------
 	c.OnHTML("ul.chapter-list li a", func(e *colly.HTMLElement) {
 		href := e.Attr("href")
 		if href != "" {
@@ -227,71 +236,41 @@ func chapterUrls(url string) ([]string, error) {
 		}
 	})
 
-	// -------------------------
-	// OnError (403, 503, etc.)
-	// -------------------------
 	c.OnError(func(r *colly.Response, err error) {
-		log.Printf("<mgeko> ERROR during scraping: %v, Status: %d", err, r.StatusCode)
+		log.Printf("<mgeko> ERROR: %v, Status: %d", err, r.StatusCode)
 
 		isCF, info, _ := cloudflare.DetectFromColly(r)
 		if isCF {
 			cfDetected = true
 			cfInfo = info
-
-			log.Printf(
-				"<mgeko> CF BLOCK: status=%d ray=%s bic=%v turnstile=%v indicators=%v js=%v tokens=%v meta=%s action=%s",
-				info.StatusCode,
-				info.RayID,
-				info.IsBIC,
-				info.Turnstile,
-				info.Indicators,
-				info.JSChallenges,
-				info.CHLTokens,
-				info.MetaRedirect,
-				info.FormAction,
-			)
+			log.Printf("<mgeko> Cloudflare block detected: %v", info.Indicators)
 		}
 		scrapeErr = err
 	})
 
-	// -------------------------------------------------------------------------
-	// Visit (or POST if Turnstile)
-	// -------------------------------------------------------------------------
-	var visitErr error
-	if needsTurnstilePost && bypassData != nil {
-		log.Printf("<mgeko> Making POST request with Turnstile data...")
-		visitErr = cloudflare.PostWithTurnstile(c, bypassData, url)
-	} else {
-		log.Printf("<mgeko> Making GET request...")
-		visitErr = c.Visit(url)
-	}
-
+	// Make the request
+	visitErr := c.Visit(url)
 	if visitErr != nil {
-		log.Printf("<mgeko> Visit returned error: %v", visitErr)
+		log.Printf("<mgeko> Visit error: %v", visitErr)
 	}
 
-	// -------------------------
-	// CHECK: Log detection status
-	// -------------------------
-	log.Printf("<mgeko> After visit - cfDetected: %v, scrapeErr: %v", cfDetected, scrapeErr)
-
-	// -------------------------
-	// Cloudflare block detected - OPEN BROWSER
-	// -------------------------
+	// Handle Cloudflare detection
 	if cfDetected {
-		log.Printf("<mgeko> Cloudflare challenge detected - opening browser...")
+		if hasStoredData {
+			log.Printf("<mgeko> ⚠️ Stored cf_clearance failed validation - cookie is expired/invalid")
+			log.Printf("<mgeko> Deleting invalid data and requesting fresh challenge")
 
+			// Delete the invalid stored data
+			cloudflare.DeleteDomain(domain)
+		}
+
+		log.Printf("<mgeko> Opening browser for Cloudflare challenge...")
 		challengeURL := cloudflare.GetChallengeURL(cfInfo, url)
-		log.Printf("<mgeko> Challenge URL to open: %s", challengeURL)
 
 		if err := cloudflare.OpenInBrowser(challengeURL); err != nil {
-			log.Printf("<mgeko> Failed to open browser: %v", err)
 			return nil, fmt.Errorf("cloudflare detected but failed to open browser: %w", err)
 		}
 
-		log.Printf("<mgeko> Browser opened successfully!")
-
-		// Return the CloudflareChallengeError type
 		return nil, &cloudflare.CloudflareChallengeError{
 			URL:        challengeURL,
 			StatusCode: cfInfo.StatusCode,
@@ -299,9 +278,6 @@ func chapterUrls(url string) ([]string, error) {
 		}
 	}
 
-	// -------------------------
-	// Other scraping errors
-	// -------------------------
 	if scrapeErr != nil {
 		return nil, fmt.Errorf("scrape error: %w", scrapeErr)
 	}

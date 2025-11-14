@@ -13,8 +13,8 @@ import (
 
 // ApplyToCollector applies stored bypass data to a Colly collector
 // Automatically detects and applies the appropriate bypass method
+// ApplyToCollector applies stored bypass data to a Colly collector
 func ApplyToCollector(c *colly.Collector, targetURL string) error {
-	// Parse the target URL to get the domain
 	parsedURL, err := url.Parse(targetURL)
 	if err != nil {
 		return fmt.Errorf("failed to parse URL: %w", err)
@@ -22,25 +22,33 @@ func ApplyToCollector(c *colly.Collector, targetURL string) error {
 
 	domain := parsedURL.Hostname()
 
-	// Try to load stored bypass data
 	data, err := LoadFromFile(domain)
 	if err != nil {
 		log.Printf("No bypass data found for domain: %s", domain)
-		return nil // Not an error - just means no data exists yet
+		return nil
 	}
 
-	// Check if data is expired
-	if data.IsExpired(2 * time.Hour) {
-		log.Printf("⚠️ Bypass data for %s is expired (captured at: %s)", domain, data.CapturedAt)
-		log.Printf("   You may need to re-import fresh data")
-		// Continue anyway - expired data might still work
+	// Check if cf_clearance cookie is expired (if it exists)
+	if data.Type == ProtectionCookie && data.CfClearanceStruct != nil {
+		if data.CfClearanceStruct.Expires != nil {
+			if time.Now().After(*data.CfClearanceStruct.Expires) {
+				log.Printf("⚠️ cf_clearance cookie for %s has EXPIRED (expired at: %s)",
+					domain, data.CfClearanceStruct.Expires.Format(time.RFC3339))
+				return fmt.Errorf("cf_clearance cookie expired")
+			} else {
+				expiresIn := time.Until(*data.CfClearanceStruct.Expires)
+				log.Printf("✓ Using cf_clearance for %s (valid for: %s)", domain, expiresIn.Round(time.Hour))
+			}
+		}
 	} else {
-		log.Printf("✓ Using bypass data for %s (captured at: %s)", domain, data.CapturedAt)
+		// For non-cookie methods or if no expiry info, just log age
+		capturedTime, _ := time.Parse(time.RFC3339, data.CapturedAt)
+		age := time.Since(capturedTime)
+		log.Printf("ℹ️ Using bypass data for %s (captured: %s ago)", domain, age.Round(time.Minute))
 	}
 
 	log.Printf("  Protection type: %s", data.Type)
 
-	// Apply the appropriate bypass method
 	switch data.Type {
 	case ProtectionTurnstile:
 		return ApplyTurnstileBypass(c, data, targetURL)
@@ -59,15 +67,39 @@ func ApplyCookieBypass(c *colly.Collector, data *BypassData, targetURL string) e
 
 	log.Printf("✓ Applying cookie-based bypass for %s", data.Domain)
 
-	// Set User-Agent from captured entropy
+	// Set User-Agent
 	c.UserAgent = data.Entropy.UserAgent
 	log.Printf("  Set User-Agent: %s", data.Entropy.UserAgent)
 
-	// Add all cookies to the collector
-	log.Printf("  Adding %d cookies:", len(data.AllCookies))
+	// CRITICAL: Add cf_clearance from CfClearanceStruct if available
 	hasCFClearance := false
+	if data.CfClearanceStruct != nil {
+		httpCookie := &http.Cookie{
+			Name:     data.CfClearanceStruct.Name,
+			Value:    data.CfClearanceStruct.Value,
+			Path:     data.CfClearanceStruct.Path,
+			Domain:   data.CfClearanceStruct.Domain,
+			Secure:   data.CfClearanceStruct.Secure,
+			HttpOnly: data.CfClearanceStruct.HttpOnly,
+		}
+
+		if data.CfClearanceStruct.Expires != nil {
+			httpCookie.Expires = *data.CfClearanceStruct.Expires
+		}
+
+		c.SetCookies(targetURL, []*http.Cookie{httpCookie})
+		hasCFClearance = true
+		log.Printf("    ✓ Added cf_clearance from CfClearanceStruct: %s", data.CfClearanceStruct.Value[:min(20, len(data.CfClearanceStruct.Value))])
+	}
+
+	// Add remaining cookies from AllCookies
+	log.Printf("  Adding %d additional cookies:", len(data.AllCookies))
 	for _, cookie := range data.AllCookies {
-		// Convert our Cookie struct to http.Cookie
+		// Skip if this is cf_clearance (already added above)
+		if cookie.Name == "cf_clearance" {
+			continue
+		}
+
 		httpCookie := &http.Cookie{
 			Name:   cookie.Name,
 			Value:  cookie.Value,
@@ -76,41 +108,24 @@ func ApplyCookieBypass(c *colly.Collector, data *BypassData, targetURL string) e
 			Secure: cookie.Secure,
 		}
 
-		// Set expiration if provided
 		if cookie.ExpirationDate > 0 {
 			httpCookie.Expires = time.Unix(int64(cookie.ExpirationDate), 0)
 		}
 
-		// Add cookie to collector
 		c.SetCookies(targetURL, []*http.Cookie{httpCookie})
-
-		// Log ALL cookies for debugging
-		log.Printf("    • %s=%s... (domain: %s)", cookie.Name, cookie.Value[:min(20, len(cookie.Value))], cookie.Domain)
-
-		// Check for critical Cloudflare cookies
-		if cookie.Name == "cf_clearance" {
-			hasCFClearance = true
-			log.Printf("    ✓ Found cf_clearance cookie!")
-		}
-		if strings.Contains(strings.ToLower(cookie.Name), "cf_") {
-			log.Printf("    ✓ Found CF cookie: %s", cookie.Name)
-		}
+		log.Printf("    • %s=%s...", cookie.Name, cookie.Value[:min(20, len(cookie.Value))])
 	}
 
 	if !hasCFClearance {
-		log.Printf("  ⚠️ WARNING: cf_clearance cookie NOT found in stored data!")
-		log.Printf("  ⚠️ This means the challenge may not have been completed when data was captured")
-		log.Printf("  ⚠️ You may need to re-capture data AFTER completing the challenge")
+		log.Printf("  ⚠️ WARNING: cf_clearance cookie NOT found!")
+		return fmt.Errorf("cf_clearance cookie missing from stored data")
 	}
 
-	// Set additional headers
+	// Rest of header setup remains the same...
 	c.OnRequest(func(r *colly.Request) {
-		// Accept-Language
 		if data.Headers["acceptLanguage"] != "" {
 			r.Headers.Set("Accept-Language", data.Headers["acceptLanguage"])
 		}
-
-		// Add common browser headers to look more legitimate
 		r.Headers.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8")
 		r.Headers.Set("Accept-Encoding", "gzip, deflate, br")
 		r.Headers.Set("Connection", "keep-alive")
@@ -120,9 +135,8 @@ func ApplyCookieBypass(c *colly.Collector, data *BypassData, targetURL string) e
 		r.Headers.Set("Sec-Fetch-Site", "none")
 		r.Headers.Set("Sec-Fetch-User", "?1")
 
-		// Chrome/Chromium specific headers
 		if strings.Contains(data.Entropy.UserAgent, "Chrome") {
-			r.Headers.Set("sec-ch-ua", `"Chromium";v="130", "Not?A_Brand";v="99"`)
+			r.Headers.Set("sec-ch-ua", `"Chromium";v="142", "Not_A Brand";v="99"`)
 			r.Headers.Set("sec-ch-ua-mobile", "?0")
 			r.Headers.Set("sec-ch-ua-platform", fmt.Sprintf(`"%s"`, data.Entropy.Platform))
 		}
