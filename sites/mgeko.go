@@ -3,6 +3,7 @@ package sites
 import (
 	"fmt"
 	"log"
+	url2 "net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -177,12 +178,25 @@ func chapterUrls(url string) ([]string, error) {
 	)
 
 	// -------------------------------------------------------------------------
-	// APPLY CLOUDFLARE DATA (if available)
+	// APPLY CLOUDFLARE DATA (if available and valid)
 	// -------------------------------------------------------------------------
-	log.Printf("<mgeko> Checking for stored Cloudflare data...")
-	if err := cloudflare.ApplyToCollector(c, url); err != nil {
-		log.Printf("<mgeko> Could not apply Cloudflare data: %v", err)
+	log.Printf("<mgeko> Checking for stored Cloudflare bypass data...")
+
+	// Check if we have bypass data and what type
+	parsedURL, _ := url2.Parse(url)
+	domain := parsedURL.Hostname()
+	bypassData, err := cloudflare.LoadFromFile(domain)
+
+	var needsTurnstilePost bool
+	if err == nil {
+		log.Printf("<mgeko> Found bypass data: type=%s", bypassData.Type)
+		if bypassData.Type == cloudflare.ProtectionTurnstile {
+			needsTurnstilePost = true
+			log.Printf("<mgeko> Turnstile protection detected - will use POST request")
+		}
 	}
+
+	cloudflare.ApplyToCollector(c, url) // Apply cookies/headers
 
 	var cfDetected bool
 	var cfInfo *cloudflare.CloudflareInfo
@@ -240,12 +254,20 @@ func chapterUrls(url string) ([]string, error) {
 		scrapeErr = err
 	})
 
-	// -------------------------
-	// Visit
-	// -------------------------
-	if err := c.Visit(url); err != nil {
-		log.Printf("<mgeko> Visit returned error: %v", err)
-		// Don't return immediately - check for Cloudflare first
+	// -------------------------------------------------------------------------
+	// Visit (or POST if Turnstile)
+	// -------------------------------------------------------------------------
+	var visitErr error
+	if needsTurnstilePost && bypassData != nil {
+		log.Printf("<mgeko> Making POST request with Turnstile data...")
+		visitErr = cloudflare.PostWithTurnstile(c, bypassData, url)
+	} else {
+		log.Printf("<mgeko> Making GET request...")
+		visitErr = c.Visit(url)
+	}
+
+	if visitErr != nil {
+		log.Printf("<mgeko> Visit returned error: %v", visitErr)
 	}
 
 	// -------------------------

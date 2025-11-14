@@ -11,8 +11,8 @@ import (
 	"github.com/gocolly/colly"
 )
 
-// ApplyToCollector applies stored Cloudflare data to a Colly collector
-// This sets cookies and headers to bypass Cloudflare protection
+// ApplyToCollector applies stored bypass data to a Colly collector
+// Automatically detects and applies the appropriate bypass method
 func ApplyToCollector(c *colly.Collector, targetURL string) error {
 	// Parse the target URL to get the domain
 	parsedURL, err := url.Parse(targetURL)
@@ -22,29 +22,50 @@ func ApplyToCollector(c *colly.Collector, targetURL string) error {
 
 	domain := parsedURL.Hostname()
 
-	// Try to load stored Cloudflare data
+	// Try to load stored bypass data
 	data, err := LoadFromFile(domain)
 	if err != nil {
-		// No stored data - this is OK, just means we haven't imported yet
-		log.Printf("No Cloudflare data found for domain: %s", domain)
-		return nil
+		log.Printf("No bypass data found for domain: %s", domain)
+		return nil // Not an error - just means no data exists yet
 	}
 
-	// Check if data is expired (Cloudflare tokens typically last a few hours)
+	// Check if data is expired
 	if data.IsExpired(2 * time.Hour) {
-		log.Printf("⚠️ Cloudflare data for %s is expired (captured at: %s)", domain, data.CapturedAt)
+		log.Printf("⚠️ Bypass data for %s is expired (captured at: %s)", domain, data.CapturedAt)
 		log.Printf("   You may need to re-import fresh data")
 		// Continue anyway - expired data might still work
 	} else {
-		log.Printf("✓ Using Cloudflare data for %s (captured at: %s)", domain, data.CapturedAt)
+		log.Printf("✓ Using bypass data for %s (captured at: %s)", domain, data.CapturedAt)
 	}
+
+	log.Printf("  Protection type: %s", data.Type)
+
+	// Apply the appropriate bypass method
+	switch data.Type {
+	case ProtectionTurnstile:
+		return ApplyTurnstileBypass(c, data, targetURL)
+	case ProtectionCookie:
+		return ApplyCookieBypass(c, data, targetURL)
+	default:
+		return fmt.Errorf("unknown protection type: %s", data.Type)
+	}
+}
+
+// ApplyCookieBypass applies cookie-based bypass (the original method)
+func ApplyCookieBypass(c *colly.Collector, data *BypassData, targetURL string) error {
+	if !data.HasCookies() {
+		return fmt.Errorf("no cookie data available")
+	}
+
+	log.Printf("✓ Applying cookie-based bypass for %s", data.Domain)
 
 	// Set User-Agent from captured entropy
 	c.UserAgent = data.Entropy.UserAgent
 	log.Printf("  Set User-Agent: %s", data.Entropy.UserAgent)
 
 	// Add all cookies to the collector
-	log.Printf("  Adding %d cookies", len(data.AllCookies))
+	log.Printf("  Adding %d cookies:", len(data.AllCookies))
+	hasCFClearance := false
 	for _, cookie := range data.AllCookies {
 		// Convert our Cookie struct to http.Cookie
 		httpCookie := &http.Cookie{
@@ -63,11 +84,23 @@ func ApplyToCollector(c *colly.Collector, targetURL string) error {
 		// Add cookie to collector
 		c.SetCookies(targetURL, []*http.Cookie{httpCookie})
 
-		// Log Cloudflare-specific cookies
-		if strings.Contains(strings.ToLower(cookie.Name), "cf_") ||
-			strings.Contains(strings.ToLower(cookie.Name), "clearance") {
-			log.Printf("    → CF Cookie: %s=%s...", cookie.Name, cookie.Value[:min(20, len(cookie.Value))])
+		// Log ALL cookies for debugging
+		log.Printf("    • %s=%s... (domain: %s)", cookie.Name, cookie.Value[:min(20, len(cookie.Value))], cookie.Domain)
+
+		// Check for critical Cloudflare cookies
+		if cookie.Name == "cf_clearance" {
+			hasCFClearance = true
+			log.Printf("    ✓ Found cf_clearance cookie!")
 		}
+		if strings.Contains(strings.ToLower(cookie.Name), "cf_") {
+			log.Printf("    ✓ Found CF cookie: %s", cookie.Name)
+		}
+	}
+
+	if !hasCFClearance {
+		log.Printf("  ⚠️ WARNING: cf_clearance cookie NOT found in stored data!")
+		log.Printf("  ⚠️ This means the challenge may not have been completed when data was captured")
+		log.Printf("  ⚠️ You may need to re-capture data AFTER completing the challenge")
 	}
 
 	// Set additional headers
@@ -95,7 +128,7 @@ func ApplyToCollector(c *colly.Collector, targetURL string) error {
 		}
 	})
 
-	log.Printf("✓ Cloudflare data applied successfully")
+	log.Printf("✓ Cookie bypass applied successfully")
 	return nil
 }
 
@@ -107,10 +140,10 @@ func min(a, b int) int {
 	return b
 }
 
-// ApplyToHTTPClient applies stored Cloudflare data to a standard http.Client
-// This is useful if you're not using Colly
-func ApplyToHTTPClient(client *http.Client, targetURL string) (*http.Request, error) {
-	// Parse the target URL to get the domain
+// MakeRequest makes an HTTP request with the appropriate bypass method
+// This is for use with standard http.Client (not Colly)
+func MakeRequest(client *http.Client, targetURL string) (*http.Response, error) {
+	// Parse URL to get domain
 	parsedURL, err := url.Parse(targetURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse URL: %w", err)
@@ -118,14 +151,25 @@ func ApplyToHTTPClient(client *http.Client, targetURL string) (*http.Request, er
 
 	domain := parsedURL.Hostname()
 
-	// Try to load stored Cloudflare data
+	// Load bypass data
 	data, err := LoadFromFile(domain)
 	if err != nil {
-		// No stored data
-		return nil, fmt.Errorf("no Cloudflare data found for domain: %s", domain)
+		return nil, fmt.Errorf("no bypass data found for domain: %s", domain)
 	}
 
-	// Create request
+	// Use appropriate method
+	switch data.Type {
+	case ProtectionTurnstile:
+		return MakeTurnstileRequest(client, data, targetURL)
+	case ProtectionCookie:
+		return makeCookieRequest(client, data, targetURL)
+	default:
+		return nil, fmt.Errorf("unknown protection type: %s", data.Type)
+	}
+}
+
+// makeCookieRequest makes an HTTP request with cookies
+func makeCookieRequest(client *http.Client, data *BypassData, targetURL string) (*http.Response, error) {
 	req, err := http.NewRequest("GET", targetURL, nil)
 	if err != nil {
 		return nil, err
@@ -148,5 +192,5 @@ func ApplyToHTTPClient(client *http.Client, targetURL string) (*http.Request, er
 	req.Header.Set("Accept-Language", data.Headers["acceptLanguage"])
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
 
-	return req, nil
+	return client.Do(req)
 }

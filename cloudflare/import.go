@@ -30,9 +30,19 @@ func ImportFromClipboard() (string, error) {
 		return "", fmt.Errorf("failed to parse clipboard data: %w", err)
 	}
 
-	log.Printf("Parsed Cloudflare data for domain: %s", data.Domain)
-	log.Printf("  - Cloudflare cookies: %d", len(data.Cookies))
-	log.Printf("  - Total cookies: %d", len(data.AllCookies))
+	log.Printf("Parsed bypass data for domain: %s", data.Domain)
+	log.Printf("  - Protection type: %s", data.Type)
+
+	if data.HasCookies() {
+		log.Printf("  - Cloudflare cookies: %d", len(data.Cookies))
+		log.Printf("  - Total cookies: %d", len(data.AllCookies))
+	}
+
+	if data.HasTurnstile() {
+		log.Printf("  - Turnstile tokens: %d", len(data.TurnstileFormData))
+		log.Printf("  - Challenge token: %s", data.ChallengeToken)
+	}
+
 	log.Printf("  - User agent: %s", data.Entropy.UserAgent)
 
 	// Save to file
@@ -40,7 +50,7 @@ func ImportFromClipboard() (string, error) {
 		return "", fmt.Errorf("failed to save data: %w", err)
 	}
 
-	log.Printf("Saved Cloudflare data for domain: %s", data.Domain)
+	log.Printf("Saved bypass data for domain: %s (type: %s)", data.Domain, data.Type)
 
 	return data.Domain, nil
 }

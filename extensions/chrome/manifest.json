@@ -5,13 +5,20 @@
   "description": "Captures Cloudflare cookies and browser data for Kansho manga downloader",
   "permissions": [
     "cookies",
+    "tabs",
     "activeTab",
     "scripting",
-    "clipboardWrite"
+    "storage",
+    "clipboardWrite",
+    "webRequest",
+    "webRequestBlocking"
   ],
   "host_permissions": [
     "<all_urls>"
   ],
+  "background": {
+    "service_worker": "background.js"
+  },
   "action": {
     "default_popup": "popup.html",
     "default_icon": {

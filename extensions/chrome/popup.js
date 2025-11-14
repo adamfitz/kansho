@@ -61,9 +61,17 @@ document.getElementById('captureBtn').addEventListener('click', async () => {
     // -------------------------------------------------------------------------
     // Step 4: Combine and deduplicate cookies
     // -------------------------------------------------------------------------
-    // We might get the same cookie from both queries, so deduplicate using a Map
+    // We might get the same cookie from multiple queries, so deduplicate using a Map
     // Map is like Go's map[string]Cookie - key is "name-domain", value is cookie object
-    const allCookies = [...cookies, ...parentCookies].reduce((acc, cookie) => {
+    const dotCookies = document.cookie
+      .split('; ')
+      .map(c => {
+        const [name, value] = c.split('=');
+        return { name, value, domain: window.location.hostname };
+      });
+    const urlCookies = [];
+
+    const allCookies = [...cookies, ...parentCookies, ...dotCookies, ...urlCookies].reduce((acc, cookie) => {
       // Create a unique key for each cookie (name + domain combination)
       const key = `${cookie.name}-${cookie.domain}`;
       
@@ -100,58 +108,58 @@ document.getElementById('captureBtn').addEventListener('click', async () => {
         // This code runs in the context of the target webpage
         // It returns an immediately-invoked function expression (IIFE)
         return {
-            // User agent string (browser identification)
-            userAgent: navigator.userAgent,
-            
-            // Browser language settings
-            language: navigator.language,      // Primary language (e.g., "en-US")
-            languages: navigator.languages,    // All preferred languages
-            
-            // Operating system platform
-            platform: navigator.platform,      // e.g., "Linux x86_64"
-            
-            // Hardware information
-            hardwareConcurrency: navigator.hardwareConcurrency,  // CPU cores
-            deviceMemory: navigator.deviceMemory,                // RAM in GB (if available)
-            
-            // Screen properties (important for fingerprinting)
-            screenResolution: {
-              width: screen.width,           // Screen width in pixels
-              height: screen.height,         // Screen height in pixels
-              colorDepth: screen.colorDepth, // Bits per pixel (usually 24)
-              pixelDepth: screen.pixelDepth  // Bits per pixel (usually same as colorDepth)
-            },
-            
-            // Timezone information
-            timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,  // e.g., "America/New_York"
-            timezoneOffset: new Date().getTimezoneOffset(),               // Minutes from UTC
-            
-            // WebGL fingerprint (GPU information)
-            // This is another IIFE that tries to get GPU details
-            webgl: (() => {
-              try {
-                // Create an invisible canvas element for WebGL rendering
-                const canvas = document.createElement('canvas');
-                
-                // Get WebGL context (like getting a graphics device in Go)
-                const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
-                if (!gl) return null;  // WebGL not supported
-                
-                // Get debug extension that reveals GPU info
-                const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
-                
-                return {
-                  // GPU vendor (e.g., "Intel Inc.")
-                  vendor: gl.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL),
-                  // GPU model (e.g., "Intel Iris OpenGL Engine")
-                  renderer: gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL)
-                };
-              } catch (e) {
-                // If anything fails, return null
-                return null;
-              }
-            })()
-          };
+          // User agent string (browser identification)
+          userAgent: navigator.userAgent,
+          
+          // Browser language settings
+          language: navigator.language,      // Primary language (e.g., "en-US")
+          languages: navigator.languages,    // All preferred languages
+          
+          // Operating system platform
+          platform: navigator.platform,      // e.g., "Linux x86_64"
+          
+          // Hardware information
+          hardwareConcurrency: navigator.hardwareConcurrency,  // CPU cores
+          deviceMemory: navigator.deviceMemory,                // RAM in GB (if available)
+          
+          // Screen properties (important for fingerprinting)
+          screenResolution: {
+            width: screen.width,           // Screen width in pixels
+            height: screen.height,         // Screen height in pixels
+            colorDepth: screen.colorDepth, // Bits per pixel (usually 24)
+            pixelDepth: screen.pixelDepth  // Bits per pixel (usually same as colorDepth)
+          },
+          
+          // Timezone information
+          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,  // e.g., "America/New_York"
+          timezoneOffset: new Date().getTimezoneOffset(),               // Minutes from UTC
+          
+          // WebGL fingerprint (GPU information)
+          // This is another IIFE that tries to get GPU details
+          webgl: (() => {
+            try {
+              // Create an invisible canvas element for WebGL rendering
+              const canvas = document.createElement('canvas');
+              
+              // Get WebGL context (like getting a graphics device in Go)
+              const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+              if (!gl) return null;  // WebGL not supported
+              
+              // Get debug extension that reveals GPU info
+              const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
+              
+              return {
+                // GPU vendor (e.g., "Intel Inc.")
+                vendor: gl.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL),
+                // GPU model (e.g., "Intel Iris OpenGL Engine")
+                renderer: gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL)
+              };
+            } catch (e) {
+              // If anything fails, return null
+              return null;
+            }
+          })()
+        };
       }
     });
     
@@ -159,7 +167,75 @@ document.getElementById('captureBtn').addEventListener('click', async () => {
     const entropy = entropyResult[0].result;
     
     // -------------------------------------------------------------------------
-    // Step 7: Build the export data structure
+    // Step 7: Capture Turnstile token (if present)
+    // -------------------------------------------------------------------------
+    // Turnstile tokens are in hidden form fields or embedded in POST bodies
+    let turnstileData = null;
+    
+    try {
+      const turnstileResult = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: () => {
+          // Look for Turnstile challenge form or iframe
+          const turnstileIframe = document.querySelector('iframe[src*="challenges.cloudflare.com"]');
+          
+          // Look for form with Turnstile data
+          const forms = document.querySelectorAll('form');
+          let formData = {};
+          let foundTurnstile = false;
+          
+          for (const form of forms) {
+            const inputs = form.querySelectorAll('input[type="hidden"]');
+            for (const input of inputs) {
+              // Cloudflare typically uses very long hex names for form fields
+              if (input.name.length > 30 && input.value.length > 100) {
+                formData[input.name] = input.value;
+                foundTurnstile = true;
+              }
+            }
+            
+            // Also capture form action
+            if (foundTurnstile && form.action) {
+              formData['_form_action'] = form.action;
+            }
+          }
+          
+          // Extract challenge token from URL if present
+          const urlParams = new URLSearchParams(window.location.search);
+          const challengeToken = urlParams.get('__cf_chl_tk');
+          
+          return {
+            hasTurnstile: foundTurnstile || turnstileIframe !== null,
+            formData: formData,
+            challengeToken: challengeToken,
+            currentUrl: window.location.href
+          };
+        }
+      });
+      
+      turnstileData = turnstileResult[0].result;
+      console.log('Turnstile detection:', turnstileData);
+      
+    } catch (e) {
+      console.error('Failed to detect Turnstile:', e);
+    }
+    // for using the trurnstyle data to capture the cf_clearance cookie to be stored 
+    const cfClearanceStored = await chrome.storage.local.get([
+      "cfClearanceRaw",
+      "cfClearanceCapturedAt",
+      "cfClearanceUrl"
+    ]);
+
+    
+    // Pull Turnstile POST data captured by background.js
+    const turnstileStored = await chrome.storage.local.get([
+      "turnstilePayload",
+      "turnstileCapturedAt",
+      "turnstileUrl"
+    ]);
+    
+    // -------------------------------------------------------------------------
+    // Step 8: Build the export data structure
     // -------------------------------------------------------------------------
     // This is the final JSON object we'll copy to clipboard
     const exportData = {
@@ -172,22 +248,23 @@ document.getElementById('captureBtn').addEventListener('click', async () => {
       // The domain name
       domain: domain,
       
+      // Protection type (will be determined by Go code)
+      type: turnstileData && turnstileData.hasTurnstile ? "turnstile" : "cookie",
+      
       // Cloudflare-specific cookies (filtered list)
       // .map() transforms each cookie object, keeping only needed fields
-      // It's like a for loop that creates a new slice in Go
       cookies: cfCookies.map(c => ({
-        name: c.name,                      // Cookie name
-        value: c.value,                    // Cookie value (the important part!)
-        domain: c.domain,                  // Which domain it belongs to
-        path: c.path,                      // URL path where cookie is valid
-        secure: c.secure,                  // HTTPS only?
-        httpOnly: c.httpOnly,              // JavaScript can't access it?
-        sameSite: c.sameSite,              // CSRF protection setting
-        expirationDate: c.expirationDate   // When it expires (Unix timestamp)
+        name: c.name,
+        value: c.value,
+        domain: c.domain,
+        path: c.path,
+        secure: c.secure,
+        httpOnly: c.httpOnly,
+        sameSite: c.sameSite,
+        expirationDate: c.expirationDate
       })),
       
       // ALL cookies from the domain (not just Cloudflare ones)
-      // Some sites use additional cookies for authentication
       allCookies: Array.from(allCookies.values()).map(c => ({
         name: c.name,
         value: c.value,
@@ -195,14 +272,30 @@ document.getElementById('captureBtn').addEventListener('click', async () => {
         path: c.path
       })),
       
-      // Browser fingerprint data captured from the tab
-      // entropy already contains the result object
+      // Turnstile data (if found)
+      turnstileToken: turnstileData && turnstileData.hasTurnstile ? "captured" : "",
+      turnstileFormData: turnstileData ? turnstileData.formData : {},
+      challengeToken: turnstileData ? turnstileData.challengeToken : "",
+
+      // Turnstile POST payload captured by background.js
+      turnstileRequestBody: turnstileStored.turnstilePayload || "",
+      turnstileRequestUrl: turnstileStored.turnstileUrl || "",
+      turnstileCapturedAt: turnstileStored.turnstileCapturedAt || "",
+
+      // Cloudflare clearance data, captured by background.js
+      cfClearance: cfClearanceStored.cfClearanceRaw || "",
+      cfClearanceCapturedAt: cfClearanceStored.cfClearanceCapturedAt || "",
+      cfClearanceUrl: cfClearanceStored.cfClearanceUrl || "",
+
+
+      
+      // Browser fingerprint data
       entropy: entropy,
       
-      // HTTP headers that we can construct from JavaScript
+      // HTTP headers
       headers: {
-        userAgent: navigator.userAgent,      // User-Agent header
-        acceptLanguage: navigator.language   // Accept-Language header
+        userAgent: navigator.userAgent,
+        acceptLanguage: navigator.language
       }
     };
     
@@ -218,11 +311,15 @@ document.getElementById('captureBtn').addEventListener('click', async () => {
     await navigator.clipboard.writeText(jsonData);
     
     // -------------------------------------------------------------------------
-    // Step 9: Show success message
+    // Step 9: Show success message with protection type
     // -------------------------------------------------------------------------
     statusDiv.className = 'success';  // Apply green "success" styling
-    // Template string (like fmt.Sprintf in Go) - note the backticks
-    statusDiv.textContent = `✓ Copied! Found ${cfCookies.length} Cloudflare cookies and ${allCookies.size} total cookies`;
+    // Show what type of protection was detected
+    const protectionType = turnstileData && turnstileData.hasTurnstile ? 
+      `Turnstile (${Object.keys(turnstileData.formData).length} tokens)` : 
+      `Cookies (${cfCookies.length} CF + ${allCookies.size} total)`;
+    
+    statusDiv.textContent = `✓ Copied! Protection: ${protectionType}`;
     
     // Show a preview of the captured data (first 300 characters)
     previewDiv.innerHTML = `
