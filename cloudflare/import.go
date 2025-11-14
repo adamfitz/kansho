@@ -7,10 +7,10 @@ import (
 	"golang.design/x/clipboard"
 )
 
-// ImportFromClipboard reads Cloudflare data from clipboard and saves it
-// Returns the domain name and any error
+// ImportFromClipboard reads Cloudflare bypass data from the clipboard,
+// parses it, and saves it to file. Returns the domain on success.
 func ImportFromClipboard() (string, error) {
-	// Initialize clipboard (required once per application)
+	// Initialize clipboard
 	if err := clipboard.Init(); err != nil {
 		return "", fmt.Errorf("failed to initialize clipboard: %w", err)
 	}
@@ -24,7 +24,7 @@ func ImportFromClipboard() (string, error) {
 	jsonData := string(clipboardData)
 	log.Printf("Read %d bytes from clipboard", len(jsonData))
 
-	// Parse the JSON
+	// Parse JSON into BypassData
 	data, err := ParseCapturedData(jsonData)
 	if err != nil {
 		return "", fmt.Errorf("failed to parse clipboard data: %w", err)
@@ -33,17 +33,19 @@ func ImportFromClipboard() (string, error) {
 	log.Printf("Parsed bypass data for domain: %s", data.Domain)
 	log.Printf("  - Protection type: %s", data.Type)
 
-	if data.HasCookies() {
+	if len(data.Cookies) > 0 {
 		log.Printf("  - Cloudflare cookies: %d", len(data.Cookies))
 		log.Printf("  - Total cookies: %d", len(data.AllCookies))
 	}
 
-	if data.HasTurnstile() {
-		log.Printf("  - Turnstile tokens: %d", len(data.TurnstileFormData))
-		log.Printf("  - Challenge token: %s", data.ChallengeToken)
+	if data.TurnstileToken != "" {
+		log.Printf("  - Turnstile token present")
 	}
 
 	log.Printf("  - User agent: %s", data.Entropy.UserAgent)
+	log.Printf("  - cfClearance: %s", data.CfClearance)
+	log.Printf("  - cfClearanceCapturedAt: %s", data.CfClearanceCapturedAt)
+	log.Printf("  - cfClearanceUrl: %s", data.CfClearanceUrl)
 
 	// Save to file
 	if err := SaveToFile(data, data.Domain); err != nil {
@@ -51,6 +53,5 @@ func ImportFromClipboard() (string, error) {
 	}
 
 	log.Printf("Saved bypass data for domain: %s (type: %s)", data.Domain, data.Type)
-
 	return data.Domain, nil
 }

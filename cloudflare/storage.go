@@ -3,11 +3,30 @@ package cloudflare
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 )
 
+// --- helper to parse cf_clearance from raw cookie string ---
+func ParseCfClearance(raw string) (string, error) {
+	if raw == "" {
+		return "", fmt.Errorf("cfClearance string is empty")
+	}
+	parts := strings.Split(raw, ";")
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if strings.HasPrefix(part, "cf_clearance=") {
+			return strings.TrimPrefix(part, "cf_clearance="), nil
+		}
+	}
+	return "", fmt.Errorf("cf_clearance field not found")
+}
+
 // ParseCapturedData parses the JSON from clipboard into BypassData struct
+// ParseCapturedData parses JSON from clipboard into BypassData
 func ParseCapturedData(jsonData string) (*BypassData, error) {
 	var data BypassData
 
@@ -20,11 +39,37 @@ func ParseCapturedData(jsonData string) (*BypassData, error) {
 		return nil, fmt.Errorf("domain is empty")
 	}
 
-	// Determine what type of protection data we have
+	// Determine protection type
 	data.Type = data.DetermineProtectionType()
-
 	if data.Type == ProtectionNone {
 		return nil, fmt.Errorf("no valid bypass data found (no cookies or turnstile tokens)")
+	}
+
+	// --- Cloudflare fields ---
+	// cfClearance
+	if rawCF, ok := data.Headers["cfClearance"]; ok && rawCF != "" {
+		data.CfClearanceRaw = rawCF
+		cfVal, err := ParseCfClearance(rawCF)
+		if err != nil {
+			log.Printf("warning: failed to parse cfClearance: %v", err)
+		} else {
+			data.CfClearance = cfVal
+		}
+	}
+
+	// cfClearanceCapturedAt
+	if ts, ok := data.Headers["cfClearanceCapturedAt"]; ok && ts != "" {
+		t, err := time.Parse(time.RFC3339Nano, ts)
+		if err != nil {
+			log.Printf("warning: failed to parse cfClearanceCapturedAt: %v", err)
+		} else {
+			data.CfClearanceCapturedAt = t
+		}
+	}
+
+	// cfClearanceUrl
+	if url, ok := data.Headers["cfClearanceUrl"]; ok && url != "" {
+		data.CfClearanceUrl = url
 	}
 
 	return &data, nil

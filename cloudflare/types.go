@@ -72,6 +72,12 @@ type BypassData struct {
 	// Browser fingerprint (used by all)
 	Entropy Entropy           `json:"entropy"`
 	Headers map[string]string `json:"headers"`
+
+	// --- Cloudflare bypass fields ---
+	CfClearance           string    `json:"cfClearance,omitempty"`           // parsed cookie value
+	CfClearanceRaw        string    `json:"cfClearanceRaw,omitempty"`        // raw clipboard string
+	CfClearanceCapturedAt time.Time `json:"cfClearanceCapturedAt,omitempty"` // parsed timestamp
+	CfClearanceUrl        string    `json:"cfClearanceUrl,omitempty"`        // challenge URL
 }
 
 // IsExpired checks if the bypass data is too old
