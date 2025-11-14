@@ -176,6 +176,14 @@ func chapterUrls(url string) ([]string, error) {
 		colly.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"),
 	)
 
+	// -------------------------------------------------------------------------
+	// APPLY CLOUDFLARE DATA (if available)
+	// -------------------------------------------------------------------------
+	log.Printf("<mgeko> Checking for stored Cloudflare data...")
+	if err := cloudflare.ApplyToCollector(c, url); err != nil {
+		log.Printf("<mgeko> Could not apply Cloudflare data: %v", err)
+	}
+
 	var cfDetected bool
 	var cfInfo *cloudflare.CloudflareInfo
 	var scrapeErr error

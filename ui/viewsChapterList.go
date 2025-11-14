@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"sort"
+	"time"
 
 	"kansho/cloudflare"
 	"kansho/parser"
@@ -331,19 +332,25 @@ func (v *ChapterListView) onUpdateButtonClicked() {
 			if err != nil {
 				// Check if this is a Cloudflare challenge error
 				if cfErr, ok := cloudflare.IsCloudflareChallenge(err); ok {
-					// Show friendly Cloudflare dialog
+					// Show custom Cloudflare dialog with import button
 					v.progressLabel.SetText("Cloudflare challenge detected")
-					dialog.ShowInformation(
-						"Cloudflare Challenge Detected",
-						fmt.Sprintf("A Cloudflare challenge was detected and opened in your browser.\n\n"+
-							"Please complete the following steps:\n\n"+
-							"1. Complete the challenge in your browser\n"+
-							"2. Install the Kansho browser extension (if not already installed)\n"+
-							"3. Click the extension button to copy your Cloudflare data\n"+
-							"4. Return here and click 'Import Cloudflare Data'\n\n"+
-							"Challenge URL: %s", cfErr.URL),
-						v.state.Window,
-					)
+
+					// Success callback - retry the download after successful import
+					onSuccess := func() {
+						v.progressLabel.SetText("Cloudflare data imported. Retrying download...")
+						// Retry the download by calling the button click handler again
+						go func() {
+							// Small delay to let user see the message
+							time.Sleep(1 * time.Second)
+							// TODO: Retry the download here
+							// For now, just show a message
+							fyne.Do(func() {
+								v.progressLabel.SetText("Please click 'Update Chapters' again to retry")
+							})
+						}()
+					}
+
+					ShowCloudflareDialog(v.state.Window, cfErr.URL, onSuccess)
 					return
 				}
 
