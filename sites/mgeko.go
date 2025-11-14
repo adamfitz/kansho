@@ -213,9 +213,20 @@ func chapterUrls(url string) ([]string, error) {
 		if isCF {
 			cfDetected = true
 			cfInfo = info
-			log.Printf("<mgeko> CF detected (OnError): %v", info.Indicators)
-		}
 
+			log.Printf(
+				"<mgeko> CF BLOCK: status=%d ray=%s bic=%v turnstile=%v indicators=%v js=%v tokens=%v meta=%s action=%s",
+				info.StatusCode,
+				info.RayID,
+				info.IsBIC,
+				info.Turnstile,
+				info.Indicators,
+				info.JSChallenges,
+				info.CHLTokens,
+				info.MetaRedirect,
+				info.FormAction,
+			)
+		}
 		scrapeErr = err
 	})
 
