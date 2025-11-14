@@ -5,6 +5,7 @@ import (
 	"log"
 	"sort"
 
+	"kansho/cloudflare"
 	"kansho/parser"
 	"kansho/sites"
 
@@ -328,7 +329,25 @@ func (v *ChapterListView) onUpdateButtonClicked() {
 			v.updateButton.Enable()
 
 			if err != nil {
-				// Show inline error message
+				// Check if this is a Cloudflare challenge error
+				if cfErr, ok := cloudflare.IsCloudflareChallenge(err); ok {
+					// Show friendly Cloudflare dialog
+					v.progressLabel.SetText("Cloudflare challenge detected")
+					dialog.ShowInformation(
+						"Cloudflare Challenge Detected",
+						fmt.Sprintf("A Cloudflare challenge was detected and opened in your browser.\n\n"+
+							"Please complete the following steps:\n\n"+
+							"1. Complete the challenge in your browser\n"+
+							"2. Install the Kansho browser extension (if not already installed)\n"+
+							"3. Click the extension button to copy your Cloudflare data\n"+
+							"4. Return here and click 'Import Cloudflare Data'\n\n"+
+							"Challenge URL: %s", cfErr.URL),
+						v.state.Window,
+					)
+					return
+				}
+
+				// Show inline error message for regular errors
 				v.progressLabel.SetText(fmt.Sprintf("Error: %v", err))
 
 				// Also show a dialog for visibility

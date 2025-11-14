@@ -39,7 +39,9 @@ func MgekoDownloadChapters(manga *config.Bookmarks, progressCallback func(string
 	// Step 1: Get all chapter URLs
 	chapterUrls, err := chapterUrls(manga.Url)
 	if err != nil {
-		return fmt.Errorf("failed to fetch chapter URLs: %v", err)
+		// Just pass the error up - it will be a CloudflareChallengeError if CF was detected
+		// The UI layer will handle it appropriately
+		return err
 	}
 
 	// Step 2: Build chapter map (key = "chXXX.cbz", value = URL)
@@ -234,17 +236,37 @@ func chapterUrls(url string) ([]string, error) {
 	// Visit
 	// -------------------------
 	if err := c.Visit(url); err != nil {
-		return nil, fmt.Errorf("visit error: %w", err)
+		log.Printf("<mgeko> Visit returned error: %v", err)
+		// Don't return immediately - check for Cloudflare first
 	}
 
 	// -------------------------
-	// Cloudflare block detected
+	// CHECK: Log detection status
+	// -------------------------
+	log.Printf("<mgeko> After visit - cfDetected: %v, scrapeErr: %v", cfDetected, scrapeErr)
+
+	// -------------------------
+	// Cloudflare block detected - OPEN BROWSER
 	// -------------------------
 	if cfDetected {
-		return nil, fmt.Errorf(
-			"Cloudflare blocked request: status=%d indicators=%v",
-			cfInfo.StatusCode, cfInfo.Indicators,
-		)
+		log.Printf("<mgeko> Cloudflare challenge detected - opening browser...")
+
+		challengeURL := cloudflare.GetChallengeURL(cfInfo, url)
+		log.Printf("<mgeko> Challenge URL to open: %s", challengeURL)
+
+		if err := cloudflare.OpenInBrowser(challengeURL); err != nil {
+			log.Printf("<mgeko> Failed to open browser: %v", err)
+			return nil, fmt.Errorf("cloudflare detected but failed to open browser: %w", err)
+		}
+
+		log.Printf("<mgeko> Browser opened successfully!")
+
+		// Return the CloudflareChallengeError type
+		return nil, &cloudflare.CloudflareChallengeError{
+			URL:        challengeURL,
+			StatusCode: cfInfo.StatusCode,
+			Indicators: cfInfo.Indicators,
+		}
 	}
 
 	// -------------------------
