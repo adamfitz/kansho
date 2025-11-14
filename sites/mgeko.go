@@ -3,12 +3,14 @@ package sites
 import (
 	"fmt"
 	"log"
+	url2 "net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
-	"kansho/cloudflare"
+	"kansho/cf"
 	"kansho/config"
 	"kansho/parser"
 
@@ -39,17 +41,24 @@ func MgekoDownloadChapters(manga *config.Bookmarks, progressCallback func(string
 	// Step 1: Get all chapter URLs
 	chapterUrls, err := chapterUrls(manga.Url)
 	if err != nil {
-		return fmt.Errorf("failed to fetch chapter URLs: %v", err)
+		// Just pass the error up - it will be a cfChallengeError if CF was detected
+		// The UI layer will handle it appropriately
+		return err
 	}
+
+	// Log the number of chapters found (similar to xbato)
+	log.Printf("<%s> Found %d total chapters on site", manga.Site, len(chapterUrls))
 
 	// Step 2: Build chapter map (key = "chXXX.cbz", value = URL)
 	chapterMap := chapterMap(chapterUrls)
+	log.Printf("<%s> Mapped %d chapters to filenames", manga.Site, len(chapterMap))
 
 	// Step 3: Get list of already downloaded chapters from manga's location
 	downloadedChapters, err := parser.LocalChapterList(manga.Location)
 	if err != nil {
 		return fmt.Errorf("failed to list files in %s: %v", manga.Location, err)
 	}
+	log.Printf("<%s> Found %d already downloaded chapters", manga.Site, len(downloadedChapters))
 
 	// Step 4: Remove already-downloaded chapters
 	for _, chapter := range downloadedChapters {
@@ -58,14 +67,14 @@ func MgekoDownloadChapters(manga *config.Bookmarks, progressCallback func(string
 
 	totalChapters := len(chapterMap)
 	if totalChapters == 0 {
-		log.Printf("No new chapters found [%s]", manga.Title)
+		log.Printf("<%s> No new chapters to download [%s]", manga.Site, manga.Title)
 		if progressCallback != nil {
 			progressCallback("No new chapters to download", 1.0, 0, 0)
 		}
 		return nil
 	}
 
-	log.Printf("%d chapters to download [%s]", totalChapters, manga.Title)
+	log.Printf("<%s> %d new chapters to download [%s]", manga.Site, totalChapters, manga.Title)
 	if progressCallback != nil {
 		progressCallback(fmt.Sprintf("Found %d new chapters to download", totalChapters), 0, 0, totalChapters)
 	}
@@ -87,11 +96,29 @@ func MgekoDownloadChapters(manga *config.Bookmarks, progressCallback func(string
 			progressCallback(fmt.Sprintf("Downloading chapter %d/%d: %s", currentChapter, totalChapters, cbzName), progress, currentChapter, totalChapters)
 		}
 
-		// Colly to scrape image URLs inside #chapter-reader
-		var imgURLs []string
+		log.Printf("[%s:%s] Starting download from: %s", manga.Shortname, cbzName, chapterURL)
+
+		// Create a NEW Colly collector for this chapter
+		// IMPORTANT: Each chapter needs its own collector with CF bypass applied
 		c := colly.NewCollector(
 			colly.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"),
 		)
+
+		// -------------------------------------------------------------------------
+		// APPLY cf BYPASS TO THIS CHAPTER'S COLLECTOR
+		// -------------------------------------------------------------------------
+		log.Printf("[%s:%s] Applying cf bypass for chapter page", manga.Shortname, cbzName)
+
+		// Apply the bypass data to this collector (ApplyToCollector loads the data internally)
+		if applyErr := cf.ApplyToCollector(c, chapterURL); applyErr != nil {
+			log.Printf("[%s:%s] WARNING: Failed to apply bypass data: %v", manga.Shortname, cbzName, applyErr)
+			log.Printf("[%s:%s] Chapter download may fail due to cf protection", manga.Shortname, cbzName)
+		} else {
+			log.Printf("[%s:%s] ✓ cf bypass applied to chapter collector", manga.Shortname, cbzName)
+		}
+
+		// Scrape image URLs from #chapter-reader
+		var imgURLs []string
 		c.OnHTML("#chapter-reader img", func(e *colly.HTMLElement) {
 			src := e.Attr("src")
 			if src != "" {
@@ -99,20 +126,47 @@ func MgekoDownloadChapters(manga *config.Bookmarks, progressCallback func(string
 				log.Printf("[%s:%s] Found image URL: %s", manga.Shortname, cbzName, src)
 			}
 		})
-		c.OnError(func(_ *colly.Response, err error) {
-			log.Printf("[%s:%s] Failed to fetch chapter page %s: %v", manga.Shortname, cbzName, chapterURL, err)
+
+		// Handle errors when fetching the chapter page
+		c.OnError(func(r *colly.Response, err error) {
+			log.Printf("[%s:%s] ERROR fetching chapter page %s: %v (status: %d)",
+				manga.Shortname, cbzName, chapterURL, err, r.StatusCode)
+
+			// Check if this is a cf challenge
+			isCF, cfInfo, _ := cf.DetectFromColly(r)
+			if isCF {
+				log.Printf("[%s:%s] ⚠️ cf challenge detected on chapter page!", manga.Shortname, cbzName)
+				log.Printf("[%s:%s] Indicators: %v", manga.Shortname, cbzName, cfInfo.Indicators)
+				log.Printf("[%s:%s] This chapter may fail to download", manga.Shortname, cbzName)
+			}
 		})
 
-		err := c.Visit(chapterURL)
+		// Log successful response
+		c.OnResponse(func(r *colly.Response) {
+			// DECOMPRESS THE CHAPTER PAGE TOO!
+			if decompressed, err := cf.DecompressResponse(r, fmt.Sprintf("[%s]", cbzName)); err != nil {
+				log.Printf("[%s:%s] ERROR: Failed to decompress: %v", manga.Shortname, cbzName, err)
+				return
+			} else if decompressed {
+				log.Printf("[%s:%s] ✓ Chapter page decompressed", manga.Shortname, cbzName)
+			}
+
+			log.Printf("[%s:%s] Chapter page response: status=%d, size=%d bytes",
+				manga.Shortname, cbzName, r.StatusCode, len(r.Body))
+		})
+		// Visit the chapter page to scrape images
+		err = c.Visit(chapterURL)
 		if err != nil {
 			log.Printf("[%s:%s] Failed to visit %s: %v", manga.Shortname, cbzName, chapterURL, err)
 			continue
 		}
 
 		if len(imgURLs) == 0 {
-			log.Printf("[%s:%s] No images found for chapter", manga.Shortname, cbzName)
+			log.Printf("[%s:%s] ⚠️ WARNING: No images found for chapter (cf may be blocking)", manga.Shortname, cbzName)
 			continue
 		}
+
+		log.Printf("[%s:%s] Found %d images to download", manga.Shortname, cbzName, len(imgURLs))
 
 		// Create temp directory for chapter
 		chapterDir := filepath.Join("/tmp", manga.Shortname, strings.TrimSuffix(cbzName, ".cbz"))
@@ -123,6 +177,7 @@ func MgekoDownloadChapters(manga *config.Bookmarks, progressCallback func(string
 		}
 
 		// Download and convert each image using DownloadAndConvertToJPG
+		successCount := 0
 		for imgIdx, imgURL := range imgURLs {
 			if progressCallback != nil {
 				imgProgress := progress + (float64(imgIdx) / float64(len(imgURLs)) / float64(totalChapters))
@@ -132,10 +187,20 @@ func MgekoDownloadChapters(manga *config.Bookmarks, progressCallback func(string
 			log.Printf("[%s:%s] Downloading image %d/%d: %s", manga.Shortname, cbzName, imgIdx+1, len(imgURLs), imgURL)
 			err := parser.DownloadAndConvertToJPG(imgURL, chapterDir)
 			if err != nil {
-				log.Printf("[%s:%s] Failed to download/convert image %s: %v", manga.Shortname, cbzName, imgURL, err)
+				log.Printf("[%s:%s] ⚠️ Failed to download/convert image %s: %v", manga.Shortname, cbzName, imgURL, err)
 			} else {
-				log.Printf("[%s:%s] Successfully downloaded and converted image: %s", manga.Shortname, cbzName, imgURL)
+				successCount++
+				log.Printf("[%s:%s] ✓ Successfully downloaded and converted image %d/%d", manga.Shortname, cbzName, imgIdx+1, len(imgURLs))
 			}
+		}
+
+		log.Printf("[%s:%s] Download complete: %d/%d images successful", manga.Shortname, cbzName, successCount, len(imgURLs))
+
+		// Only create CBZ if we got at least some images
+		if successCount == 0 {
+			log.Printf("[%s:%s] ⚠️ Skipping CBZ creation - no images downloaded", manga.Shortname, cbzName)
+			os.RemoveAll(chapterDir)
+			continue
 		}
 
 		// Create CBZ in the manga's location directory
@@ -148,7 +213,7 @@ func MgekoDownloadChapters(manga *config.Bookmarks, progressCallback func(string
 		if err != nil {
 			log.Printf("[%s:%s] Failed to create CBZ %s: %v", manga.Shortname, cbzName, cbzPath, err)
 		} else {
-			log.Printf("[%s] Created CBZ: %s\n", manga.Title, cbzName)
+			log.Printf("[%s] ✓ Created CBZ: %s (%d images)\n", manga.Title, cbzName, successCount)
 		}
 
 		// Remove temp directory
@@ -158,7 +223,7 @@ func MgekoDownloadChapters(manga *config.Bookmarks, progressCallback func(string
 		}
 	}
 
-	log.Printf("[%s] Download complete", manga.Title)
+	log.Printf("<%s> Download complete [%s]", manga.Site, manga.Title)
 	if progressCallback != nil {
 		progressCallback(fmt.Sprintf("Download complete! Downloaded %d chapters", totalChapters), 1.0, totalChapters, totalChapters)
 	}
@@ -171,30 +236,82 @@ func chapterUrls(url string) ([]string, error) {
 	var chapters []string
 
 	c := colly.NewCollector(
-		colly.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"),
+		colly.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"),
+		// IMPORTANT: Allow URL revisiting in case of redirects
+		colly.AllowURLRevisit(),
 	)
 
+	// Check for stored cf data
+	parsedURL, _ := url2.Parse(url)
+	domain := parsedURL.Hostname()
+
+	bypassData, err := cf.LoadFromFile(domain)
+	hasStoredData := (err == nil)
+
+	if hasStoredData {
+		log.Printf("<mgeko> Found stored bypass data for %s (type: %s)", domain, bypassData.Type)
+
+		// Check if cf_clearance exists
+		if bypassData.CfClearanceStruct != nil {
+			log.Printf("<mgeko> cf_clearance found, expires: %v", bypassData.CfClearanceStruct.Expires)
+
+			// Check expiration
+			if bypassData.CfClearanceStruct.Expires != nil && time.Now().After(*bypassData.CfClearanceStruct.Expires) {
+				log.Printf("<mgeko> ⚠️ cf_clearance has EXPIRED!")
+				hasStoredData = false // Force browser challenge
+			}
+		}
+
+		if hasStoredData {
+			// Apply the stored data
+			if err := cf.ApplyToCollector(c, url); err != nil {
+				log.Printf("<mgeko> Failed to apply bypass data: %v", err)
+				hasStoredData = false
+			} else {
+				log.Printf("<mgeko> ✓ Applied stored cf_clearance cookie")
+			}
+		}
+	} else {
+		log.Printf("<mgeko> No stored bypass data found for %s", domain)
+	}
+
 	var cfDetected bool
-	var cfInfo *cloudflare.CloudflareInfo
+	var cfInfo *cf.CfInfo
 	var scrapeErr error
 
-	// -------------------------
-	// OnResponse (200 / HTML)
-	// -------------------------
 	c.OnResponse(func(r *colly.Response) {
-		log.Printf("<mgeko> Chapter Urls page response, status: %d, size: %d bytes", r.StatusCode, len(r.Body))
+		// Automatically decompress the response (handles gzip and Brotli)
+		if decompressed, err := cf.DecompressResponse(r, "<mgeko>"); err != nil {
+			log.Printf("<mgeko> ERROR: Failed to decompress response: %v", err)
+			return
+		} else if decompressed {
+			log.Printf("<mgeko> Response successfully decompressed")
+		}
 
-		isCF, info, _ := cloudflare.DetectFromColly(r)
+		log.Printf("<mgeko> Chapter list response: status=%d, size=%d bytes", r.StatusCode, len(r.Body))
+
+		isCF, info, _ := cf.DetectFromColly(r)
 		if isCF {
 			cfDetected = true
 			cfInfo = info
-			log.Printf("<mgeko> CF detected (OnResponse): %v", info.Indicators)
+			log.Printf("<mgeko> ⚠️ cf challenge detected despite using stored cookie!")
+			log.Printf("<mgeko> Indicators that triggered detection: %v", info.Indicators)
+			log.Printf("<mgeko> StatusCode: %d", info.StatusCode)
+			log.Printf("<mgeko> RayID: %s", info.RayID)
+			log.Printf("<mgeko> MetaRedirect: %s", info.MetaRedirect)
+			log.Printf("<mgeko> FormAction: %s", info.FormAction)
+			log.Printf("<mgeko> IsBIC: %v", info.IsBIC)
+			log.Printf("<mgeko> Turnstile: %v", info.Turnstile)
 		}
+
+		// DEBUG: Check first 500 chars of body
+		bodyPreview := string(r.Body)
+		if len(bodyPreview) > 500 {
+			bodyPreview = bodyPreview[:500]
+		}
+		log.Printf("<mgeko> DEBUG: Body preview: %q", bodyPreview)
 	})
 
-	// -------------------------
-	// OnHTML
-	// -------------------------
 	c.OnHTML("ul.chapter-list li a", func(e *colly.HTMLElement) {
 		href := e.Attr("href")
 		if href != "" {
@@ -203,45 +320,57 @@ func chapterUrls(url string) ([]string, error) {
 		}
 	})
 
-	// -------------------------
-	// OnError (403, 503, etc.)
-	// -------------------------
 	c.OnError(func(r *colly.Response, err error) {
-		log.Printf("<mgeko> ERROR during scraping: %v, Status: %d", err, r.StatusCode)
+		log.Printf("<mgeko> ERROR: %v, Status: %d", err, r.StatusCode)
 
-		isCF, info, _ := cloudflare.DetectFromColly(r)
+		isCF, info, _ := cf.DetectFromColly(r)
 		if isCF {
 			cfDetected = true
 			cfInfo = info
-			log.Printf("<mgeko> CF detected (OnError): %v", info.Indicators)
+			log.Printf("<mgeko> cf block detected: %v", info.Indicators)
 		}
-
 		scrapeErr = err
 	})
 
-	// -------------------------
-	// Visit
-	// -------------------------
-	if err := c.Visit(url); err != nil {
-		return nil, fmt.Errorf("visit error: %w", err)
+	// Make the request
+	visitErr := c.Visit(url)
+	if visitErr != nil {
+		log.Printf("<mgeko> Visit error: %v", visitErr)
 	}
 
-	// -------------------------
-	// Cloudflare block detected
-	// -------------------------
+	// Handle cf detection
 	if cfDetected {
-		return nil, fmt.Errorf(
-			"Cloudflare blocked request: status=%d indicators=%v",
-			cfInfo.StatusCode, cfInfo.Indicators,
-		)
+		if hasStoredData {
+			log.Printf("<mgeko> ⚠️ Stored cf_clearance failed validation - cookie is expired/invalid")
+			log.Printf("<mgeko> Deleting invalid data and requesting fresh challenge")
+
+			// Delete the invalid stored data
+			cf.DeleteDomain(domain)
+		}
+
+		log.Printf("<mgeko> Opening browser for cf challenge...")
+		challengeURL := cf.GetChallengeURL(cfInfo, url)
+
+		if err := cf.OpenInBrowser(challengeURL); err != nil {
+			return nil, fmt.Errorf("cf detected but failed to open browser: %w", err)
+		}
+
+		return nil, &cf.CfChallengeError{
+			URL:        challengeURL,
+			StatusCode: cfInfo.StatusCode,
+			Indicators: cfInfo.Indicators,
+		}
 	}
 
-	// -------------------------
-	// Other scraping errors
-	// -------------------------
 	if scrapeErr != nil {
 		return nil, fmt.Errorf("scrape error: %w", scrapeErr)
 	}
+
+	// Log the final count
+	log.Printf("<mgeko> Successfully scraped %d chapter URLs", len(chapters))
+	// for key, value := range chapters {
+	// 	log.Printf("Chapter: %d -> %s", key, value)
+	// }
 
 	return chapters, nil
 }
@@ -275,6 +404,9 @@ func chapterMap(urls []string) map[string]string {
 			filename += ".cbz"
 
 			chapterMap[filename] = url
+			log.Printf("<mgeko> Mapped: %s → %s", filename, url) // ADD THIS DEBUG LINE
+		} else {
+			log.Printf("<mgeko> WARNING: Could not parse chapter number from URL: %s", url) // ADD THIS TOO
 		}
 	}
 

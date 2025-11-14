@@ -228,12 +228,12 @@ func (v *AddMangaView) onSiteSelected(selected string) {
 	}
 
 	// Log the site requirements (for debugging)
-	fmt.Printf("Selected site: %s\n", selectedSite.Name)
-	fmt.Printf("Required fields - URL: %v, Shortname: %v, Title: %v, Location: %v\n",
-		selectedSite.RequiredFields.URL,
-		selectedSite.RequiredFields.Shortname,
-		selectedSite.RequiredFields.Title,
-		selectedSite.RequiredFields.Location)
+	log.Printf("Selected site: %s\n", selectedSite.Name)
+	// fmt.Printf("Required fields - URL: %v, Shortname: %v, Title: %v, Location: %v\n",
+	// 	selectedSite.RequiredFields.URL,
+	// 	selectedSite.RequiredFields.Shortname,
+	// 	selectedSite.RequiredFields.Title,
+	// 	selectedSite.RequiredFields.Location)
 
 	// TODO: Implement dynamic field visibility
 	// Show/hide shortname field based on selectedSite.RequiredFields.Shortname
