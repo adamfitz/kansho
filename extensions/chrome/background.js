@@ -8,7 +8,11 @@ const SUPPORTED_DOMAINS = [
   "*://*.xbato.com/*",
   "*://xbato.com/*",
   "*://rizzfables.com",
-  "*://*.rizzfables.com"
+  "*://*.rizzfables.com",
+  "*://manhuaus.com",
+  "*://*.manhuaus.com",
+   "*://manhuaus.org",
+  "*://*.manhuaus.org"
 ];
 
 // Generate URL patterns for webRequest listeners
