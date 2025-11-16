@@ -86,6 +86,38 @@ func SortKeys(inputMap map[string]string) ([]string, error) {
 	return sortedList, nil
 }
 
+// Sorts map keys numerically (for image indices like "0", "1", "10", "20")
+// Unlike SortKeys which sorts alphabetically, this converts keys to integers before sorting
+func SortKeysNumeric(inputMap map[string]string) ([]string, error) {
+	type keyVal struct {
+		key string
+		num int
+	}
+
+	var items []keyVal
+
+	for key := range inputMap {
+		num, err := strconv.Atoi(key)
+		if err != nil {
+			return nil, fmt.Errorf("key %s is not a valid integer: %w", key, err)
+		}
+		items = append(items, keyVal{key: key, num: num})
+	}
+
+	// Sort by numeric value
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].num < items[j].num
+	})
+
+	// Extract sorted keys
+	sortedList := make([]string, len(items))
+	for i, item := range items {
+		sortedList[i] = item.key
+	}
+
+	return sortedList, nil
+}
+
 // pad the filename to 3 digits, the inputFileName must be a filename.ext and the filename must be string
 // representation of a digit. The input filename will be an integer.jpg (or with some image extenstion), note the input
 // file name must have an extension
