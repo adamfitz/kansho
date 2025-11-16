@@ -315,6 +315,16 @@ func (v *ChapterListView) onUpdateButtonClicked() {
 				})
 			})
 
+		case "manhuaus":
+			err = sites.ManhuausDownloadChapters(manga, func(status string, progress float64, current, total int) {
+				totalChapters = total
+				// Update progress bar and label safely on main thread
+				fyne.Do(func() {
+					v.progressLabel.SetText(status)
+					v.progressBar.SetValue(progress)
+				})
+			})
+
 		// Add more sites here as you implement them
 		// case "asurascans":
 		// 	err = sites.AsurascansDownloadChapters(manga, ...)

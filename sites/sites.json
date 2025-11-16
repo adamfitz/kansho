@@ -109,6 +109,16 @@
         "title": true,
         "location": true
       }
+    },
+    {
+      "name": "manhuaus",
+      "display_name": "manhuaus",
+      "required_fields": {
+        "url": true,
+        "shortname": false,
+        "title": true,
+        "location": true
+      }
     }
   ]
 }
