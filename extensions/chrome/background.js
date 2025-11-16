@@ -1,11 +1,11 @@
 // ============================================================================
-// cf Turnstile POST Payload Capture
+// CF Turnstile POST Payload Capture
 // ============================================================================
 
 chrome.webRequest.onBeforeRequest.addListener(
   (details) => {
     try {
-      // cf Managed Challenge POST request
+      // CF Managed Challenge POST request
       if (
         details.method === "POST" &&
         details.url.includes("challenge-platform")
@@ -31,15 +31,17 @@ chrome.webRequest.onBeforeRequest.addListener(
   },
   {
     urls: [
-      "*://challenges.cf.com/*",
-      "*://*.mgeko.cc/*"
+      "*://challenges.cloudflare.com/*",
+      "*://*.mgeko.cc/*",
+      "*://*.xbato.com/*",
+      "*://xbato.com/*"
     ]
   },
   ["requestBody"]
 );
 
 // ============================================================================
-// cf cf_clearance Cookie Capture
+// CF cf_clearance Cookie Capture
 // ============================================================================
 
 chrome.webRequest.onHeadersReceived.addListener(
@@ -55,7 +57,7 @@ chrome.webRequest.onHeadersReceived.addListener(
           console.log("🔥 [CF CLEARANCE COOKIE CAPTURED]");
           console.log(header.value);
 
-          // OLD WORKING METHOD: store raw cookie only
+          // Store raw cookie only
           chrome.storage.local.set({
             cfClearanceRaw: header.value,          // original raw string
             cfClearanceCapturedAt: new Date().toISOString(),
@@ -70,7 +72,9 @@ chrome.webRequest.onHeadersReceived.addListener(
   {
     urls: [
       "*://*.mgeko.cc/*",
-      "*://challenges.cf.com/*"
+      "*://challenges.cloudflare.com/*",
+      "*://*.xbato.com/*",
+      "*://xbato.com/*"
     ]
   },
   ["responseHeaders", "extraHeaders"]
