@@ -3,7 +3,6 @@ package sites
 import (
 	"fmt"
 	"log"
-	"net/http"
 	url2 "net/url"
 	"os"
 	"path/filepath"
@@ -220,7 +219,16 @@ func XbatoDownloadChapters(manga *config.Bookmarks, progressCallback func(string
 		rateLimiter := parser.NewRateLimiter(1500 * time.Millisecond)
 		defer rateLimiter.Stop()
 
-		for imgIdx, imgURL := range imgURLs {
+		// After getting imgURLs map, sort the keys
+		sortedImgIndices, err := parser.SortKeysNumeric(imgURLs)
+		if err != nil {
+			log.Printf("[%s:%s] Failed to sort image indices: %v", manga.Shortname, cbzName, err)
+			continue
+		}
+
+		// Then iterate the sorted slice (for consecutive download order to be shown in the GUI)
+		for _, imgIdx := range sortedImgIndices {
+			imgURL := imgURLs[imgIdx]
 			// ratelimit connections
 			rateLimiter.Wait()
 
@@ -557,61 +565,6 @@ func extractImageUrlsFromResponse(body []byte) (map[string]string, error) {
 	}
 
 	// Build the map with zero-based index as string
-	urlMap := make(map[string]string, len(matches))
-	for i, m := range matches {
-		urlMap[fmt.Sprintf("%d", i)] = m[1]
-	}
-
-	return urlMap, nil
-}
-
-// extractImageUrlsMap downloads the page at targetURL, finds the imgHttps array,
-// and returns a map where key = zero-based index as string, value = original URL.
-// NOTE: This function is now deprecated in favor of using the Colly-based approach
-// with CF bypass in XbatoDownloadChapters. Kept for backward compatibility.
-func extractImageUrlsMap(targetURL string) (map[string]string, error) {
-	// Step 1: Download the HTML page
-	resp, err := http.Get(targetURL)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	// Step 2: Parse HTML
-	doc, err := goquery.NewDocumentFromReader(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-
-	// Step 3: Find <script> containing "const imgHttps"
-	var scriptText string
-	doc.Find("script").Each(func(i int, s *goquery.Selection) {
-		if strings.Contains(s.Text(), "const imgHttps") {
-			scriptText = s.Text()
-		}
-	})
-
-	if scriptText == "" {
-		return nil, fmt.Errorf("imgHttps script block not found")
-	}
-
-	// Step 4: Extract the array contents
-	re := regexp.MustCompile(`const\s+imgHttps\s*=\s*\[(.*?)\];`)
-	match := re.FindStringSubmatch(scriptText)
-	if len(match) < 2 {
-		return nil, fmt.Errorf("imgHttps array not found inside script")
-	}
-	arrayText := match[1]
-
-	// Step 5: Extract URLs from quotes
-	urlRe := regexp.MustCompile(`"([^"]+)"`)
-	matches := urlRe.FindAllStringSubmatch(arrayText, -1)
-
-	if len(matches) == 0 {
-		return nil, fmt.Errorf("no image URLs found")
-	}
-
-	// Step 6: Build the map with zero-based index as string
 	urlMap := make(map[string]string, len(matches))
 	for i, m := range matches {
 		urlMap[fmt.Sprintf("%d", i)] = m[1]
