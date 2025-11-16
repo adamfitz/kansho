@@ -215,7 +215,15 @@ func XbatoDownloadChapters(manga *config.Bookmarks, progressCallback func(string
 		// Download and convert each image to JPG format
 		// Uses shared parser.DownloadConvertToJPGRename function
 		successCount := 0
+
+		// implement basic rateLimiting
+		rateLimiter := parser.NewRateLimiter(1500 * time.Millisecond)
+		defer rateLimiter.Stop()
+
 		for imgIdx, imgURL := range imgURLs {
+			// ratelimit connections
+			rateLimiter.Wait()
+
 			// typecast to float64
 			imgNum, err := strconv.ParseInt(imgIdx, 10, 64)
 			if err != nil {

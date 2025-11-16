@@ -140,7 +140,15 @@ func RizzfablesDownloadChapters(manga *config.Bookmarks, progressCallback func(s
 
 		// Download and convert each image to JPG format
 		successCount := 0
+
+		// implement basic rateLimiting
+		rateLimiter := parser.NewRateLimiter(1500 * time.Millisecond)
+		defer rateLimiter.Stop()
+
 		for i, imgURL := range imgURLs {
+			// ratelimit connections
+			rateLimiter.Wait()
+
 			imgNum := i + 1
 
 			// Update progress to show individual image download progress
