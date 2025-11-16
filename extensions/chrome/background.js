@@ -1,4 +1,34 @@
 // ============================================================================
+// SUPPORTED DOMAINS CONFIGURATION
+// ============================================================================
+// To add new domains, simply add them to this array
+const SUPPORTED_DOMAINS = [
+  "*://*.mgeko.cc/*",
+  "*://challenges.cloudflare.com/*",
+  "*://*.xbato.com/*",
+  "*://xbato.com/*",
+  "*://rizzfables.com",
+  "*://*.rizzfables.com"
+];
+
+// Generate URL patterns for webRequest listeners
+function generateUrlPatterns() {
+  const patterns = ["*://challenges.cloudflare.com/*"];
+  
+  SUPPORTED_DOMAINS.forEach(domain => {
+    patterns.push(`*://*.${domain}/*`);
+    patterns.push(`*://${domain}/*`);
+  });
+  
+  return patterns;
+}
+
+const URL_PATTERNS = generateUrlPatterns();
+
+console.log("[CF Monitor] Monitoring domains:", SUPPORTED_DOMAINS);
+console.log("[CF Monitor] URL patterns:", URL_PATTERNS);
+
+// ============================================================================
 // CF Turnstile POST Payload Capture
 // ============================================================================
 
@@ -30,12 +60,7 @@ chrome.webRequest.onBeforeRequest.addListener(
     }
   },
   {
-    urls: [
-      "*://challenges.cloudflare.com/*",
-      "*://*.mgeko.cc/*",
-      "*://*.xbato.com/*",
-      "*://xbato.com/*"
-    ]
+    urls: URL_PATTERNS
   },
   ["requestBody"]
 );
@@ -70,12 +95,7 @@ chrome.webRequest.onHeadersReceived.addListener(
     }
   },
   {
-    urls: [
-      "*://*.mgeko.cc/*",
-      "*://challenges.cloudflare.com/*",
-      "*://*.xbato.com/*",
-      "*://xbato.com/*"
-    ]
+    urls: URL_PATTERNS
   },
   ["responseHeaders", "extraHeaders"]
 );
