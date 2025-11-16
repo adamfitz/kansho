@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"log"
 	"sort"
+	"time"
 
+	"kansho/cf"
 	"kansho/parser"
 	"kansho/sites"
 
@@ -328,7 +330,31 @@ func (v *ChapterListView) onUpdateButtonClicked() {
 			v.updateButton.Enable()
 
 			if err != nil {
-				// Show inline error message
+				// Check if this is a cf challenge error
+				if cfErr, ok := cf.IscfChallenge(err); ok {
+					// Show custom cf dialog with import button
+					v.progressLabel.SetText("cf challenge detected")
+
+					// Success callback - retry the download after successful import
+					onSuccess := func() {
+						v.progressLabel.SetText("cf data imported. Retrying download...")
+						// Retry the download by calling the button click handler again
+						go func() {
+							// Small delay to let user see the message
+							time.Sleep(1 * time.Second)
+							// TODO: Retry the download here
+							// For now, just show a message
+							fyne.Do(func() {
+								v.progressLabel.SetText("Please click 'Update Chapters' again to retry")
+							})
+						}()
+					}
+
+					ShowcfDialog(v.state.Window, cfErr.URL, onSuccess)
+					return
+				}
+
+				// Show inline error message for regular errors
 				v.progressLabel.SetText(fmt.Sprintf("Error: %v", err))
 
 				// Also show a dialog for visibility

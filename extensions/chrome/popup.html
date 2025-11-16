@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    body {
+      width: 350px;
+      padding: 15px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      margin: 0;
+    }
+    
+    h2 {
+      margin: 0 0 15px 0;
+      font-size: 18px;
+      color: #5e35b1;
+    }
+    
+    .info {
+      background: #f5f5f5;
+      padding: 10px;
+      border-radius: 5px;
+      margin-bottom: 15px;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    
+    #status {
+      padding: 10px;
+      margin-bottom: 10px;
+      border-radius: 5px;
+      font-size: 13px;
+      display: none;
+    }
+    
+    #status.success {
+      background: #e8f5e9;
+      color: #2e7d32;
+      border: 1px solid #a5d6a7;
+      display: block;
+    }
+    
+    #status.error {
+      background: #ffebee;
+      color: #c62828;
+      border: 1px solid #ef9a9a;
+      display: block;
+    }
+    
+    #status.info {
+      background: #e3f2fd;
+      color: #1565c0;
+      border: 1px solid #90caf9;
+      display: block;
+    }
+    
+    button {
+      width: 100%;
+      padding: 12px;
+      background: #5e35b1;
+      color: white;
+      border: none;
+      border-radius: 5px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    
+    button:hover {
+      background: #4527a0;
+    }
+    
+    button:active {
+      background: #311b92;
+    }
+    
+    button:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+    }
+    
+    .data-preview {
+      margin-top: 15px;
+      font-size: 11px;
+      color: #666;
+    }
+    
+    .data-preview pre {
+      background: #f5f5f5;
+      padding: 8px;
+      border-radius: 3px;
+      max-height: 150px;
+      overflow-y: auto;
+      margin: 5px 0 0 0;
+    }
+  </style>
+</head>
+<body>
+  <h2>🔒 Kansho CF Helper</h2>
+  
+  <div class="info">
+    Click the button below to capture cf cookies and browser data from the current tab.
+  </div>
+  
+  <div id="status"></div>
+  
+  <button id="captureBtn">Copy cf Data</button>
+  
+  <div class="data-preview">
+    <div id="preview"></div>
+  </div>
+  
+  <script src="popup.js"></script>
+</body>
+</html>
