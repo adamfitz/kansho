@@ -178,7 +178,15 @@ func MgekoDownloadChapters(manga *config.Bookmarks, progressCallback func(string
 
 		// Download and convert each image using DownloadAndConvertToJPG
 		successCount := 0
+
+		// implement basic rateLimiting
+		rateLimiter := parser.NewRateLimiter(1500 * time.Millisecond)
+		defer rateLimiter.Stop()
+
 		for imgIdx, imgURL := range imgURLs {
+			// ratelimit connections
+			rateLimiter.Wait()
+
 			if progressCallback != nil {
 				imgProgress := progress + (float64(imgIdx) / float64(len(imgURLs)) / float64(totalChapters))
 				progressCallback(fmt.Sprintf("Chapter %d/%d: Downloading image %d/%d", currentChapter, totalChapters, imgIdx+1, len(imgURLs)), imgProgress, currentChapter, totalChapters)
