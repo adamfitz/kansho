@@ -14,6 +14,7 @@ package main
 import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
+	"fyne.io/fyne/v2/driver/desktop"
 
 	"kansho/config"
 	"kansho/ui"
@@ -40,6 +41,32 @@ func main() {
 	// Create the main application window
 	// The window title "kansho" (鑑賞) means "appreciation" or "viewing" in Japanese
 	myWindow := kanshoApp.NewWindow("kansho")
+
+	// -------------------------------------------------------------------------
+	// FILE MENU WITH QUIT OPTION
+	// -------------------------------------------------------------------------
+	// Create File menu with Quit option for graceful application shutdown
+	fileMenu := fyne.NewMenu("File",
+		fyne.NewMenuItem("Quit", func() {
+			kanshoApp.Quit()
+		}),
+	)
+
+	// Create main menu bar and add it to the window
+	mainMenu := fyne.NewMainMenu(fileMenu)
+	myWindow.SetMainMenu(mainMenu)
+
+	// -------------------------------------------------------------------------
+	// KEYBOARD SHORTCUT: CTRL+Q TO QUIT
+	// -------------------------------------------------------------------------
+	// Register Ctrl+Q keyboard shortcut for quick application exit
+	// This is a standard shortcut on many platforms
+	myWindow.Canvas().AddShortcut(&desktop.CustomShortcut{
+		KeyName:  fyne.KeyQ,
+		Modifier: desktop.ControlModifier,
+	}, func(shortcut fyne.Shortcut) {
+		kanshoApp.Quit()
+	})
 
 	// Set the initial window size
 	// Users can resize the window, but this provides a good starting size
