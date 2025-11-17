@@ -1,6 +1,7 @@
 package sites
 
 import (
+	"context"
 	"fmt"
 	"log"
 	url2 "net/url"
@@ -37,7 +38,7 @@ import (
 // 4. Filters out already downloaded chapters
 // 5. Downloads each new chapter by scraping image URLs
 // 6. Creates CBZ files from downloaded images
-func XbatoDownloadChapters(manga *config.Bookmarks, progressCallback func(string, float64, int, int)) error {
+func XbatoDownloadChapters(ctx context.Context, manga *config.Bookmarks, progressCallback func(string, float64, int, int)) error {
 	// Validate input manga data
 	if manga == nil {
 		return fmt.Errorf("no manga provided")
@@ -114,6 +115,15 @@ func XbatoDownloadChapters(manga *config.Bookmarks, progressCallback func(string
 
 	// Step 6: Iterate over sorted chapter keys and download each one
 	for idx, cbzName := range sortedChapters {
+
+		// Check for cancellation
+		select {
+		case <-ctx.Done():
+			return ctx.Err() // Returns context.Canceled
+		default:
+			// Continue with download
+		}
+
 		chapterURL := chapterMap[cbzName]
 
 		// Calculate progress metrics for callback
@@ -229,6 +239,15 @@ func XbatoDownloadChapters(manga *config.Bookmarks, progressCallback func(string
 		// Then iterate the sorted slice (for consecutive download order to be shown in the GUI)
 		for _, imgIdx := range sortedImgIndices {
 			imgURL := imgURLs[imgIdx]
+
+			// Check for cancellation
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+				// Continue
+			}
+
 			// ratelimit connections
 			rateLimiter.Wait()
 

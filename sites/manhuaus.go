@@ -2,6 +2,7 @@ package sites
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"log"
 	"net/url"
@@ -41,7 +42,7 @@ import (
 // 4. Filters out already downloaded chapters
 // 5. Downloads each new chapter by scraping image URLs
 // 6. Creates CBZ files from downloaded images
-func ManhuausDownloadChapters(manga *config.Bookmarks, progressCallback func(string, float64, int, int)) error {
+func ManhuausDownloadChapters(ctx context.Context, manga *config.Bookmarks, progressCallback func(string, float64, int, int)) error {
 	// Validate input manga data
 	if manga == nil {
 		return fmt.Errorf("no manga provided")
@@ -110,6 +111,15 @@ func ManhuausDownloadChapters(manga *config.Bookmarks, progressCallback func(str
 
 	// Step 6: Iterate over sorted chapter keys and download each one
 	for idx, cbzName := range sortedChapters {
+
+		// Check for cancellation
+		select {
+		case <-ctx.Done():
+			return ctx.Err() // Returns context.Canceled
+		default:
+			// Continue with download
+		}
+
 		chapterURL := chapterMap[cbzName]
 
 		// Calculate progress metrics for callback
@@ -151,6 +161,15 @@ func ManhuausDownloadChapters(manga *config.Bookmarks, progressCallback func(str
 		defer rateLimiter.Stop()
 
 		for i, imgURL := range imgURLs {
+
+			// Check for cancellation
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+				// Continue
+			}
+
 			rateLimiter.Wait() // Rate limit - waits 1.5 seconds between images
 
 			imgNum := i + 1
