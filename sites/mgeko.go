@@ -1,6 +1,7 @@
 package sites
 
 import (
+	"context"
 	"fmt"
 	"log"
 	url2 "net/url"
@@ -20,7 +21,7 @@ import (
 // downloads manga chapters from mgeko website
 // progressCallback is called with status updates during download
 // Parameters: status string, progress (0.0-1.0), current chapter, total chapters
-func MgekoDownloadChapters(manga *config.Bookmarks, progressCallback func(string, float64, int, int)) error {
+func MgekoDownloadChapters(ctx context.Context, manga *config.Bookmarks, progressCallback func(string, float64, int, int)) error {
 	if manga == nil {
 		return fmt.Errorf("no manga provided")
 	}
@@ -87,6 +88,15 @@ func MgekoDownloadChapters(manga *config.Bookmarks, progressCallback func(string
 
 	// Step 6: Iterate over sorted chapter keys
 	for idx, cbzName := range sortedChapters {
+
+		// Check for cancellation
+		select {
+		case <-ctx.Done():
+			return ctx.Err() // Returns context.Canceled
+		default:
+			// Continue with download
+		}
+
 		chapterURL := chapterMap[cbzName]
 
 		currentChapter := idx + 1
@@ -184,6 +194,15 @@ func MgekoDownloadChapters(manga *config.Bookmarks, progressCallback func(string
 		defer rateLimiter.Stop()
 
 		for imgIdx, imgURL := range imgURLs {
+
+			// Check for cancellation
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+				// Continue
+			}
+
 			// ratelimit connections
 			rateLimiter.Wait()
 
