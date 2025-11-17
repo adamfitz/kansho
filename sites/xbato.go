@@ -38,7 +38,7 @@ import (
 // 4. Filters out already downloaded chapters
 // 5. Downloads each new chapter by scraping image URLs
 // 6. Creates CBZ files from downloaded images
-func XbatoDownloadChapters(ctx context.Context, manga *config.Bookmarks, progressCallback func(string, float64, int, int)) error {
+func XbatoDownloadChapters(ctx context.Context, manga *config.Bookmarks, progressCallback func(string, float64, int, int, int)) error {
 	// Validate input manga data
 	if manga == nil {
 		return fmt.Errorf("no manga provided")
@@ -55,7 +55,7 @@ func XbatoDownloadChapters(ctx context.Context, manga *config.Bookmarks, progres
 
 	log.Printf("<%s> Starting download [%s]", manga.Site, manga.Title)
 	if progressCallback != nil {
-		progressCallback(fmt.Sprintf("Fetching chapter list for %s...", manga.Title), 0, 0, 0)
+		progressCallback(fmt.Sprintf("Fetching chapter list for %s...", manga.Title), 0, 0, 0, 0)
 	}
 
 	// Step 1: Build the manga URL from shortname
@@ -65,49 +65,46 @@ func XbatoDownloadChapters(ctx context.Context, manga *config.Bookmarks, progres
 	// Get all chapter entries (format: "Chapter X|URL") from the manga's main page
 	chapterEntries, err := xbatoChapterUrls(mangaUrl)
 	if err != nil {
-		// Just pass the error up - it will be a cfChallengeError if CF was detected
-		// The UI layer will handle it appropriately
 		return err
 	}
 
-	// Log the number of chapters found (similar to mgeko)
+	// Log the number of chapters found
 	log.Printf("<%s> Found %d total chapters on site", manga.Site, len(chapterEntries))
 
 	// Step 2: Build chapter map (key = "chXXX.cbz", value = URL)
-	// This normalizes chapter names for consistent file naming
 	chapterMap := xbatoChapterMap(chapterEntries)
 	log.Printf("<%s> Mapped %d chapters to filenames", manga.Site, len(chapterMap))
 
 	// Step 3: Get list of already downloaded chapters from manga's location directory
-	// Uses shared parser.LocalChapterList function to read existing .cbz files
 	downloadedChapters, err := parser.LocalChapterList(manga.Location)
 	if err != nil {
 		return fmt.Errorf("failed to list files in %s: %v", manga.Location, err)
 	}
 	log.Printf("<%s> Found %d already downloaded chapters", manga.Site, len(downloadedChapters))
 
+	// Store total chapters BEFORE filtering
+	totalChaptersFound := len(chapterMap)
+
 	// Step 4: Remove already-downloaded chapters from the map
-	// This prevents re-downloading existing chapters
 	for _, chapter := range downloadedChapters {
 		delete(chapterMap, chapter)
 	}
 
-	totalChapters := len(chapterMap)
-	if totalChapters == 0 {
+	newChaptersToDownload := len(chapterMap)
+	if newChaptersToDownload == 0 {
 		log.Printf("<%s> No new chapters to download [%s]", manga.Site, manga.Title)
 		if progressCallback != nil {
-			progressCallback("No new chapters to download", 1.0, 0, 0)
+			progressCallback("No new chapters to download", 1.0, 0, 0, totalChaptersFound)
 		}
 		return nil
 	}
 
-	log.Printf("<%s> %d new chapters to download [%s]", manga.Site, totalChapters, manga.Title)
+	log.Printf("<%s> %d new chapters to download [%s]", manga.Site, newChaptersToDownload, manga.Title)
 	if progressCallback != nil {
-		progressCallback(fmt.Sprintf("Found %d new chapters to download", totalChapters), 0, 0, totalChapters)
+		progressCallback(fmt.Sprintf("Found %d new chapters to download", newChaptersToDownload), 0, 0, 0, totalChaptersFound)
 	}
 
 	// Step 5: Sort chapter keys alphabetically for ordered downloading
-	// Uses shared parser.SortKeys function
 	sortedChapters, sortError := parser.SortKeys(chapterMap)
 	if sortError != nil {
 		return fmt.Errorf("failed to sort chapter map keys: %v", sortError)
@@ -119,35 +116,37 @@ func XbatoDownloadChapters(ctx context.Context, manga *config.Bookmarks, progres
 		// Check for cancellation
 		select {
 		case <-ctx.Done():
-			return ctx.Err() // Returns context.Canceled
+			return ctx.Err()
 		default:
-			// Continue with download
 		}
 
 		chapterURL := chapterMap[cbzName]
 
-		// Calculate progress metrics for callback
-		currentChapter := idx + 1
-		progress := float64(currentChapter) / float64(totalChapters)
+		// Extract the actual chapter number from the filename
+		actualChapterNum := extractChapterNumber(cbzName)
+
+		currentDownload := idx + 1
+		progress := float64(currentDownload) / float64(newChaptersToDownload)
 
 		if progressCallback != nil {
-			progressCallback(fmt.Sprintf("Downloading chapter %d/%d: %s", currentChapter, totalChapters, cbzName), progress, currentChapter, totalChapters)
+			progressCallback(
+				fmt.Sprintf("Downloading chapter %d of %d", actualChapterNum, totalChaptersFound),
+				progress,
+				actualChapterNum,
+				currentDownload,
+				totalChaptersFound,
+			)
 		}
 
 		log.Printf("[%s:%s] Starting download from: %s", manga.Shortname, cbzName, chapterURL)
 
 		// Create a NEW Colly collector for this chapter
-		// IMPORTANT: Each chapter needs its own collector with CF bypass applied
 		c := colly.NewCollector(
 			colly.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"),
 		)
 
-		// -------------------------------------------------------------------------
-		// APPLY cf BYPASS TO THIS CHAPTER'S COLLECTOR
-		// -------------------------------------------------------------------------
 		log.Printf("[%s:%s] Applying cf bypass for chapter page", manga.Shortname, cbzName)
 
-		// Apply the bypass data to this collector (ApplyToCollector loads the data internally)
 		if applyErr := cf.ApplyToCollector(c, chapterURL); applyErr != nil {
 			log.Printf("[%s:%s] WARNING: Failed to apply bypass data: %v", manga.Shortname, cbzName, applyErr)
 			log.Printf("[%s:%s] Chapter download may fail due to cf protection", manga.Shortname, cbzName)
@@ -160,7 +159,6 @@ func XbatoDownloadChapters(ctx context.Context, manga *config.Bookmarks, progres
 		var scrapeErr error
 
 		c.OnResponse(func(r *colly.Response) {
-			// DECOMPRESS THE CHAPTER PAGE TOO!
 			if decompressed, err := cf.DecompressResponse(r, fmt.Sprintf("[%s]", cbzName)); err != nil {
 				log.Printf("[%s:%s] ERROR: Failed to decompress: %v", manga.Shortname, cbzName, err)
 				return
@@ -171,7 +169,6 @@ func XbatoDownloadChapters(ctx context.Context, manga *config.Bookmarks, progres
 			log.Printf("[%s:%s] Chapter page response: status=%d, size=%d bytes",
 				manga.Shortname, cbzName, r.StatusCode, len(r.Body))
 
-			// Parse the response body to extract image URLs
 			imgURLs, scrapeErr = extractImageUrlsFromResponse(r.Body)
 			if scrapeErr != nil {
 				log.Printf("[%s:%s] ERROR parsing image URLs: %v", manga.Shortname, cbzName, scrapeErr)
@@ -180,12 +177,10 @@ func XbatoDownloadChapters(ctx context.Context, manga *config.Bookmarks, progres
 			}
 		})
 
-		// Handle errors when fetching the chapter page
 		c.OnError(func(r *colly.Response, err error) {
 			log.Printf("[%s:%s] ERROR fetching chapter page %s: %v (status: %d)",
 				manga.Shortname, cbzName, chapterURL, err, r.StatusCode)
 
-			// Check if this is a cf challenge
 			isCF, cfInfo, _ := cf.DetectFromColly(r)
 			if isCF {
 				log.Printf("[%s:%s] ⚠️ cf challenge detected on chapter page!", manga.Shortname, cbzName)
@@ -195,7 +190,6 @@ func XbatoDownloadChapters(ctx context.Context, manga *config.Bookmarks, progres
 			scrapeErr = err
 		})
 
-		// Visit the chapter page to scrape images
 		err = c.Visit(chapterURL)
 		if err != nil {
 			log.Printf("[%s:%s] Failed to visit %s: %v", manga.Shortname, cbzName, chapterURL, err)
@@ -208,12 +202,10 @@ func XbatoDownloadChapters(ctx context.Context, manga *config.Bookmarks, progres
 		}
 
 		if len(imgURLs) == 0 {
-			log.Printf("[%s:%s] ⚠️ WARNING: No images found for chapter (cf may be blocking)", manga.Shortname, cbzName)
+			log.Printf("[%s:%s] ⚠️ WARNING: No images found for chapter", manga.Shortname, cbzName)
 			continue
 		}
 
-		// Create temporary directory for downloading chapter images
-		// Format: /tmp/manga-shortname/ch###/
 		chapterDir := filepath.Join("/tmp", manga.Shortname, strings.TrimSuffix(cbzName, ".cbz"))
 		err = os.MkdirAll(chapterDir, 0755)
 		if err != nil {
@@ -221,46 +213,42 @@ func XbatoDownloadChapters(ctx context.Context, manga *config.Bookmarks, progres
 			continue
 		}
 
-		// Download and convert each image to JPG format
-		// Uses shared parser.DownloadConvertToJPGRename function
 		successCount := 0
-
-		// implement basic rateLimiting
 		rateLimiter := parser.NewRateLimiter(1500 * time.Millisecond)
 		defer rateLimiter.Stop()
 
-		// After getting imgURLs map, sort the keys
 		sortedImgIndices, err := parser.SortKeysNumeric(imgURLs)
 		if err != nil {
 			log.Printf("[%s:%s] Failed to sort image indices: %v", manga.Shortname, cbzName, err)
 			continue
 		}
 
-		// Then iterate the sorted slice (for consecutive download order to be shown in the GUI)
 		for _, imgIdx := range sortedImgIndices {
 			imgURL := imgURLs[imgIdx]
 
-			// Check for cancellation
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
 			default:
-				// Continue
 			}
 
-			// ratelimit connections
 			rateLimiter.Wait()
 
-			// typecast to float64
 			imgNum, err := strconv.ParseInt(imgIdx, 10, 64)
 			if err != nil {
 				log.Printf("Invalid image index %s: %v", imgIdx, err)
 				continue
 			}
-			// Update progress to show individual image download progress
+
 			if progressCallback != nil {
-				imgProgress := progress + (float64(imgNum) / float64(len(imgURLs)) / float64(totalChapters))
-				progressCallback(fmt.Sprintf("Chapter %d/%d: Downloading image %d/%d", currentChapter, totalChapters, imgNum+1, len(imgURLs)), imgProgress, currentChapter, totalChapters)
+				imgProgress := progress + (float64(imgNum) / float64(len(imgURLs)) / float64(newChaptersToDownload))
+				progressCallback(
+					fmt.Sprintf("Chapter %d/%d: Downloading image %d/%d", actualChapterNum, totalChaptersFound, imgNum+1, len(imgURLs)),
+					imgProgress,
+					actualChapterNum,
+					currentDownload,
+					totalChaptersFound,
+				)
 			}
 
 			log.Printf("[%s:%s] Downloading image %d/%d: %s", manga.Shortname, cbzName, imgNum+1, len(imgURLs), imgURL)
@@ -275,17 +263,20 @@ func XbatoDownloadChapters(ctx context.Context, manga *config.Bookmarks, progres
 
 		log.Printf("[%s:%s] Download complete: %d/%d images successful", manga.Shortname, cbzName, successCount, len(imgURLs))
 
-		// Only create CBZ if we got at least some images
 		if successCount == 0 {
 			log.Printf("[%s:%s] ⚠️ Skipping CBZ creation - no images downloaded", manga.Shortname, cbzName)
 			os.RemoveAll(chapterDir)
 			continue
 		}
 
-		// Create CBZ file from the downloaded images in the manga's location directory
-		// Uses shared parser.CreateCbzFromDir function
 		if progressCallback != nil {
-			progressCallback(fmt.Sprintf("Chapter %d/%d: Creating CBZ file...", currentChapter, totalChapters), progress, currentChapter, totalChapters)
+			progressCallback(
+				fmt.Sprintf("Chapter %d/%d: Creating CBZ file...", actualChapterNum, totalChaptersFound),
+				progress,
+				actualChapterNum,
+				currentDownload,
+				totalChaptersFound,
+			)
 		}
 
 		cbzPath := filepath.Join(manga.Location, cbzName)
@@ -296,7 +287,6 @@ func XbatoDownloadChapters(ctx context.Context, manga *config.Bookmarks, progres
 			log.Printf("[%s] ✓ Created CBZ: %s (%d images)\n", manga.Title, cbzName, successCount)
 		}
 
-		// Clean up: Remove temporary directory after CBZ creation
 		err = os.RemoveAll(chapterDir)
 		if err != nil {
 			log.Printf("[%s:%s] Failed to remove temp directory %s: %v", manga.Shortname, cbzName, chapterDir, err)
@@ -305,7 +295,13 @@ func XbatoDownloadChapters(ctx context.Context, manga *config.Bookmarks, progres
 
 	log.Printf("<%s> Download complete [%s]", manga.Site, manga.Title)
 	if progressCallback != nil {
-		progressCallback(fmt.Sprintf("Download complete! Downloaded %d chapters", totalChapters), 1.0, totalChapters, totalChapters)
+		progressCallback(
+			fmt.Sprintf("Download complete! Downloaded %d chapters", newChaptersToDownload),
+			1.0,
+			0,
+			newChaptersToDownload,
+			totalChaptersFound,
+		)
 	}
 
 	return nil
