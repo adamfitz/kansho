@@ -169,8 +169,7 @@ func (v *ChapterListView) onUpdateButtonClicked() {
 		// Pass context to download functions
 		switch manga.Site {
 		case "mgeko":
-			err = sites.MgekoDownloadChapters(ctx, manga, func(status string, progress float64, current, total int) {
-				totalChapters = total
+			err = sites.MgekoDownloadChapters(ctx, manga, func(status string, progress float64, actualChapter, currentDownload, totalFound int) {
 				fyne.Do(func() {
 					v.progressLabel.SetText(status)
 					v.progressBar.SetValue(progress)
@@ -178,8 +177,7 @@ func (v *ChapterListView) onUpdateButtonClicked() {
 			})
 
 		case "xbato":
-			err = sites.XbatoDownloadChapters(ctx, manga, func(status string, progress float64, current, total int) {
-				totalChapters = total
+			err = sites.XbatoDownloadChapters(ctx, manga, func(status string, progress float64, actualChapter, currentDownload, totalFound int) {
 				fyne.Do(func() {
 					v.progressLabel.SetText(status)
 					v.progressBar.SetValue(progress)
@@ -187,8 +185,7 @@ func (v *ChapterListView) onUpdateButtonClicked() {
 			})
 
 		case "rizzfables":
-			err = sites.RizzfablesDownloadChapters(ctx, manga, func(status string, progress float64, current, total int) {
-				totalChapters = total
+			err = sites.RizzfablesDownloadChapters(ctx, manga, func(status string, progress float64, actualChapter, currentDownload, totalFound int) {
 				fyne.Do(func() {
 					v.progressLabel.SetText(status)
 					v.progressBar.SetValue(progress)
@@ -196,8 +193,7 @@ func (v *ChapterListView) onUpdateButtonClicked() {
 			})
 
 		case "manhuaus":
-			err = sites.ManhuausDownloadChapters(ctx, manga, func(status string, progress float64, current, total int) {
-				totalChapters = total
+			err = sites.ManhuausDownloadChapters(ctx, manga, func(status string, progress float64, actualChapter, currentDownload, totalFound int) {
 				fyne.Do(func() {
 					v.progressLabel.SetText(status)
 					v.progressBar.SetValue(progress)

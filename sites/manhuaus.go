@@ -42,7 +42,7 @@ import (
 // 4. Filters out already downloaded chapters
 // 5. Downloads each new chapter by scraping image URLs
 // 6. Creates CBZ files from downloaded images
-func ManhuausDownloadChapters(ctx context.Context, manga *config.Bookmarks, progressCallback func(string, float64, int, int)) error {
+func ManhuausDownloadChapters(ctx context.Context, manga *config.Bookmarks, progressCallback func(string, float64, int, int, int)) error {
 	// Validate input manga data
 	if manga == nil {
 		return fmt.Errorf("no manga provided")
@@ -57,29 +57,30 @@ func ManhuausDownloadChapters(ctx context.Context, manga *config.Bookmarks, prog
 
 	log.Printf("<%s> Starting download [%s]", manga.Site, manga.Title)
 	if progressCallback != nil {
-		progressCallback(fmt.Sprintf("Fetching chapter list for %s...", manga.Title), 0, 0, 0)
+		progressCallback(fmt.Sprintf("Fetching chapter list for %s...", manga.Title), 0, 0, 0, 0)
 	}
 
 	// Step 1: Get all chapter URLs from the manga's main page
-	// Uses the full URL from manga.URL (like rizzfables)
 	chapterURLs, err := manhuausChapterUrls(manga.Url)
 	if err != nil {
-		// Pass the error up - it will be a cfChallengeError if CF was detected
 		return err
 	}
 
 	log.Printf("<%s> Found %d total chapters on site", manga.Site, len(chapterURLs))
 
-	// Step 2: Build chapter map (key = "chXXX.cbz", value = URL)
+	// Step 2: Build chapter map
 	chapterMap := manhuausChapterMap(chapterURLs)
 	log.Printf("<%s> Mapped %d chapters to filenames", manga.Site, len(chapterMap))
 
-	// Step 3: Get list of already downloaded chapters from manga's location directory
+	// Step 3: Get list of already downloaded chapters
 	downloadedChapters, err := parser.LocalChapterList(manga.Location)
 	if err != nil {
 		return fmt.Errorf("failed to list files in %s: %v", manga.Location, err)
 	}
 	log.Printf("<%s> Found %d already downloaded chapters", manga.Site, len(downloadedChapters))
+
+	// Store total chapters BEFORE filtering
+	totalChaptersFound := len(chapterMap)
 
 	// Step 4: Remove already-downloaded chapters from the map
 	for _, chapter := range downloadedChapters {
@@ -89,21 +90,21 @@ func ManhuausDownloadChapters(ctx context.Context, manga *config.Bookmarks, prog
 		}
 	}
 
-	totalChapters := len(chapterMap)
-	if totalChapters == 0 {
+	newChaptersToDownload := len(chapterMap)
+	if newChaptersToDownload == 0 {
 		log.Printf("<%s> No new chapters to download [%s]", manga.Site, manga.Title)
 		if progressCallback != nil {
-			progressCallback("No new chapters to download", 1.0, 0, 0)
+			progressCallback("No new chapters to download", 1.0, 0, 0, totalChaptersFound)
 		}
 		return nil
 	}
 
-	log.Printf("<%s> %d new chapters to download [%s]", manga.Site, totalChapters, manga.Title)
+	log.Printf("<%s> %d new chapters to download [%s]", manga.Site, newChaptersToDownload, manga.Title)
 	if progressCallback != nil {
-		progressCallback(fmt.Sprintf("Found %d new chapters to download", totalChapters), 0, 0, totalChapters)
+		progressCallback(fmt.Sprintf("Found %d new chapters to download", newChaptersToDownload), 0, 0, 0, totalChaptersFound)
 	}
 
-	// Step 5: Sort chapter keys alphabetically for ordered downloading
+	// Step 5: Sort chapter keys
 	sortedChapters, sortError := parser.SortKeys(chapterMap)
 	if sortError != nil {
 		return fmt.Errorf("failed to sort chapter map keys: %v", sortError)
@@ -112,22 +113,28 @@ func ManhuausDownloadChapters(ctx context.Context, manga *config.Bookmarks, prog
 	// Step 6: Iterate over sorted chapter keys and download each one
 	for idx, cbzName := range sortedChapters {
 
-		// Check for cancellation
 		select {
 		case <-ctx.Done():
-			return ctx.Err() // Returns context.Canceled
+			return ctx.Err()
 		default:
-			// Continue with download
 		}
 
 		chapterURL := chapterMap[cbzName]
 
-		// Calculate progress metrics for callback
-		currentChapter := idx + 1
-		progress := float64(currentChapter) / float64(totalChapters)
+		// Extract the actual chapter number from the filename
+		actualChapterNum := extractChapterNumber(cbzName)
+
+		currentDownload := idx + 1
+		progress := float64(currentDownload) / float64(newChaptersToDownload)
 
 		if progressCallback != nil {
-			progressCallback(fmt.Sprintf("Downloading chapter %d/%d: %s", currentChapter, totalChapters, cbzName), progress, currentChapter, totalChapters)
+			progressCallback(
+				fmt.Sprintf("Downloading chapter %d of %d", actualChapterNum, totalChaptersFound),
+				progress,
+				actualChapterNum,
+				currentDownload,
+				totalChaptersFound,
+			)
 		}
 
 		chapterNum := strings.TrimSuffix(cbzName, ".cbz")
@@ -147,7 +154,6 @@ func ManhuausDownloadChapters(ctx context.Context, manga *config.Bookmarks, prog
 
 		log.Printf("[%s:%s] Found %d images to download", manga.Title, cbzName, len(imgURLs))
 
-		// Create temporary directory for downloading chapter images
 		chapterDir := filepath.Join("/tmp", strings.ReplaceAll(manga.Title, " ", "-"), chapterNum)
 		err = os.MkdirAll(chapterDir, 0755)
 		if err != nil {
@@ -155,34 +161,35 @@ func ManhuausDownloadChapters(ctx context.Context, manga *config.Bookmarks, prog
 			continue
 		}
 
-		// Download and convert each image to JPG format with rate limiting
 		successCount := 0
 		rateLimiter := parser.NewRateLimiter(1500 * time.Millisecond)
 		defer rateLimiter.Stop()
 
 		for i, imgURL := range imgURLs {
 
-			// Check for cancellation
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
 			default:
-				// Continue
 			}
 
-			rateLimiter.Wait() // Rate limit - waits 1.5 seconds between images
+			rateLimiter.Wait()
 
 			imgNum := i + 1
 
-			// Update progress to show individual image download progress
 			if progressCallback != nil {
-				imgProgress := progress + (float64(imgNum) / float64(len(imgURLs)) / float64(totalChapters))
-				progressCallback(fmt.Sprintf("Chapter %d/%d: Downloading image %d/%d", currentChapter, totalChapters, imgNum, len(imgURLs)), imgProgress, currentChapter, totalChapters)
+				imgProgress := progress + (float64(imgNum) / float64(len(imgURLs)) / float64(newChaptersToDownload))
+				progressCallback(
+					fmt.Sprintf("Chapter %d/%d: Downloading image %d/%d", actualChapterNum, totalChaptersFound, imgNum, len(imgURLs)),
+					imgProgress,
+					actualChapterNum,
+					currentDownload,
+					totalChaptersFound,
+				)
 			}
 
 			log.Printf("[%s:%s] Downloading image %d/%d: %s", manga.Title, cbzName, imgNum, len(imgURLs), imgURL)
 
-			// Use shared parser function - pass imgNum as string for filename
 			filename := fmt.Sprintf("%d", imgNum)
 			imgConvertErr := parser.DownloadConvertToJPGRename(filename, imgURL, chapterDir)
 			if imgConvertErr != nil {
@@ -195,16 +202,20 @@ func ManhuausDownloadChapters(ctx context.Context, manga *config.Bookmarks, prog
 
 		log.Printf("[%s:%s] Download complete: %d/%d images successful", manga.Title, cbzName, successCount, len(imgURLs))
 
-		// Only create CBZ if we got at least some images
 		if successCount == 0 {
 			log.Printf("[%s:%s] ⚠️ Skipping CBZ creation - no images downloaded", manga.Title, cbzName)
 			os.RemoveAll(chapterDir)
 			continue
 		}
 
-		// Create CBZ file from the downloaded images in the manga's location directory
 		if progressCallback != nil {
-			progressCallback(fmt.Sprintf("Chapter %d/%d: Creating CBZ file...", currentChapter, totalChapters), progress, currentChapter, totalChapters)
+			progressCallback(
+				fmt.Sprintf("Chapter %d/%d: Creating CBZ file...", actualChapterNum, totalChaptersFound),
+				progress,
+				actualChapterNum,
+				currentDownload,
+				totalChaptersFound,
+			)
 		}
 
 		cbzPath := filepath.Join(manga.Location, cbzName)
@@ -215,7 +226,6 @@ func ManhuausDownloadChapters(ctx context.Context, manga *config.Bookmarks, prog
 			log.Printf("[%s] ✓ Created CBZ: %s (%d images)\n", manga.Title, cbzName, successCount)
 		}
 
-		// Clean up: Remove temporary directory after CBZ creation
 		err = os.RemoveAll(chapterDir)
 		if err != nil {
 			log.Printf("[%s:%s] Failed to remove temp directory %s: %v", manga.Title, cbzName, chapterDir, err)
@@ -224,7 +234,13 @@ func ManhuausDownloadChapters(ctx context.Context, manga *config.Bookmarks, prog
 
 	log.Printf("<%s> Download complete [%s]", manga.Site, manga.Title)
 	if progressCallback != nil {
-		progressCallback(fmt.Sprintf("Download complete! Downloaded %d chapters", totalChapters), 1.0, totalChapters, totalChapters)
+		progressCallback(
+			fmt.Sprintf("Download complete! Downloaded %d chapters", newChaptersToDownload),
+			1.0,
+			0,
+			newChaptersToDownload,
+			totalChaptersFound,
+		)
 	}
 
 	return nil

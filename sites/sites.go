@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"kansho/models"
 )
@@ -47,4 +48,24 @@ func LoadSitesConfig() models.SitesConfig {
 	}
 
 	return sitesConfig
+}
+
+// extractChapterNumber extracts the numeric chapter number from filenames like "ch001.cbz" or "ch091.2.cbz"
+func extractChapterNumber(filename string) int {
+	// Remove .cbz extension
+	name := strings.TrimSuffix(filename, ".cbz")
+
+	// Remove "ch" prefix
+	name = strings.TrimPrefix(name, "ch")
+
+	// Split on dots to get main chapter number
+	parts := strings.Split(name, ".")
+	if len(parts) == 0 {
+		return 0
+	}
+
+	// Parse the first part as the chapter number
+	var chapterNum int
+	fmt.Sscanf(parts[0], "%d", &chapterNum)
+	return chapterNum
 }
