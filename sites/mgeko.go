@@ -29,14 +29,14 @@ func MgekoDownloadChapters(ctx context.Context, manga *config.Bookmarks, progres
 	// ... existing validation code ...
 
 	// Step 1-4: Get chapters (unchanged)
-	chapterUrls, err := chapterUrls(manga.Url)
+	chapterUrls, err := mgekochapterUrls(manga.Url)
 	if err != nil {
 		return err
 	}
 
 	log.Printf("<%s> Found %d total chapters on site", manga.Site, len(chapterUrls))
 
-	chapterMap := chapterMap(chapterUrls)
+	chapterMap := mgekoChapterMap(chapterUrls)
 	log.Printf("<%s> Mapped %d chapters to filenames", manga.Site, len(chapterMap))
 
 	downloadedChapters, err := parser.LocalChapterList(manga.Location)
@@ -253,7 +253,7 @@ func MgekoDownloadChapters(ctx context.Context, manga *config.Bookmarks, progres
 }
 
 // retrieve mgeko chapter list
-func chapterUrls(url string) ([]string, error) {
+func mgekochapterUrls(url string) ([]string, error) {
 	var chapters []string
 
 	c := colly.NewCollector(
@@ -398,7 +398,7 @@ func chapterUrls(url string) ([]string, error) {
 
 // chapterMap takes a slice of URLs and returns a map:
 // key = normalized filename (ch###.part1.part2.cbz), value = URL
-func chapterMap(urls []string) map[string]string {
+func mgekoChapterMap(urls []string) map[string]string {
 	chapterMap := make(map[string]string)
 
 	// Regex: match main chapter number, then any sequence of part numbers separated by -, _, or .
