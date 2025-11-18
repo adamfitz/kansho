@@ -208,6 +208,9 @@ func (v *AddMangaView) onDirectoryButtonClicked() {
 		}
 	}
 
+	// resize directory chooser dialog box
+	folderDialog.Resize(fyne.NewSize(900, 700))
+
 	// Show the dialog
 	folderDialog.Show()
 }
