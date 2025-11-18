@@ -7,27 +7,18 @@ const SUPPORTED_DOMAINS = [
   "*://challenges.cloudflare.com/*",
   "*://*.xbato.com/*",
   "*://xbato.com/*",
-  "*://rizzfables.com",
-  "*://*.rizzfables.com",
-  "*://manhuaus.com",
-  "*://*.manhuaus.com",
-   "*://manhuaus.org",
-  "*://*.manhuaus.org"
+  "*://rizzfables.com/*",
+  "*://*.rizzfables.com/*",
+  "*://manhuaus.com/*",
+  "*://*.manhuaus.com/*",
+  "*://manhuaus.org/*",
+  "*://*.manhuaus.org/*",
+  "*://kunmanga.com/*",
+  "*://*.kunmanga.com/*"
 ];
 
-// Generate URL patterns for webRequest listeners
-function generateUrlPatterns() {
-  const patterns = ["*://challenges.cloudflare.com/*"];
-  
-  SUPPORTED_DOMAINS.forEach(domain => {
-    patterns.push(`*://*.${domain}/*`);
-    patterns.push(`*://${domain}/*`);
-  });
-  
-  return patterns;
-}
-
-const URL_PATTERNS = generateUrlPatterns();
+// URL_PATTERNS is just the SUPPORTED_DOMAINS since they're already properly formatted
+const URL_PATTERNS = SUPPORTED_DOMAINS;
 
 console.log("[CF Monitor] Monitoring domains:", SUPPORTED_DOMAINS);
 console.log("[CF Monitor] URL patterns:", URL_PATTERNS);

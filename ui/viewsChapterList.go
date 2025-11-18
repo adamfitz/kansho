@@ -200,6 +200,14 @@ func (v *ChapterListView) onUpdateButtonClicked() {
 				})
 			})
 
+		case "kunmanga":
+			err = sites.KunmangaDownloadChapters(ctx, manga, func(status string, progress float64, actualChapter, currentDownload, totalFound int) {
+				fyne.Do(func() {
+					v.progressLabel.SetText(status)
+					v.progressBar.SetValue(progress)
+				})
+			})
+
 		default:
 			fyne.Do(func() {
 				err := fmt.Errorf("download not supported for site: %s", manga.Site)
