@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/http/cookiejar"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -23,6 +24,7 @@ import (
 
 	"github.com/chai2010/webp"
 	"github.com/gocolly/colly"
+	"golang.org/x/net/publicsuffix"
 )
 
 // KunmangaDownloadChapters downloads manga chapters from kunmanga website
@@ -70,13 +72,22 @@ func KunmangaDownloadChapters(ctx context.Context, manga *config.Bookmarks, prog
 		progressCallback(fmt.Sprintf("Found %d new chapters to download", newChaptersToDownload), 0, 0, 0, totalChaptersFound)
 	}
 
-	// Step 5: Sort chapter keys
+	// Step 5: Create HTTP client with CF cookies for image downloads
+	httpClient, err := createKunmangaHTTPClient(manga.Url)
+	if err != nil {
+		log.Printf("<%s> WARNING: Failed to create HTTP client with CF cookies: %v", manga.Site, err)
+		log.Printf("<%s> Image downloads may fail with 403 errors", manga.Site)
+		// Continue anyway with a basic client
+		httpClient = http.DefaultClient
+	}
+
+	// Step 6: Sort chapter keys
 	sortedChapters, sortError := parser.SortKeys(chapterMap)
 	if sortError != nil {
 		return fmt.Errorf("failed to sort chapter map keys: %v", sortError)
 	}
 
-	// Step 6: Iterate over sorted chapter keys and download
+	// Step 7: Iterate over sorted chapter keys and download
 	for idx, cbzName := range sortedChapters {
 		select {
 		case <-ctx.Done():
@@ -175,7 +186,7 @@ func KunmangaDownloadChapters(ctx context.Context, manga *config.Bookmarks, prog
 		rateLimiter := parser.NewRateLimiter(1500 * time.Millisecond)
 		defer rateLimiter.Stop()
 
-		// Download and convert images with referer header
+		// Download and convert images with CF-enabled client
 		for imgIdx, imgURL := range imgURLs {
 			select {
 			case <-ctx.Done():
@@ -198,9 +209,9 @@ func KunmangaDownloadChapters(ctx context.Context, manga *config.Bookmarks, prog
 
 			log.Printf("[%s:%s] Downloading image %d/%d: %s", manga.Shortname, cbzName, imgIdx+1, len(imgURLs), imgURL)
 
-			// Use custom download function that includes referer header
+			// Use CF-enabled HTTP client
 			outputFilename := fmt.Sprintf("%d.jpg", imgIdx+1)
-			err := downloadKunmangaImage(imgURL, chapterDir, outputFilename, chapterURL)
+			err := downloadKunmangaImage(httpClient, imgURL, chapterDir, outputFilename, chapterURL)
 			if err != nil {
 				log.Printf("[%s:%s] ⚠️ Failed to download/convert image %s: %v", manga.Shortname, cbzName, imgURL, err)
 			} else {
@@ -255,6 +266,85 @@ func KunmangaDownloadChapters(ctx context.Context, manga *config.Bookmarks, prog
 	}
 
 	return nil
+}
+
+// createKunmangaHTTPClient creates an HTTP client with CF cookies loaded
+// This client can be used to download images that require CF bypass
+func createKunmangaHTTPClient(mangaURL string) (*http.Client, error) {
+	// Parse URL to get domain
+	parsedURL, err := url.Parse(mangaURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse URL: %w", err)
+	}
+	domain := parsedURL.Hostname()
+
+	// Load CF bypass data
+	bypassData, err := cf.LoadFromFile(domain)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load CF bypass data: %w", err)
+	}
+
+	// Create cookie jar
+	jar, err := cookiejar.New(&cookiejar.Options{
+		PublicSuffixList: publicsuffix.List,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create cookie jar: %w", err)
+	}
+
+	// Prepare cookies to add to jar
+	var cookies []*http.Cookie
+
+	// Add cf_clearance cookie if available
+	if bypassData.CfClearanceStruct != nil {
+		cookie := &http.Cookie{
+			Name:     bypassData.CfClearanceStruct.Name,
+			Value:    bypassData.CfClearanceStruct.Value,
+			Domain:   bypassData.CfClearanceStruct.Domain,
+			Path:     bypassData.CfClearanceStruct.Path,
+			Expires:  time.Time{}, // Let it be session cookie
+			HttpOnly: bypassData.CfClearanceStruct.HttpOnly,
+			Secure:   bypassData.CfClearanceStruct.Secure,
+			SameSite: http.SameSiteNoneMode,
+		}
+		cookies = append(cookies, cookie)
+		log.Printf("✓ Added cf_clearance cookie to HTTP client (value: %.20s...)", cookie.Value)
+	}
+
+	// Add any additional cookies from bypass data
+	if len(bypassData.AllCookies) > 0 {
+		for _, c := range bypassData.AllCookies {
+			if c.Name != "" && c.Name != "cf_clearance" {
+				cookie := &http.Cookie{
+					Name:     c.Name,
+					Value:    c.Value,
+					Domain:   c.Domain,
+					Path:     c.Path,
+					HttpOnly: c.HTTPOnly,
+					Secure:   c.Secure,
+				}
+				cookies = append(cookies, cookie)
+				log.Printf("✓ Added additional cookie: %s", c.Name)
+			}
+		}
+	}
+
+	// Set cookies for both main domain and image subdomain
+	mainURL, _ := url.Parse("https://" + domain)
+	imgURL, _ := url.Parse("https://img-1." + domain)
+
+	jar.SetCookies(mainURL, cookies)
+	jar.SetCookies(imgURL, cookies)
+
+	log.Printf("✓ Set %d cookies for %s and img-1.%s", len(cookies), domain, domain)
+
+	// Create HTTP client with the jar
+	client := &http.Client{
+		Jar:     jar,
+		Timeout: 30 * time.Second,
+	}
+
+	return client, nil
 }
 
 // kunmangaChapterUrls retrieves all chapter URLs from a kunmanga manga page
@@ -428,19 +518,24 @@ func kunmangaChapterMap(urls []string) map[string]string {
 	return chapterMap
 }
 
-// downloadKunmangaImage downloads an image from kunmanga with proper headers
+// downloadKunmangaImage downloads an image from kunmanga with proper headers and CF cookies
 // Required headers include User-Agent and Referer to avoid 403 errors
-func downloadKunmangaImage(imgURL, targetDir, filename, referer string) error {
+func downloadKunmangaImage(client *http.Client, imgURL, targetDir, filename, referer string) error {
 	req, err := http.NewRequest("GET", imgURL, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 
 	// Required headers to avoid 403
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36")
 	req.Header.Set("Referer", referer)
+	req.Header.Set("Accept", "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8")
+	req.Header.Set("Accept-Language", "en-GB,en;q=0.9")
+	req.Header.Set("Sec-Fetch-Dest", "image")
+	req.Header.Set("Sec-Fetch-Mode", "no-cors")
+	req.Header.Set("Sec-Fetch-Site", "same-site")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("HTTP request failed: %w", err)
 	}
@@ -484,7 +579,6 @@ func downloadKunmangaImage(imgURL, targetDir, filename, referer string) error {
 			return fmt.Errorf("failed to decode image: %w", err)
 		}
 	case "webp":
-		// Import webp at the top if not already imported
 		img, err = webp.Decode(bytes.NewReader(imgBytes))
 		if err != nil {
 			return fmt.Errorf("failed to decode webp image: %w", err)
