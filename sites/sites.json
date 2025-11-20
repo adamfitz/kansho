@@ -62,7 +62,7 @@
     },
     {
       "name": "hls",
-      "display_name": "Honey Lemon Soda",
+      "display_name": "hls",
       "required_fields": {
         "url": false,
         "shortname": false,
