@@ -62,7 +62,7 @@
     },
     {
       "name": "hls",
-      "display_name": "hls",
+      "display_name": "Honey Lemon Soda",
       "required_fields": {
         "url": false,
         "shortname": false,
@@ -72,7 +72,7 @@
     },
     {
       "name": "cfotz",
-      "display_name": "cfotz",
+      "display_name": "Childhood Friend of the Zenith",
       "required_fields": {
         "url": false,
         "shortname": false,
@@ -82,7 +82,7 @@
     },
     {
       "name": "pmuig",
-      "display_name": "pmuig",
+      "display_name": "Pick Me Up Infinite Gacha",
       "required_fields": {
         "url": false,
         "shortname": false,
@@ -92,7 +92,7 @@
     },
     {
       "name": "orv",
-      "display_name": "orv",
+      "display_name": "Omniscient Reader's Viewpoint",
       "required_fields": {
         "url": false,
         "shortname": false,
@@ -102,7 +102,7 @@
     },
     {
       "name": "iluim",
-      "display_name": "iluim",
+      "display_name": "Infinite Level Up in Murim",
       "required_fields": {
         "url": false,
         "shortname": false,
@@ -113,6 +113,16 @@
     {
       "name": "manhuaus",
       "display_name": "manhuaus",
+      "required_fields": {
+        "url": true,
+        "shortname": false,
+        "title": true,
+        "location": true
+      }
+    },
+    {
+      "name": "kunmanga",
+      "display_name": "kunmanga",
       "required_fields": {
         "url": true,
         "shortname": false,
