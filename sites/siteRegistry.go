@@ -4,9 +4,9 @@ import (
 	"kansho/config"
 )
 
-// RegisterAllSites registers all site download functions with the download queue
-// This should be called during application initialization
-func RegisterAllSites() {
+// init() is called automatically when the package is imported
+// This registers all site download functions with the queue system
+func init() {
 	config.RegisterSite("mgeko", MgekoDownloadChapters)
 	config.RegisterSite("xbato", XbatoDownloadChapters)
 	config.RegisterSite("rizzfables", RizzfablesDownloadChapters)
