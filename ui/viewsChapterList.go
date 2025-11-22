@@ -1,15 +1,12 @@
 package ui
 
 import (
-	"context"
 	"fmt"
 	"log"
 	"sort"
-	"time"
 
-	"kansho/cf"
+	"kansho/config"
 	"kansho/parser"
-	"kansho/sites"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
@@ -18,55 +15,40 @@ import (
 )
 
 type ChapterListView struct {
-	Card               fyne.CanvasObject
-	selectedMangaLabel *widget.Label
-	chapterList        *widget.List
-	contentContainer   *fyne.Container
-	updateButton       *widget.Button
-	stopButton         *widget.Button // NEW: Stop button
-	progressBar        *widget.ProgressBar
-	progressLabel      *widget.Label
-	progressContainer  *fyne.Container
-	chapters           []string
-	state              *KanshoAppState
+	Card                fyne.CanvasObject
+	selectedMangaLabel  *widget.Label
+	chapterList         *widget.List
+	contentContainer    *fyne.Container
+	queueDownloadButton *widget.Button
+	viewToggleButton    *widget.Button
+	state               *KanshoAppState
+	chapters            []string
 
-	// NEW: Context for cancellation
-	cancelFunc context.CancelFunc
+	// View management
+	downloadQueueView *DownloadQueueView
+	showingQueue      bool
+	mainContainer     *fyne.Container
 }
 
 func NewChapterListView(state *KanshoAppState) *ChapterListView {
 	view := &ChapterListView{
-		state:    state,
-		chapters: []string{},
+		state:        state,
+		chapters:     []string{},
+		showingQueue: false,
 	}
 
 	view.selectedMangaLabel = widget.NewLabel("Select a manga to view chapters")
 
-	// Create Update button
-	view.updateButton = widget.NewButton("Update Chapters", func() {
-		view.onUpdateButtonClicked()
+	// Queue Download button - adds current manga to download queue
+	view.queueDownloadButton = widget.NewButton("Queue Download", func() {
+		view.onQueueDownloadClicked()
 	})
-	view.updateButton.Disable()
+	view.queueDownloadButton.Disable()
 
-	// NEW: Create Stop button (initially disabled)
-	view.stopButton = widget.NewButton("Stop Download", func() {
-		view.onStopButtonClicked()
+	// View Toggle button - switches between chapter list and download queue
+	view.viewToggleButton = widget.NewButton("Download Queue", func() {
+		view.toggleView()
 	})
-	view.stopButton.Disable()
-
-	view.progressBar = widget.NewProgressBar()
-	view.progressBar.Min = 0
-	view.progressBar.Max = 1
-
-	view.progressLabel = widget.NewLabel("")
-	view.progressLabel.Truncation = fyne.TextTruncateEllipsis
-	view.progressLabel.Wrapping = fyne.TextWrapWord
-
-	view.progressContainer = container.NewVBox(
-		view.progressLabel,
-		view.progressBar,
-	)
-	view.progressContainer.Hide()
 
 	view.chapterList = widget.NewList(
 		func() int {
@@ -87,29 +69,40 @@ func NewChapterListView(state *KanshoAppState) *ChapterListView {
 		widget.NewLabel("Select a manga to view chapters"),
 	)
 
-	// NEW: Create button container with both Update and Stop buttons
+	// Create button container
 	buttonContainer := container.NewHBox(
-		view.updateButton,
-		view.stopButton,
+		view.queueDownloadButton,
+		view.viewToggleButton,
 	)
 
-	cardContent := container.NewBorder(
+	// Chapter list card content
+	chapterCardContent := container.NewBorder(
 		container.NewVBox(
 			NewBoldLabel("Chapter List"),
 			NewSeparator(),
 		),
 		container.NewVBox(
-			view.progressContainer,
 			NewSeparator(),
-			container.NewCenter(buttonContainer), // Changed from just updateButton
+			container.NewCenter(buttonContainer),
 		),
 		nil,
 		nil,
 		view.contentContainer,
 	)
 
-	view.Card = NewCard(cardContent)
+	// Create download queue view
+	view.downloadQueueView = NewDownloadQueueView(state)
 
+	// Set the toggle callback so Download Queue can switch back
+	view.downloadQueueView.SetViewToggleCallback(func() {
+		view.toggleView() // This will switch back to chapter list
+	})
+
+	// Main container that will swap between views
+	view.mainContainer = container.NewStack(NewCard(chapterCardContent))
+	view.Card = view.mainContainer
+
+	// Register callbacks
 	view.state.RegisterMangaSelectedCallback(func(id int) {
 		view.onMangaSelected(id)
 	})
@@ -123,155 +116,69 @@ func NewChapterListView(state *KanshoAppState) *ChapterListView {
 	return view
 }
 
-// NEW: Handler for stop button
-func (v *ChapterListView) onStopButtonClicked() {
-	if v.cancelFunc != nil {
-		log.Println("User requested download cancellation")
-		v.progressLabel.SetText("Stopping download...")
-		v.cancelFunc() // Trigger cancellation
-		v.stopButton.Disable()
+func (v *ChapterListView) toggleView() {
+	v.showingQueue = !v.showingQueue
+
+	if v.showingQueue {
+		// Show download queue
+		v.mainContainer.Objects = []fyne.CanvasObject{v.downloadQueueView.Card}
+		v.viewToggleButton.SetText("Chapter List")
+		log.Println("[UI] Switched to Download Queue view")
+	} else {
+		// Show chapter list
+		chapterCardContent := v.buildChapterListCard()
+		v.mainContainer.Objects = []fyne.CanvasObject{NewCard(chapterCardContent)}
+		v.viewToggleButton.SetText("Download Queue")
+		log.Println("[UI] Switched to Chapter List view")
 	}
+
+	v.mainContainer.Refresh()
 }
 
-// UPDATED: onUpdateButtonClicked with context cancellation
-func (v *ChapterListView) onUpdateButtonClicked() {
+func (v *ChapterListView) buildChapterListCard() *fyne.Container {
+	buttonContainer := container.NewHBox(
+		v.queueDownloadButton,
+		v.viewToggleButton,
+	)
+
+	return container.NewBorder(
+		container.NewVBox(
+			NewBoldLabel("Chapter List"),
+			NewSeparator(),
+		),
+		container.NewVBox(
+			NewSeparator(),
+			container.NewCenter(buttonContainer),
+		),
+		nil,
+		nil,
+		v.contentContainer,
+	)
+}
+
+func (v *ChapterListView) onQueueDownloadClicked() {
 	manga := v.state.GetSelectedManga()
 	if manga == nil {
+		dialog.ShowError(fmt.Errorf("no manga selected"), v.state.Window)
 		return
 	}
 
-	// Disable update button, enable stop button
-	v.updateButton.Disable()
-	v.stopButton.Enable()
+	queue := config.GetDownloadQueue()
+	task, err := queue.AddTask(manga)
+	if err != nil {
+		dialog.ShowError(err, v.state.Window)
+		return
+	}
 
-	v.progressContainer.Show()
-	v.progressBar.SetValue(0)
-	v.progressLabel.SetText("Starting download...")
+	log.Printf("[UI] Added '%s' to download queue (ID: %s)", manga.Title, task.ID)
 
-	// Create cancellable context
-	ctx, cancel := context.WithCancel(context.Background())
-	v.cancelFunc = cancel
-
-	go func() {
-		// Ensure we clean up when done
-		defer func() {
-			fyne.Do(func() {
-				v.progressContainer.Hide()
-				v.updateButton.Enable()
-				v.stopButton.Disable()
-				v.cancelFunc = nil
-			})
-		}()
-
-		var totalChapters int
-		var err error
-
-		// Pass context to download functions
-		switch manga.Site {
-		case "mgeko":
-			err = sites.MgekoDownloadChapters(ctx, manga, func(status string, progress float64, actualChapter, currentDownload, totalFound int) {
-				fyne.Do(func() {
-					v.progressLabel.SetText(status)
-					v.progressBar.SetValue(progress)
-				})
-			})
-
-		case "xbato":
-			err = sites.XbatoDownloadChapters(ctx, manga, func(status string, progress float64, actualChapter, currentDownload, totalFound int) {
-				fyne.Do(func() {
-					v.progressLabel.SetText(status)
-					v.progressBar.SetValue(progress)
-				})
-			})
-
-		case "rizzfables":
-			err = sites.RizzfablesDownloadChapters(ctx, manga, func(status string, progress float64, actualChapter, currentDownload, totalFound int) {
-				fyne.Do(func() {
-					v.progressLabel.SetText(status)
-					v.progressBar.SetValue(progress)
-				})
-			})
-
-		case "manhuaus":
-			err = sites.ManhuausDownloadChapters(ctx, manga, func(status string, progress float64, actualChapter, currentDownload, totalFound int) {
-				fyne.Do(func() {
-					v.progressLabel.SetText(status)
-					v.progressBar.SetValue(progress)
-				})
-			})
-
-		case "kunmanga":
-			err = sites.KunmangaDownloadChapters(ctx, manga, func(status string, progress float64, actualChapter, currentDownload, totalFound int) {
-				fyne.Do(func() {
-					v.progressLabel.SetText(status)
-					v.progressBar.SetValue(progress)
-				})
-			})
-
-		case "hls":
-			err = sites.HlsDownloadChapters(ctx, manga, func(status string, progress float64, actualChapter, currentDownload, totalFound int) {
-				fyne.Do(func() {
-					v.progressLabel.SetText(status)
-					v.progressBar.SetValue(progress)
-				})
-			})
-
-		default:
-			fyne.Do(func() {
-				err := fmt.Errorf("download not supported for site: %s", manga.Site)
-				v.progressLabel.SetText(fmt.Sprintf("Error: %v", err))
-				dialog.ShowError(err, v.state.Window)
-			})
-			return
-		}
-
-		fyne.Do(func() {
-			if err != nil {
-				// Check if cancelled
-				if err == context.Canceled {
-					v.progressLabel.SetText("Download stopped by user")
-					dialog.ShowInformation("Download Stopped", "Download was cancelled", v.state.Window)
-					return
-				}
-
-				// Check if CF challenge
-				if cfErr, ok := cf.IscfChallenge(err); ok {
-					v.progressLabel.SetText("cf challenge detected")
-					onSuccess := func() {
-						v.progressLabel.SetText("cf data imported. Retrying download...")
-						go func() {
-							time.Sleep(1 * time.Second)
-							fyne.Do(func() {
-								v.progressLabel.SetText("Please click 'Update Chapters' again to retry")
-							})
-						}()
-					}
-					ShowcfDialog(v.state.Window, cfErr.URL, onSuccess)
-					return
-				}
-
-				// Regular error
-				v.progressLabel.SetText(fmt.Sprintf("Error: %v", err))
-				dialog.ShowError(err, v.state.Window)
-				return
-			}
-
-			// Success
-			if totalChapters > 0 {
-				v.progressLabel.SetText("Download complete.")
-				dialog.ShowInformation(
-					"Download Complete",
-					fmt.Sprintf("Successfully downloaded %d chapters for %s", totalChapters, manga.Title),
-					v.state.Window,
-				)
-			}
-
-			v.onMangaSelected(v.state.SelectedMangaID)
-		})
-	}()
+	dialog.ShowInformation(
+		"Added to Queue",
+		fmt.Sprintf("'%s' has been added to the download queue", manga.Title),
+		v.state.Window,
+	)
 }
 
-// Keep other methods unchanged...
 func (v *ChapterListView) onMangaSelected(id int) {
 	manga := v.state.GetSelectedManga()
 	if manga == nil {
@@ -279,7 +186,7 @@ func (v *ChapterListView) onMangaSelected(id int) {
 		return
 	}
 
-	v.updateButton.Enable()
+	v.queueDownloadButton.Enable()
 
 	if manga.Location == "" {
 		v.defaultChapterList()
@@ -335,7 +242,7 @@ func (v *ChapterListView) updateChapterList(chapters []string) {
 
 func (v *ChapterListView) showNoSelection() {
 	v.chapters = []string{}
-	v.updateButton.Disable()
+	v.queueDownloadButton.Disable()
 	v.contentContainer.Objects = []fyne.CanvasObject{
 		widget.NewLabel("Select a manga to view chapters"),
 	}
