@@ -16,13 +16,10 @@ import (
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/driver/desktop"
 
-	"kansho/config"
 	"kansho/ui"
 )
 
 func main() {
-	// setup logging
-	config.Logging()
 
 	// Create a new Fyne application instance
 	// This initializes the application and sets up the event loop

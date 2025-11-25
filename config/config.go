@@ -11,6 +11,11 @@ import (
 	"kansho/parser"
 )
 
+func init() {
+	// setup logging in init func to avoid stdout printing by package files that implement init functions with log.Printf
+	logging()
+}
+
 type Manga struct {
 	Manga []Bookmarks `json:"manga"`
 }
@@ -137,7 +142,7 @@ func verifyConfigFiles() (string, error) {
 }
 
 // logging configuration
-func Logging() error {
+func logging() error {
 	// local config dir
 	configDir, configDirErr := verifyConfigDirectory()
 	if configDirErr != nil {
