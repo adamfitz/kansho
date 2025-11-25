@@ -4,7 +4,8 @@ import (
 	"bytes"
 	"errors"
 	"image"
-	"image/jpeg"
+	"image/gif"
+	"image/png"
 	"io"
 	"log"
 	"net/http"
@@ -12,51 +13,112 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/chai2010/webp"
+	"github.com/disintegration/imaging"
+	"golang.org/x/image/webp"
 )
 
-// reads the magic bytes and returns the current image format string (like "jpeg", "png", "webp")
-func DetectImageFormat(data []byte) (string, error) {
+// detectImageFormat reads the magic bytes and returns the current image format string
+func detectImageFormat(data []byte) (string, error) {
 	if len(data) < 12 {
 		return "", errors.New("data too short to determine format")
 	}
 
-	if bytes.HasPrefix(data, []byte{0xFF, 0xD8, 0xFF}) {
+	if data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF {
 		return "jpeg", nil
 	}
-	if bytes.HasPrefix(data, []byte{0x89, 0x50, 0x4E, 0x47}) {
+	if data[0] == 0x89 && data[1] == 0x50 && data[2] == 0x4E && data[3] == 0x47 {
 		return "png", nil
 	}
-	if bytes.HasPrefix(data, []byte("GIF87a")) || bytes.HasPrefix(data, []byte("GIF89a")) {
+	if string(data[0:6]) == "GIF87a" || string(data[0:6]) == "GIF89a" {
 		return "gif", nil
 	}
-	if bytes.HasPrefix(data, []byte("RIFF")) && bytes.HasPrefix(data[8:], []byte("WEBP")) {
+	if string(data[0:4]) == "RIFF" && len(data) >= 12 && string(data[8:12]) == "WEBP" {
 		return "webp", nil
 	}
 
 	return "", errors.New("unknown image format")
 }
 
-// downloads an image from imageURL, converts to JPG if needed, and saves it inside targetDir, returns error if any
-func DownloadAndConvertToJPG(imageURL, targetDir string) error {
+// ConvertImageToJPEG converts image bytes to JPEG and saves to outputPath
+// If already JPEG, saves directly without re-encoding
+func ConvertImageToJPEG(imgBytes []byte, outputPath string) error {
+	if len(imgBytes) == 0 {
+		return errors.New("empty image data")
+	}
+
+	format, err := detectImageFormat(imgBytes)
+	if err != nil {
+		return err
+	}
+
+	// If already JPEG, just save raw bytes directly (no conversion needed)
+	if format == "jpeg" {
+		return saveRawBytes(imgBytes, outputPath)
+	}
+
+	// Decode the image based on format
+	var img image.Image
+	reader := bytes.NewReader(imgBytes)
+
+	switch format {
+	case "png":
+		img, err = png.Decode(reader)
+	case "gif":
+		img, err = gif.Decode(reader)
+	case "webp":
+		img, err = webp.Decode(reader)
+	default:
+		return errors.New("unsupported image format: " + format)
+	}
+
+	if err != nil {
+		return errors.New("failed to decode " + format + " image: " + err.Error())
+	}
+
+	// Save as JPEG with quality 90
+	return imaging.Save(img, outputPath, imaging.JPEGQuality(90))
+}
+
+// downloadAndConvertToJPGWithRetry downloads with retry logic
+func downloadAndConvertToJPGWithRetry(imageURL, targetDir string, maxRetries int) error {
+	var lastErr error
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			log.Printf("Retry attempt %d/%d for: %s", attempt, maxRetries, imageURL)
+		}
+
+		err := downloadAndConvertToJPG(imageURL, targetDir)
+		if err == nil {
+			return nil
+		}
+
+		lastErr = err
+		log.Printf("Download/conversion failed (attempt %d/%d): %v", attempt+1, maxRetries+1, err)
+	}
+
+	return lastErr
+}
+
+// downloadAndConvertToJPG downloads an image from imageURL, converts to JPG if needed, and saves it inside targetDir
+func downloadAndConvertToJPG(imageURL, targetDir string) error {
 	resp, err := http.Get(imageURL)
 	if err != nil {
-		log.Fatalf("failed to download image: %v", err)
+		return err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		log.Fatalf("bad response status: %s", resp.Status)
+		return errors.New("bad response status: " + resp.Status)
 	}
 
 	imgBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		log.Fatalf("failed to read image data: %v", err)
+		return err
 	}
 
-	format, err := DetectImageFormat(imgBytes)
-	if err != nil {
-		log.Fatalf("failed to detect image format: %v", err)
+	if len(imgBytes) == 0 {
+		return errors.New("empty response body")
 	}
 
 	base := filepath.Base(imageURL)
@@ -64,121 +126,74 @@ func DownloadAndConvertToJPG(imageURL, targetDir string) error {
 	name := strings.TrimSuffix(base, ext)
 
 	// pad the image filename to 3 digits
-	padedFileName := padFileName(name + ".jpg")
+	paddedFileName := padFileName(name + ".jpg")
 
-	// join teh padded dir / filename back together
-	outputFile := filepath.Join(targetDir, padedFileName)
+	// join the padded dir / filename back together
+	outputFile := filepath.Join(targetDir, paddedFileName)
 
-	// If already JPEG, just save raw bytes directly
-	if format == "jpeg" {
-		err = os.WriteFile(outputFile, imgBytes, 0644)
-		if err != nil {
-			log.Fatalf("failed to save jpeg image: %v", err)
-		}
-		return nil
-	}
-
-	// Decode image according to detected format
-	var img image.Image
-
-	switch format {
-	case "png", "gif":
-		img, _, err = image.Decode(bytes.NewReader(imgBytes))
-		if err != nil {
-			log.Fatalf("failed to decode image: %v", err)
-		}
-	case "webp":
-		img, err = webp.Decode(bytes.NewReader(imgBytes))
-		if err != nil {
-			log.Fatalf("failed to decode webp image: %v", err)
-		}
-	default:
-		log.Fatalf("unsupported image format: %s", format)
-	}
-
-	// Convert and save as JPG
-	outFile, err := os.Create(outputFile)
-	if err != nil {
-		log.Fatalf("failed to create output file: %v", err)
-	}
-	defer outFile.Close()
-
-	opts := jpeg.Options{Quality: 90}
-	err = jpeg.Encode(outFile, img, &opts)
-	if err != nil {
-		log.Fatalf("failed to encode jpeg: %v", err)
-	}
-
-	return nil
+	// Convert and save
+	return ConvertImageToJPEG(imgBytes, outputFile)
 }
 
-// need separate function to also take the filename for some sites eg: xbato
-func DownloadConvertToJPGRename(filename, imageURL, targetDir string) error {
+// DownloadAndConvertToJPG is the public wrapper with retry logic
+func DownloadAndConvertToJPG(imageURL, targetDir string) error {
+	return downloadAndConvertToJPGWithRetry(imageURL, targetDir, 3)
+}
+
+// downloadConvertToJPGRename is the internal function without retry
+func downloadConvertToJPGRename(filename, imageURL, targetDir string) error {
 	resp, err := http.Get(imageURL)
 	if err != nil {
-		log.Fatalf("failed to download image: %v", err)
+		return err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		log.Fatalf("bad response status: %s", resp.Status)
+		return errors.New("bad response status: " + resp.Status)
 	}
 
 	imgBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		log.Fatalf("failed to read image data: %v", err)
+		return err
 	}
 
-	format, err := DetectImageFormat(imgBytes)
-	if err != nil {
-		log.Fatalf("failed to detect image format: %v", err)
+	if len(imgBytes) == 0 {
+		return errors.New("empty response body")
 	}
 
 	// pad the image filename to 3 digits
-	padedFileName := padFileName(filename + ".jpg")
+	paddedFileName := padFileName(filename + ".jpg")
 
-	// join teh padded dir / filename back together
-	outputFile := filepath.Join(targetDir, padedFileName)
+	// join the padded dir / filename back together
+	outputFile := filepath.Join(targetDir, paddedFileName)
 
-	// If already JPEG, just save raw bytes directly
-	if format == "jpeg" {
-		err = os.WriteFile(outputFile, imgBytes, 0644)
-		if err != nil {
-			log.Fatalf("failed to save jpeg image: %v", err)
+	// Convert and save
+	return ConvertImageToJPEG(imgBytes, outputFile)
+}
+
+// DownloadConvertToJPGRename is the public wrapper with retry logic
+func DownloadConvertToJPGRename(filename, imageURL, targetDir string) error {
+	var lastErr error
+	maxRetries := 3
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			log.Printf("Retry attempt %d/%d for: %s", attempt, maxRetries, imageURL)
 		}
-		return nil
-	}
 
-	// Decode image according to detected format
-	var img image.Image
-
-	switch format {
-	case "png", "gif":
-		img, _, err = image.Decode(bytes.NewReader(imgBytes))
-		if err != nil {
-			log.Fatalf("failed to decode image: %v", err)
+		err := downloadConvertToJPGRename(filename, imageURL, targetDir)
+		if err == nil {
+			return nil
 		}
-	case "webp":
-		img, err = webp.Decode(bytes.NewReader(imgBytes))
-		if err != nil {
-			log.Fatalf("failed to decode webp image: %v", err)
-		}
-	default:
-		log.Fatalf("unsupported image format: %s", format)
+
+		lastErr = err
+		log.Printf("Download/conversion failed (attempt %d/%d): %v", attempt+1, maxRetries+1, err)
 	}
 
-	// Convert and save as JPG
-	outFile, err := os.Create(outputFile)
-	if err != nil {
-		log.Fatalf("failed to create output file: %v", err)
-	}
-	defer outFile.Close()
+	return lastErr
+}
 
-	opts := jpeg.Options{Quality: 90}
-	err = jpeg.Encode(outFile, img, &opts)
-	if err != nil {
-		log.Fatalf("failed to encode jpeg: %v", err)
-	}
-
-	return nil
+// saveRawBytes saves bytes directly to file without conversion
+func saveRawBytes(data []byte, outputPath string) error {
+	return os.WriteFile(outputPath, data, 0644)
 }
