@@ -1,11 +1,8 @@
 package sites
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"image"
-	"image/jpeg"
 	"io"
 	"log"
 	"net/http"
@@ -22,7 +19,6 @@ import (
 	"kansho/config"
 	"kansho/parser"
 
-	"github.com/chai2010/webp"
 	"github.com/gocolly/colly"
 	"golang.org/x/net/publicsuffix"
 )
@@ -551,53 +547,13 @@ func downloadKunmangaImage(client *http.Client, imgURL, targetDir, filename, ref
 		return fmt.Errorf("failed to read image data: %w", err)
 	}
 
-	// Detect format
-	format, err := parser.DetectImageFormat(imgBytes)
-	if err != nil {
-		return fmt.Errorf("failed to detect image format: %w", err)
-	}
-
 	// Pad filename to 3 digits
 	paddedFilename := padImageFilename(filename)
 	outputPath := filepath.Join(targetDir, paddedFilename)
 
-	// If already JPEG, save directly
-	if format == "jpeg" {
-		err = os.WriteFile(outputPath, imgBytes, 0644)
-		if err != nil {
-			return fmt.Errorf("failed to save jpeg image: %w", err)
-		}
-		return nil
-	}
-
-	// Decode and convert to JPEG
-	var img image.Image
-	switch format {
-	case "png", "gif":
-		img, _, err = image.Decode(bytes.NewReader(imgBytes))
-		if err != nil {
-			return fmt.Errorf("failed to decode image: %w", err)
-		}
-	case "webp":
-		img, err = webp.Decode(bytes.NewReader(imgBytes))
-		if err != nil {
-			return fmt.Errorf("failed to decode webp image: %w", err)
-		}
-	default:
-		return fmt.Errorf("unsupported image format: %s", format)
-	}
-
-	// Save as JPEG
-	outFile, err := os.Create(outputPath)
-	if err != nil {
-		return fmt.Errorf("failed to create output file: %w", err)
-	}
-	defer outFile.Close()
-
-	opts := jpeg.Options{Quality: 90}
-	err = jpeg.Encode(outFile, img, &opts)
-	if err != nil {
-		return fmt.Errorf("failed to encode jpeg: %w", err)
+	// Convert and save using shared helper
+	if err := parser.ConvertImageToJPEG(imgBytes, outputPath); err != nil {
+		return fmt.Errorf("failed to convert image: %w", err)
 	}
 
 	return nil

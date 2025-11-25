@@ -6,11 +6,12 @@ require (
 	fyne.io/fyne/v2 v2.7.0
 	github.com/PuerkitoBio/goquery v1.10.3
 	github.com/andybalholm/brotli v1.2.0
-	github.com/chai2010/webp v1.4.0
 	github.com/chromedp/cdproto v0.0.0-20250803210736-d308e07a266d
 	github.com/chromedp/chromedp v0.14.2
+	github.com/disintegration/imaging v1.6.2
 	github.com/gocolly/colly v1.2.0
 	golang.design/x/clipboard v0.7.1
+	golang.org/x/image v0.28.0
 	golang.org/x/net v0.41.0
 )
 
@@ -58,7 +59,6 @@ require (
 	github.com/temoto/robotstxt v1.1.2 // indirect
 	github.com/yuin/goldmark v1.7.8 // indirect
 	golang.org/x/exp/shiny v0.0.0-20250606033433-dcc06ee1d476 // indirect
-	golang.org/x/image v0.28.0 // indirect
 	golang.org/x/mobile v0.0.0-20250606033058-a2a15c67f36f // indirect
 	golang.org/x/sys v0.35.0 // indirect
 	golang.org/x/text v0.26.0 // indirect
