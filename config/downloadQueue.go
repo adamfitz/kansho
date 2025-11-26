@@ -5,13 +5,15 @@ import (
 	"fmt"
 	"log"
 	"sync"
+
+	"kansho/cf"
 )
 
 // DownloadTask represents a single manga download task
 type DownloadTask struct {
 	ID            string // Unique ID for this task
 	Manga         *Bookmarks
-	Status        string  // "queued", "downloading", "completed", "cancelled", "failed"
+	Status        string  // "queued", "downloading", "completed", "cancelled", "failed", "waiting_cf"
 	Progress      float64 // 0.0 to 1.0
 	StatusMessage string
 	CancelFunc    context.CancelFunc
@@ -102,6 +104,34 @@ func (q *DownloadQueue) AddTask(manga *Bookmarks) (*DownloadTask, error) {
 	return task, nil
 }
 
+// RetryTask retries a task that failed due to CF challenge
+func (q *DownloadQueue) RetryTask(id string) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	for _, task := range q.tasks {
+		if task.ID == id {
+			if task.Status == "waiting_cf" || task.Status == "failed" {
+				log.Printf("[Queue] Retrying task: %s", task.Manga.Title)
+				task.Status = "queued"
+				task.StatusMessage = "Retrying..."
+				task.Error = nil
+
+				if q.onTaskUpdated != nil {
+					q.onTaskUpdated(task)
+				}
+
+				// Restart queue processing
+				go q.processQueue()
+				return nil
+			}
+			return fmt.Errorf("task cannot be retried (status: %s)", task.Status)
+		}
+	}
+
+	return fmt.Errorf("task not found: %s", id)
+}
+
 // GetTasks returns a copy of all tasks
 func (q *DownloadQueue) GetTasks() []*DownloadTask {
 	q.mu.RLock()
@@ -190,7 +220,7 @@ func (q *DownloadQueue) RemoveCompletedTasks() {
 
 	newTasks := make([]*DownloadTask, 0)
 	for _, task := range q.tasks {
-		if task.Status == "queued" || task.Status == "downloading" {
+		if task.Status == "queued" || task.Status == "downloading" || task.Status == "waiting_cf" {
 			newTasks = append(newTasks, task)
 		} else {
 			if q.onTaskRemoved != nil {
@@ -301,6 +331,21 @@ func (q *DownloadQueue) executeTask(task *DownloadTask) {
 			task.Status = "cancelled"
 			task.StatusMessage = "Cancelled by user"
 		} else {
+			// Check if this is a Cloudflare challenge error
+			if cfErr, ok := err.(*cf.CfChallengeError); ok {
+				task.Status = "waiting_cf"
+				task.StatusMessage = fmt.Sprintf("Cloudflare challenge detected - browser opened")
+				task.Error = cfErr
+
+				log.Printf("[Queue] CF challenge detected for %s (URL: %s)", task.Manga.Title, cfErr.URL)
+
+				q.mu.Unlock()
+				if q.onTaskUpdated != nil {
+					q.onTaskUpdated(task)
+				}
+				return
+			}
+
 			task.Status = "failed"
 			task.StatusMessage = fmt.Sprintf("Error: %v", err)
 			task.Error = err
@@ -319,11 +364,3 @@ func (q *DownloadQueue) executeTask(task *DownloadTask) {
 
 	log.Printf("[Queue] Task completed: %s (status: %s)", task.Manga.Title, task.Status)
 }
-
-// // ExecuteSiteDownload is a dispatcher function that calls the appropriate site download function
-// // This should be implemented to call the correct site-specific download function
-// func ExecuteSiteDownload(ctx context.Context, manga *Bookmarks, progressCallback func(string, float64, int, int, int)) error {
-// 	// This will be implemented in a separate file that imports the sites package
-// 	// For now, return an error
-// 	return fmt.Errorf("ExecuteSiteDownload must be implemented in downloadDispatcher.go")
-// }
