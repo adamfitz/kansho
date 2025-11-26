@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 
+	"kansho/cf"
 	"kansho/config"
 
 	"fyne.io/fyne/v2"
@@ -17,45 +18,48 @@ type DownloadQueueView struct {
 	taskList          *widget.List
 	contentContainer  *fyne.Container
 	cancelButton      *widget.Button
+	retryButton       *widget.Button
 	cancelAllButton   *widget.Button
 	clearButton       *widget.Button
 	chapterListButton *widget.Button
 	state             *KanshoAppState
 	tasks             []*config.DownloadTask
 	selectedTaskID    string
-	onViewToggle      func() // Callback to toggle back to chapter list
+	onViewToggle      func()
+	cfDialogShown     map[string]bool
 }
 
 func NewDownloadQueueView(state *KanshoAppState) *DownloadQueueView {
 	view := &DownloadQueueView{
-		state: state,
-		tasks: []*config.DownloadTask{},
+		state:         state,
+		tasks:         []*config.DownloadTask{},
+		cfDialogShown: make(map[string]bool),
 	}
 
-	// Cancel Download button (initially disabled)
 	view.cancelButton = widget.NewButton("Cancel Download", func() {
 		view.onCancelDownload()
 	})
 	view.cancelButton.Disable()
 
-	// Cancel All button
+	view.retryButton = widget.NewButton("Retry", func() {
+		view.onRetryDownload()
+	})
+	view.retryButton.Disable()
+
 	view.cancelAllButton = widget.NewButton("Cancel All", func() {
 		view.onCancelAll()
 	})
 
-	// Clear Completed button
 	view.clearButton = widget.NewButton("Clear Completed", func() {
 		view.onClearCompleted()
 	})
 
-	// Chapter List button (to toggle back)
 	view.chapterListButton = widget.NewButton("Chapter List", func() {
 		if view.onViewToggle != nil {
 			view.onViewToggle()
 		}
 	})
 
-	// Create task list
 	view.taskList = widget.NewList(
 		func() int {
 			return len(view.tasks)
@@ -89,29 +93,27 @@ func NewDownloadQueueView(state *KanshoAppState) *DownloadQueueView {
 			statusLabel := vbox.Objects[1].(*widget.Label)
 			progressBar := vbox.Objects[2].(*widget.ProgressBar)
 
-			// Format title with status indicator
 			statusIcon := view.getStatusIcon(task.Status)
 			titleLabel.SetText(fmt.Sprintf("%s %s", statusIcon, task.Manga.Title))
-
-			// Set status message
 			statusLabel.SetText(task.StatusMessage)
-
-			// Set progress
 			progressBar.SetValue(task.Progress)
 		},
 	)
 
-	// Handle selection
 	view.taskList.OnSelected = func(id widget.ListItemID) {
 		if id < len(view.tasks) {
 			view.selectedTaskID = view.tasks[id].ID
 			task := view.tasks[id]
 
-			// Enable cancel button only if task is queued or downloading
 			if task.Status == "queued" || task.Status == "downloading" {
 				view.cancelButton.Enable()
+				view.retryButton.Disable()
+			} else if task.Status == "waiting_cf" || task.Status == "failed" {
+				view.cancelButton.Disable()
+				view.retryButton.Enable()
 			} else {
 				view.cancelButton.Disable()
+				view.retryButton.Disable()
 			}
 		}
 	}
@@ -119,6 +121,7 @@ func NewDownloadQueueView(state *KanshoAppState) *DownloadQueueView {
 	view.taskList.OnUnselected = func(id widget.ListItemID) {
 		view.selectedTaskID = ""
 		view.cancelButton.Disable()
+		view.retryButton.Disable()
 	}
 
 	view.contentContainer = container.NewStack(
@@ -127,6 +130,7 @@ func NewDownloadQueueView(state *KanshoAppState) *DownloadQueueView {
 
 	buttonContainer := container.NewHBox(
 		view.cancelButton,
+		view.retryButton,
 		view.cancelAllButton,
 		view.clearButton,
 		view.chapterListButton,
@@ -148,7 +152,6 @@ func NewDownloadQueueView(state *KanshoAppState) *DownloadQueueView {
 
 	view.Card = NewCard(cardContent)
 
-	// Register queue callbacks
 	queue := config.GetDownloadQueue()
 	queue.SetCallbacks(
 		func(task *config.DownloadTask) {
@@ -158,11 +161,16 @@ func NewDownloadQueueView(state *KanshoAppState) *DownloadQueueView {
 		},
 		func(task *config.DownloadTask) {
 			fyne.Do(func() {
+				if task.Status == "waiting_cf" && !view.cfDialogShown[task.ID] {
+					view.showCFImportDialog(task)
+					view.cfDialogShown[task.ID] = true
+				}
 				view.refreshTaskList()
 			})
 		},
 		func(taskID string) {
 			fyne.Do(func() {
+				delete(view.cfDialogShown, taskID)
 				view.refreshTaskList()
 			})
 		},
@@ -173,13 +181,10 @@ func NewDownloadQueueView(state *KanshoAppState) *DownloadQueueView {
 		},
 	)
 
-	// Initial load
 	view.refreshTaskList()
-
 	return view
 }
 
-// SetViewToggleCallback sets the callback for the Chapter List button
 func (v *DownloadQueueView) SetViewToggleCallback(callback func()) {
 	v.onViewToggle = callback
 }
@@ -190,6 +195,8 @@ func (v *DownloadQueueView) getStatusIcon(status string) string {
 		return "⏳"
 	case "downloading":
 		return "⬇️"
+	case "waiting_cf":
+		return "🔒"
 	case "completed":
 		return "✅"
 	case "cancelled":
@@ -199,6 +206,69 @@ func (v *DownloadQueueView) getStatusIcon(status string) string {
 	default:
 		return "❓"
 	}
+}
+
+func (v *DownloadQueueView) showCFImportDialog(task *config.DownloadTask) {
+	cfErr, ok := task.Error.(*cf.CfChallengeError)
+	if !ok {
+		return
+	}
+
+	instructionLabel := widget.NewLabel(fmt.Sprintf(
+		"Cloudflare challenge detected for '%s'.\n\n"+
+			"A browser has been opened. Please:\n"+
+			"1. Complete the Cloudflare challenge\n"+
+			"2. Use the browser extension to copy bypass data to clipboard\n"+
+			"3. Click 'Import from Clipboard' below",
+		task.Manga.Title,
+	))
+	instructionLabel.Wrapping = fyne.TextWrapWord
+
+	urlLabel := widget.NewLabel(fmt.Sprintf("Challenge URL: %s", cfErr.URL))
+	urlLabel.Wrapping = fyne.TextWrapWord
+
+	content := container.NewVBox(
+		instructionLabel,
+		widget.NewSeparator(),
+		urlLabel,
+	)
+
+	importDialog := dialog.NewCustom("Cloudflare Challenge Required", "Cancel", content, v.state.Window)
+
+	importBtn := widget.NewButton("Import from Clipboard", func() {
+		// Import from clipboard
+		domain, err := cf.ImportFromClipboard()
+		if err != nil {
+			dialog.ShowError(fmt.Errorf("failed to import CF data: %w", err), v.state.Window)
+			return
+		}
+
+		log.Printf("[UI] Successfully imported CF data for domain: %s", domain)
+		importDialog.Hide()
+
+		dialog.ShowInformation(
+			"Import Successful",
+			fmt.Sprintf("Cloudflare bypass data imported!\n\nRetrying download for '%s'...", task.Manga.Title),
+			v.state.Window,
+		)
+
+		queue := config.GetDownloadQueue()
+		delete(v.cfDialogShown, task.ID)
+		if err := queue.RetryTask(task.ID); err != nil {
+			dialog.ShowError(fmt.Errorf("failed to retry: %w", err), v.state.Window)
+		}
+	})
+
+	importDialog.SetButtons([]fyne.CanvasObject{
+		importBtn,
+		widget.NewButton("Cancel", func() {
+			importDialog.Hide()
+			queue := config.GetDownloadQueue()
+			queue.CancelTask(task.ID)
+		}),
+	})
+
+	importDialog.Show()
 }
 
 func (v *DownloadQueueView) onCancelDownload() {
@@ -216,6 +286,28 @@ func (v *DownloadQueueView) onCancelDownload() {
 	log.Printf("[UI] Cancelled task: %s", v.selectedTaskID)
 	v.selectedTaskID = ""
 	v.cancelButton.Disable()
+	v.retryButton.Disable()
+	v.refreshTaskList()
+}
+
+func (v *DownloadQueueView) onRetryDownload() {
+	if v.selectedTaskID == "" {
+		return
+	}
+
+	delete(v.cfDialogShown, v.selectedTaskID)
+
+	queue := config.GetDownloadQueue()
+	err := queue.RetryTask(v.selectedTaskID)
+	if err != nil {
+		dialog.ShowError(err, v.state.Window)
+		return
+	}
+
+	log.Printf("[UI] Retrying task: %s", v.selectedTaskID)
+	v.selectedTaskID = ""
+	v.cancelButton.Disable()
+	v.retryButton.Disable()
 	v.refreshTaskList()
 }
 
@@ -239,6 +331,19 @@ func (v *DownloadQueueView) onClearCompleted() {
 	queue := config.GetDownloadQueue()
 	queue.RemoveCompletedTasks()
 	log.Println("[UI] Cleared completed tasks")
+
+	currentTasks := queue.GetTasks()
+	currentIDs := make(map[string]bool)
+	for _, task := range currentTasks {
+		currentIDs[task.ID] = true
+	}
+
+	for id := range v.cfDialogShown {
+		if !currentIDs[id] {
+			delete(v.cfDialogShown, id)
+		}
+	}
+
 	v.refreshTaskList()
 }
 
@@ -256,7 +361,6 @@ func (v *DownloadQueueView) refreshTaskList() {
 
 	v.contentContainer.Refresh()
 
-	// Refresh the list if it's being displayed
 	if len(v.tasks) > 0 {
 		v.taskList.Refresh()
 	}
