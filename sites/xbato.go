@@ -45,7 +45,6 @@ func XbatoDownloadChapters(ctx context.Context, manga *config.Bookmarks, progres
 	}
 
 	// Ensure required fields are present
-	// Note: Xbato uses shortname instead of URL for chapter lookups
 	if manga.Shortname == "" {
 		return fmt.Errorf("manga shortname is empty")
 	}
@@ -59,23 +58,21 @@ func XbatoDownloadChapters(ctx context.Context, manga *config.Bookmarks, progres
 	}
 
 	// Step 1: Build the manga URL from shortname
-	// Xbato URL pattern: https://xbato.com/series/<shortname>
 	mangaUrl := fmt.Sprintf("https://xbato.com/series/%s", manga.Shortname)
 
-	// Get all chapter entries (format: "Chapter X|URL") from the manga's main page
+	// Get all chapter entries with retry logic
 	chapterEntries, err := xbatoChapterUrls(mangaUrl)
 	if err != nil {
 		return err
 	}
 
-	// Log the number of chapters found
 	log.Printf("<%s> Found %d total chapters on site", manga.Site, len(chapterEntries))
 
-	// Step 2: Build chapter map (key = "chXXX.cbz", value = URL)
+	// Step 2: Build chapter map
 	chapterMap := xbatoChapterMap(chapterEntries)
 	log.Printf("<%s> Mapped %d chapters to filenames", manga.Site, len(chapterMap))
 
-	// Step 3: Get list of already downloaded chapters from manga's location directory
+	// Step 3: Get list of already downloaded chapters
 	downloadedChapters, err := parser.LocalChapterList(manga.Location)
 	if err != nil {
 		return fmt.Errorf("failed to list files in %s: %v", manga.Location, err)
@@ -85,7 +82,7 @@ func XbatoDownloadChapters(ctx context.Context, manga *config.Bookmarks, progres
 	// Store total chapters BEFORE filtering
 	totalChaptersFound := len(chapterMap)
 
-	// Step 4: Remove already-downloaded chapters from the map
+	// Step 4: Remove already-downloaded chapters
 	for _, chapter := range downloadedChapters {
 		delete(chapterMap, chapter)
 	}
@@ -104,15 +101,14 @@ func XbatoDownloadChapters(ctx context.Context, manga *config.Bookmarks, progres
 		progressCallback(fmt.Sprintf("Found %d new chapters to download", newChaptersToDownload), 0, 0, 0, totalChaptersFound)
 	}
 
-	// Step 5: Sort chapter keys alphabetically for ordered downloading
+	// Step 5: Sort chapter keys
 	sortedChapters, sortError := parser.SortKeys(chapterMap)
 	if sortError != nil {
 		return fmt.Errorf("failed to sort chapter map keys: %v", sortError)
 	}
 
-	// Step 6: Iterate over sorted chapter keys and download each one
+	// Step 6: Download each chapter with retry logic
 	for idx, cbzName := range sortedChapters {
-
 		// Check for cancellation
 		select {
 		case <-ctx.Done():
@@ -122,7 +118,7 @@ func XbatoDownloadChapters(ctx context.Context, manga *config.Bookmarks, progres
 
 		chapterURL := chapterMap[cbzName]
 
-		// Extract the actual chapter number from the filename
+		// Extract the actual chapter number
 		actualChapterNum := extractChapterNumber(cbzName)
 
 		currentDownload := idx + 1
@@ -140,72 +136,16 @@ func XbatoDownloadChapters(ctx context.Context, manga *config.Bookmarks, progres
 
 		log.Printf("[%s:%s] Starting download from: %s", manga.Shortname, cbzName, chapterURL)
 
-		// Create a NEW Colly collector for this chapter
-		c := colly.NewCollector(
-			colly.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"),
-		)
-
-		log.Printf("[%s:%s] Applying cf bypass for chapter page", manga.Shortname, cbzName)
-
-		if applyErr := cf.ApplyToCollector(c, chapterURL); applyErr != nil {
-			log.Printf("[%s:%s] WARNING: Failed to apply bypass data: %v", manga.Shortname, cbzName, applyErr)
-			log.Printf("[%s:%s] Chapter download may fail due to cf protection", manga.Shortname, cbzName)
-		} else {
-			log.Printf("[%s:%s] ✓ cf bypass applied to chapter collector", manga.Shortname, cbzName)
-		}
-
-		// Scrape image URLs from the chapter page
-		imgURLs := make(map[string]string)
-		var scrapeErr error
-
-		c.OnResponse(func(r *colly.Response) {
-			if decompressed, err := cf.DecompressResponse(r, fmt.Sprintf("[%s]", cbzName)); err != nil {
-				log.Printf("[%s:%s] ERROR: Failed to decompress: %v", manga.Shortname, cbzName, err)
-				return
-			} else if decompressed {
-				log.Printf("[%s:%s] ✓ Chapter page decompressed", manga.Shortname, cbzName)
-			}
-
-			log.Printf("[%s:%s] Chapter page response: status=%d, size=%d bytes",
-				manga.Shortname, cbzName, r.StatusCode, len(r.Body))
-
-			imgURLs, scrapeErr = extractImageUrlsFromResponse(r.Body)
-			if scrapeErr != nil {
-				log.Printf("[%s:%s] ERROR parsing image URLs: %v", manga.Shortname, cbzName, scrapeErr)
-			} else {
-				log.Printf("[%s:%s] Found %d images to download", manga.Shortname, cbzName, len(imgURLs))
-			}
-		})
-
-		c.OnError(func(r *colly.Response, err error) {
-			log.Printf("[%s:%s] ERROR fetching chapter page %s: %v (status: %d)",
-				manga.Shortname, cbzName, chapterURL, err, r.StatusCode)
-
-			isCF, cfInfo, _ := cf.DetectFromColly(r)
-			if isCF {
-				log.Printf("[%s:%s] ⚠️ cf challenge detected on chapter page!", manga.Shortname, cbzName)
-				log.Printf("[%s:%s] Indicators: %v", manga.Shortname, cbzName, cfInfo.Indicators)
-				log.Printf("[%s:%s] This chapter may fail to download", manga.Shortname, cbzName)
-			}
-			scrapeErr = err
-		})
-
-		err = c.Visit(chapterURL)
+		// Download chapter with retry logic
+		imgURLs, err := downloadXbatoChapterWithRetry(chapterURL, manga, cbzName)
 		if err != nil {
-			log.Printf("[%s:%s] Failed to visit %s: %v", manga.Shortname, cbzName, chapterURL, err)
+			log.Printf("[%s:%s] ❌ Failed to download chapter after retries: %v", manga.Shortname, cbzName, err)
 			continue
 		}
 
-		if scrapeErr != nil {
-			log.Printf("[%s:%s] Scrape error: %v", manga.Shortname, cbzName, scrapeErr)
-			continue
-		}
+		log.Printf("[%s:%s] ✓ Successfully fetched %d image URLs", manga.Shortname, cbzName, len(imgURLs))
 
-		if len(imgURLs) == 0 {
-			log.Printf("[%s:%s] ⚠️ WARNING: No images found for chapter", manga.Shortname, cbzName)
-			continue
-		}
-
+		// Create temp directory
 		chapterDir := filepath.Join("/tmp", manga.Shortname, strings.TrimSuffix(cbzName, ".cbz"))
 		err = os.MkdirAll(chapterDir, 0755)
 		if err != nil {
@@ -223,6 +163,7 @@ func XbatoDownloadChapters(ctx context.Context, manga *config.Bookmarks, progres
 			continue
 		}
 
+		// Download images
 		for _, imgIdx := range sortedImgIndices {
 			imgURL := imgURLs[imgIdx]
 
@@ -319,17 +260,79 @@ func XbatoDownloadChapters(ctx context.Context, manga *config.Bookmarks, progres
 //
 // The function uses Colly to scrape links with class "chapt" from the manga page.
 // Returns format: "Chapter 1|https://xbato.com/chapter/3890889"
+// xbatoChapterUrls retrieves all chapter URLs from an Xbato manga page with retry logic.
+// Retries up to 5 times with increasing timeout (10s, 15s, 20s, 25s, 30s)
 func xbatoChapterUrls(url string) ([]string, error) {
+	maxRetries := 5
+	baseTimeout := 10 * time.Second
+
+	var lastErr error
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		timeout := baseTimeout + (time.Duration(attempt) * 5 * time.Second)
+
+		if attempt > 0 {
+			log.Printf("<xbato> Retry attempt %d/%d with timeout %v for: %s",
+				attempt+1, maxRetries, timeout, url)
+		} else {
+			log.Printf("<xbato> Fetching chapter list from: %s (timeout: %v)", url, timeout)
+		}
+
+		chapters, err := xbatoChapterUrlsAttempt(url, timeout)
+
+		// Success!
+		if err == nil {
+			if attempt > 0 {
+				log.Printf("<xbato> ✓ Success after %d retries", attempt+1)
+			}
+			return chapters, nil
+		}
+
+		// Check if it's a timeout error
+		isTimeout := strings.Contains(err.Error(), "context deadline exceeded") ||
+			strings.Contains(err.Error(), "Client.Timeout exceeded")
+
+		// If it's a CF challenge, don't retry - return immediately
+		if _, isCfErr := err.(*cf.CfChallengeError); isCfErr {
+			log.Printf("<xbato> CF challenge detected, not retrying")
+			return nil, err
+		}
+
+		lastErr = err
+
+		// If it's not a timeout, don't retry
+		if !isTimeout {
+			log.Printf("<xbato> Non-timeout error, not retrying: %v", err)
+			return nil, err
+		}
+
+		// Log the timeout and prepare to retry
+		log.Printf("<xbato> ⚠️ Timeout on attempt %d/%d: %v", attempt+1, maxRetries, err)
+
+		// Don't sleep on the last attempt
+		if attempt < maxRetries-1 {
+			sleepTime := 2 * time.Second
+			log.Printf("<xbato> Waiting %v before retry...", sleepTime)
+			time.Sleep(sleepTime)
+		}
+	}
+
+	log.Printf("<xbato> ❌ Failed after %d attempts with timeout errors", maxRetries)
+	return nil, fmt.Errorf("failed after %d retries: %w", maxRetries, lastErr)
+}
+
+// xbatoChapterUrlsAttempt performs a single attempt to fetch chapter URLs with the given timeout
+func xbatoChapterUrlsAttempt(url string, timeout time.Duration) ([]string, error) {
 	var chapters []string
 
-	log.Printf("<xbato> Fetching chapter list from: %s", url)
-
-	// Create a new Colly collector with a realistic User-Agent
+	// Create a new Colly collector with custom timeout
 	c := colly.NewCollector(
 		colly.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"),
-		// IMPORTANT: Allow URL revisiting in case of redirects
 		colly.AllowURLRevisit(),
 	)
+
+	// Set custom timeout
+	c.SetRequestTimeout(timeout)
 
 	// Check for stored cf data
 	parsedURL, _ := url2.Parse(url)
@@ -348,7 +351,7 @@ func xbatoChapterUrls(url string) ([]string, error) {
 			// Check expiration
 			if bypassData.CfClearanceStruct.Expires != nil && time.Now().After(*bypassData.CfClearanceStruct.Expires) {
 				log.Printf("<xbato> ⚠️ cf_clearance has EXPIRED!")
-				hasStoredData = false // Force browser challenge
+				hasStoredData = false
 			}
 		}
 
@@ -386,38 +389,19 @@ func xbatoChapterUrls(url string) ([]string, error) {
 			cfInfo = info
 			log.Printf("<xbato> ⚠️ cf challenge detected despite using stored cookie!")
 			log.Printf("<xbato> Indicators that triggered detection: %v", info.Indicators)
-			log.Printf("<xbato> StatusCode: %d", info.StatusCode)
-			log.Printf("<xbato> RayID: %s", info.RayID)
-			log.Printf("<xbato> MetaRedirect: %s", info.MetaRedirect)
-			log.Printf("<xbato> FormAction: %s", info.FormAction)
-			log.Printf("<xbato> IsBIC: %v", info.IsBIC)
-			log.Printf("<xbato> Turnstile: %v", info.Turnstile)
 		}
-
-		// DEBUG: Check first 500 chars of body
-		bodyPreview := string(r.Body)
-		if len(bodyPreview) > 500 {
-			bodyPreview = bodyPreview[:500]
-		}
-		log.Printf("<xbato> DEBUG: Body preview: %q", bodyPreview)
 	})
 
 	// Xbato stores chapter links in <a> tags with class "chapt"
-	// We need to capture both the link text (chapter number) and the URL
 	c.OnHTML("a.chapt", func(e *colly.HTMLElement) {
 		href := e.Attr("href")
 		chapterText := strings.TrimSpace(e.Text)
 
 		if href != "" && strings.HasPrefix(href, "/chapter/") {
-			// Build full URL using AbsoluteURL to handle relative paths
 			fullURL := e.Request.AbsoluteURL(href)
-
-			// Store as "chapterText|URL" so we can parse the chapter number later
 			chapterEntry := fmt.Sprintf("%s|%s", chapterText, fullURL)
 			chapters = append(chapters, chapterEntry)
 			log.Printf("<xbato> Added chapter entry: '%s' -> %s", chapterText, fullURL)
-		} else if href != "" {
-			log.Printf("<xbato> WARNING: Skipped href that doesn't start with /chapter/: '%s'", href)
 		}
 	})
 
@@ -445,8 +429,6 @@ func xbatoChapterUrls(url string) ([]string, error) {
 		if hasStoredData {
 			log.Printf("<xbato> ⚠️ Stored cf_clearance failed validation - cookie is expired/invalid")
 			log.Printf("<xbato> Deleting invalid data and requesting fresh challenge")
-
-			// Delete the invalid stored data
 			cf.DeleteDomain(domain)
 		}
 
@@ -468,12 +450,14 @@ func xbatoChapterUrls(url string) ([]string, error) {
 		return nil, fmt.Errorf("scrape error: %w", scrapeErr)
 	}
 
-	// Log final result
+	if visitErr != nil {
+		return nil, visitErr
+	}
+
 	log.Printf("<xbato> Successfully scraped %d chapter URLs", len(chapters))
 
-	// If no chapters found, log a warning
 	if len(chapters) == 0 {
-		log.Printf("<xbato> WARNING: No chapters found at %s - check if the HTML selector 'a.chapt' is correct", url)
+		log.Printf("<xbato> WARNING: No chapters found at %s", url)
 	}
 
 	return chapters, nil
@@ -586,4 +570,125 @@ func extractImageUrlsFromResponse(body []byte) (map[string]string, error) {
 	}
 
 	return urlMap, nil
+}
+
+// downloadXbatoChapterWithRetry attempts to download a single chapter with retries
+func downloadXbatoChapterWithRetry(chapterURL string, manga *config.Bookmarks, cbzName string) (map[string]string, error) {
+	maxRetries := 5
+	baseTimeout := 10 * time.Second
+
+	var lastErr error
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		timeout := baseTimeout + (time.Duration(attempt) * 5 * time.Second)
+
+		if attempt > 0 {
+			log.Printf("[%s:%s] Retry attempt %d/%d with timeout %v",
+				manga.Shortname, cbzName, attempt+1, maxRetries, timeout)
+		}
+
+		imgURLs, err := downloadXbatoChapterAttempt(chapterURL, manga, cbzName, timeout)
+
+		// Success!
+		if err == nil {
+			if attempt > 0 {
+				log.Printf("[%s:%s] ✓ Success after %d retries", manga.Shortname, cbzName, attempt+1)
+			}
+			return imgURLs, nil
+		}
+
+		// Check if it's a timeout error
+		isTimeout := strings.Contains(err.Error(), "context deadline exceeded") ||
+			strings.Contains(err.Error(), "Client.Timeout exceeded")
+
+		lastErr = err
+
+		// If it's not a timeout, don't retry
+		if !isTimeout {
+			log.Printf("[%s:%s] Non-timeout error, not retrying: %v", manga.Shortname, cbzName, err)
+			return nil, err
+		}
+
+		// Log the timeout and prepare to retry
+		log.Printf("[%s:%s] ⚠️ Timeout on attempt %d/%d: %v",
+			manga.Shortname, cbzName, attempt+1, maxRetries, err)
+
+		// Don't sleep on the last attempt
+		if attempt < maxRetries-1 {
+			sleepTime := 2 * time.Second
+			log.Printf("[%s:%s] Waiting %v before retry...", manga.Shortname, cbzName, sleepTime)
+			time.Sleep(sleepTime)
+		}
+	}
+
+	log.Printf("[%s:%s] ❌ Failed after %d attempts with timeout errors",
+		manga.Shortname, cbzName, maxRetries)
+	return nil, fmt.Errorf("failed after %d retries: %w", maxRetries, lastErr)
+}
+
+// downloadXbatoChapterAttempt performs a single attempt to download chapter images
+func downloadXbatoChapterAttempt(chapterURL string, manga *config.Bookmarks, cbzName string, timeout time.Duration) (map[string]string, error) {
+	// Create a NEW Colly collector for this chapter
+	c := colly.NewCollector(
+		colly.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"),
+	)
+
+	// Set custom timeout
+	c.SetRequestTimeout(timeout)
+
+	if applyErr := cf.ApplyToCollector(c, chapterURL); applyErr != nil {
+		log.Printf("[%s:%s] WARNING: Failed to apply bypass data: %v", manga.Shortname, cbzName, applyErr)
+	} else {
+		log.Printf("[%s:%s] ✓ cf bypass applied to chapter collector", manga.Shortname, cbzName)
+	}
+
+	// Scrape image URLs from the chapter page
+	var imgURLs map[string]string
+	var scrapeErr error
+
+	c.OnResponse(func(r *colly.Response) {
+		if decompressed, err := cf.DecompressResponse(r, fmt.Sprintf("[%s]", cbzName)); err != nil {
+			log.Printf("[%s:%s] ERROR: Failed to decompress: %v", manga.Shortname, cbzName, err)
+			return
+		} else if decompressed {
+			log.Printf("[%s:%s] ✓ Chapter page decompressed", manga.Shortname, cbzName)
+		}
+
+		log.Printf("[%s:%s] Chapter page response: status=%d, size=%d bytes",
+			manga.Shortname, cbzName, r.StatusCode, len(r.Body))
+
+		imgURLs, scrapeErr = extractImageUrlsFromResponse(r.Body)
+		if scrapeErr != nil {
+			log.Printf("[%s:%s] ERROR parsing image URLs: %v", manga.Shortname, cbzName, scrapeErr)
+		} else {
+			log.Printf("[%s:%s] Found %d images to download", manga.Shortname, cbzName, len(imgURLs))
+		}
+	})
+
+	c.OnError(func(r *colly.Response, err error) {
+		log.Printf("[%s:%s] ERROR fetching chapter page %s: %v (status: %d)",
+			manga.Shortname, cbzName, chapterURL, err, r.StatusCode)
+
+		isCF, cfInfo, _ := cf.DetectFromColly(r)
+		if isCF {
+			log.Printf("[%s:%s] ⚠️ cf challenge detected on chapter page!", manga.Shortname, cbzName)
+			log.Printf("[%s:%s] Indicators: %v", manga.Shortname, cbzName, cfInfo.Indicators)
+		}
+		scrapeErr = err
+	})
+
+	err := c.Visit(chapterURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to visit: %w", err)
+	}
+
+	if scrapeErr != nil {
+		return nil, fmt.Errorf("scrape error: %w", scrapeErr)
+	}
+
+	if len(imgURLs) == 0 {
+		return nil, fmt.Errorf("no images found")
+	}
+
+	return imgURLs, nil
 }
