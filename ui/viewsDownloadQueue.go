@@ -162,7 +162,7 @@ func NewDownloadQueueView(state *KanshoAppState) *DownloadQueueView {
 		func(task *config.DownloadTask) {
 			fyne.Do(func() {
 				if task.Status == "waiting_cf" && !view.cfDialogShown[task.ID] {
-					view.showCFImportDialog(task)
+					view.showCFDialog(task)
 					view.cfDialogShown[task.ID] = true
 				}
 				view.refreshTaskList()
@@ -208,67 +208,19 @@ func (v *DownloadQueueView) getStatusIcon(status string) string {
 	}
 }
 
-func (v *DownloadQueueView) showCFImportDialog(task *config.DownloadTask) {
+func (v *DownloadQueueView) showCFDialog(task *config.DownloadTask) {
 	cfErr, ok := task.Error.(*cf.CfChallengeError)
 	if !ok {
 		return
 	}
 
-	instructionLabel := widget.NewLabel(fmt.Sprintf(
-		"Cloudflare challenge detected for '%s'.\n\n"+
-			"A browser has been opened. Please:\n"+
-			"1. Complete the Cloudflare challenge\n"+
-			"2. Use the browser extension to copy bypass data to clipboard\n"+
-			"3. Click 'Import from Clipboard' below",
-		task.Manga.Title,
-	))
-	instructionLabel.Wrapping = fyne.TextWrapWord
-
-	urlLabel := widget.NewLabel(fmt.Sprintf("Challenge URL: %s", cfErr.URL))
-	urlLabel.Wrapping = fyne.TextWrapWord
-
-	content := container.NewVBox(
-		instructionLabel,
-		widget.NewSeparator(),
-		urlLabel,
-	)
-
-	importDialog := dialog.NewCustom("Cloudflare Challenge Required", "Cancel", content, v.state.Window)
-
-	importBtn := widget.NewButton("Import from Clipboard", func() {
-		// Import from clipboard
-		domain, err := cf.ImportFromClipboard()
-		if err != nil {
-			dialog.ShowError(fmt.Errorf("failed to import CF data: %w", err), v.state.Window)
-			return
-		}
-
-		log.Printf("[UI] Successfully imported CF data for domain: %s", domain)
-		importDialog.Hide()
-
-		dialog.ShowInformation(
-			"Import Successful",
-			fmt.Sprintf("Cloudflare bypass data imported!\n\nRetrying download for '%s'...", task.Manga.Title),
-			v.state.Window,
-		)
-
+	ShowcfDialog(v.state.Window, cfErr.URL, func() {
 		queue := config.GetDownloadQueue()
 		delete(v.cfDialogShown, task.ID)
 		if err := queue.RetryTask(task.ID); err != nil {
 			dialog.ShowError(fmt.Errorf("failed to retry: %w", err), v.state.Window)
 		}
 	})
-
-	importDialog.SetButtons([]fyne.CanvasObject{
-		importBtn,
-		widget.NewButton("Cancel", func() {
-			importDialog.Hide()
-			queue := config.GetDownloadQueue()
-			queue.CancelTask(task.ID)
-		}),
-	})
-
-	importDialog.Show()
 }
 
 func (v *DownloadQueueView) onCancelDownload() {
