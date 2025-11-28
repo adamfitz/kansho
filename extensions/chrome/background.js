@@ -14,7 +14,9 @@ const SUPPORTED_DOMAINS = [
   "*://manhuaus.org/*",
   "*://*.manhuaus.org/*",
   "*://kunmanga.com/*",
-  "*://*.kunmanga.com/*"
+  "*://*.kunmanga.com/*",
+  "*://asuracomic.net/*",
+  "*://*.asuracomic.net/*"
 ];
 
 // URL_PATTERNS is just the SUPPORTED_DOMAINS since they're already properly formatted
