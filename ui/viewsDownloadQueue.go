@@ -105,13 +105,14 @@ func NewDownloadQueueView(state *KanshoAppState) *DownloadQueueView {
 			view.selectedTaskID = view.tasks[id].ID
 			task := view.tasks[id]
 
-			if task.Status == "queued" || task.Status == "downloading" {
+			switch task.Status {
+			case "queued", "downloading":
 				view.cancelButton.Enable()
 				view.retryButton.Disable()
-			} else if task.Status == "waiting_cf" || task.Status == "failed" {
+			case "waiting_cf", "failed":
 				view.cancelButton.Disable()
 				view.retryButton.Enable()
-			} else {
+			default:
 				view.cancelButton.Disable()
 				view.retryButton.Disable()
 			}

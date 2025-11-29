@@ -6,6 +6,7 @@ require (
 	fyne.io/fyne/v2 v2.7.0
 	github.com/PuerkitoBio/goquery v1.10.3
 	github.com/andybalholm/brotli v1.2.0
+	github.com/chai2010/webp v1.4.0
 	github.com/chromedp/cdproto v0.0.0-20250803210736-d308e07a266d
 	github.com/chromedp/chromedp v0.14.2
 	github.com/disintegration/imaging v1.6.2

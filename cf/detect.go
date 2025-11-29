@@ -73,11 +73,11 @@ func Detectcf(resp *http.Response) (bool, *CfInfo, error) {
 		match = true
 	}
 
-	// Ray ID (cf always includes this)
+	// Ray ID (cf always includes this) - INFORMATIONAL ONLY, NOT A MATCH TRIGGER
 	if ray := resp.Header.Get("CF-Ray"); ray != "" {
 		info.RayID = ray
-		info.Indicators = append(info.Indicators, "cf Ray ID")
-		match = true
+		// REMOVED: match = true
+		// Note: CF-Ray is present on ALL Cloudflare responses, not just challenges
 	}
 
 	// ---------------------------
