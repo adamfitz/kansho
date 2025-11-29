@@ -48,7 +48,7 @@ var asuraImageRegexPatterns = []*regexp.Regexp{
 func AsuraDownloadChapters(ctx context.Context, manga *config.Bookmarks, progressCallback func(string, float64, int, int, int)) error {
 
 	// Step 1: Extract chapter URLs from the series page with retry
-	chapterUrls, err := asuraChapterUrlsWithRetry(manga.Url)
+	chapterUrls, err := asuraChapterUrlsWithBackoff(ctx, manga.Url)
 	if err != nil {
 		return err
 	}
@@ -123,10 +123,10 @@ func AsuraDownloadChapters(ctx context.Context, manga *config.Bookmarks, progres
 
 		log.Printf("[%s:%s] Starting download from: %s", manga.Shortname, cbzName, chapterURL)
 
-		// Get sorted chapter images with retry
-		chapterImages, err := asuraSortedChapterImagesWithRetry(chapterURL, manga.Shortname, cbzName)
+		// Get sorted chapter images with retry using backoff
+		chapterImages, err := asuraSortedChapterImagesWithBackoff(ctx, chapterURL, manga.Shortname, cbzName)
 		if err != nil {
-			log.Printf("[%s:%s] ✖ Failed to get chapter images after retries: %v", manga.Shortname, cbzName, err)
+			log.Printf("[%s:%s] ✗ Failed to get chapter images after retries: %v", manga.Shortname, cbzName, err)
 			continue
 		}
 
@@ -172,7 +172,7 @@ func AsuraDownloadChapters(ctx context.Context, manga *config.Bookmarks, progres
 			}
 
 			log.Printf("[%s:%s] Downloading image %d/%d: %s", manga.Shortname, cbzName, imgIdx+1, len(chapterImages), img.URL)
-			err := asuraDownloadChapterImageWithRetry(img, chapterDir, manga.Shortname, cbzName)
+			err := asuraDownloadChapterImageWithBackoff(ctx, img, chapterDir, manga.Shortname, cbzName)
 			if err != nil {
 				log.Printf("[%s:%s] ⚠️ Failed to download/convert image %s: %v", manga.Shortname, cbzName, img.URL, err)
 			} else {
@@ -228,64 +228,43 @@ func AsuraDownloadChapters(ctx context.Context, manga *config.Bookmarks, progres
 	return nil
 }
 
-// asuraChapterUrlsWithRetry fetches chapter URLs with retry logic
-func asuraChapterUrlsWithRetry(seriesURL string) ([]string, error) {
-	maxRetries := 5
-	baseTimeout := 10 * time.Second
+// asuraChapterUrlsWithBackoff fetches chapter URLs using exponential backoff retry logic
+func asuraChapterUrlsWithBackoff(ctx context.Context, seriesURL string) ([]string, error) {
+	// Configure backoff for chapter list fetching
+	config := parser.DefaultBackoffConfig()
+	config.MaxRetries = 5
+	config.BaseDelay = 2 * time.Second
+	config.MaxDelay = 32 * time.Second
+	config.InitialTimeout = 10 * time.Second
+	config.TimeoutMultiplier = 1.5
+	config.MaxTimeout = 30 * time.Second
 
-	var lastErr error
-
-	for attempt := 0; attempt < maxRetries; attempt++ {
-		timeout := baseTimeout + (time.Duration(attempt) * 5 * time.Second)
-
-		if attempt > 0 {
-			log.Printf("<asura> Retry attempt %d/%d with timeout %v for: %s",
-				attempt+1, maxRetries, timeout, seriesURL)
-		} else {
-			log.Printf("<asura> Fetching series page: %s (timeout: %v)", seriesURL, timeout)
+	result, err := parser.RetryWithBackoff(ctx, config, "asura-chapter-list", func(ctx context.Context, attempt int) (interface{}, error) {
+		// Calculate timeout for this specific attempt
+		timeout := config.InitialTimeout + (time.Duration(attempt) * 5 * time.Second)
+		if timeout > config.MaxTimeout {
+			timeout = config.MaxTimeout
 		}
+
+		log.Printf("<asura> Fetching series page: %s (timeout: %v, attempt: %d)", seriesURL, timeout, attempt+1)
 
 		chapters, err := asuraChapterUrls(seriesURL, timeout)
 
-		// Success!
-		if err == nil {
-			if attempt > 0 {
-				log.Printf("<asura> ✓ Success after %d retries", attempt+1)
-			}
-			return chapters, nil
-		}
-
-		// Check if it's a timeout error
-		isTimeout := strings.Contains(err.Error(), "context deadline exceeded") ||
-			strings.Contains(err.Error(), "Client.Timeout exceeded")
-
-		// If it's a CF challenge, don't retry - return immediately
+		// Check if it's a CF challenge - don't retry
 		if _, isCfErr := err.(*cf.CfChallengeError); isCfErr {
 			log.Printf("<asura> CF challenge detected, not retrying")
-			return nil, err
+			// Return a wrapped error that will stop retries
+			return nil, fmt.Errorf("CF challenge (non-retryable): %w", err)
 		}
 
-		lastErr = err
+		return chapters, err
+	})
 
-		// If it's not a timeout, don't retry
-		if !isTimeout {
-			log.Printf("<asura> Non-timeout error, not retrying: %v", err)
-			return nil, err
-		}
-
-		// Log the timeout and prepare to retry
-		log.Printf("<asura> ⚠️ Timeout on attempt %d/%d: %v", attempt+1, maxRetries, err)
-
-		// Don't sleep on the last attempt
-		if attempt < maxRetries-1 {
-			sleepTime := 2 * time.Second
-			log.Printf("<asura> Waiting %v before retry...", sleepTime)
-			time.Sleep(sleepTime)
-		}
+	if err != nil {
+		return nil, err
 	}
 
-	log.Printf("<asura> ✖ Failed after %d attempts with timeout errors", maxRetries)
-	return nil, fmt.Errorf("failed after %d retries: %w", maxRetries, lastErr)
+	return result.([]string), nil
 }
 
 // asuraChapterUrls fetches the series page and returns all valid chapter URLs
@@ -422,7 +401,7 @@ func asuraChapterUrls(seriesURL string, timeout time.Duration) ([]string, error)
 
 		// If stored data failed, drop it
 		if hasStoredData {
-			log.Printf("<asura> Stored bypass invalid — deleting domain data")
+			log.Printf("<asura> Stored bypass invalid – deleting domain data")
 			cf.DeleteDomain(domain)
 		}
 
@@ -526,36 +505,28 @@ func asuraChapterMap(urls []string) map[string]string {
 	return result
 }
 
-// asuraSortedChapterImagesWithRetry gets chapter images with retry logic
-func asuraSortedChapterImagesWithRetry(chapterURL, shortname, cbzName string) ([]chapterImage, error) {
-	maxRetries := 3
-	var lastErr error
+// asuraSortedChapterImagesWithBackoff gets chapter images using exponential backoff
+func asuraSortedChapterImagesWithBackoff(ctx context.Context, chapterURL, shortname, cbzName string) ([]chapterImage, error) {
+	// Configure backoff for image list fetching (fewer retries, faster)
+	config := parser.DefaultBackoffConfig()
+	config.MaxRetries = 3
+	config.BaseDelay = 1 * time.Second
+	config.MaxDelay = 16 * time.Second
+	config.InitialTimeout = 15 * time.Second
+	config.TimeoutMultiplier = 1.0 // Keep timeout constant for chromedp
+	config.MaxTimeout = 15 * time.Second
 
-	for attempt := 0; attempt <= maxRetries; attempt++ {
-		if attempt > 0 {
-			log.Printf("[%s:%s] Retry attempt %d/%d for chapter images", shortname, cbzName, attempt, maxRetries)
-		}
+	operationName := fmt.Sprintf("asura-images[%s:%s]", shortname, cbzName)
 
-		images, err := asuraSortedChapterImages(chapterURL)
-		if err == nil {
-			if attempt > 0 {
-				log.Printf("[%s:%s] ✓ Success after %d retries", shortname, cbzName, attempt)
-			}
-			return images, nil
-		}
+	result, err := parser.RetryWithBackoff(ctx, config, operationName, func(ctx context.Context, attempt int) (interface{}, error) {
+		return asuraSortedChapterImages(chapterURL)
+	})
 
-		lastErr = err
-		log.Printf("[%s:%s] Failed to get chapter images (attempt %d/%d): %v", shortname, cbzName, attempt+1, maxRetries+1, err)
-
-		// Don't sleep on the last attempt
-		if attempt < maxRetries {
-			sleepTime := 2 * time.Second
-			log.Printf("[%s:%s] Waiting %v before retry...", shortname, cbzName, sleepTime)
-			time.Sleep(sleepTime)
-		}
+	if err != nil {
+		return nil, err
 	}
 
-	return nil, fmt.Errorf("failed after %d retries: %w", maxRetries+1, lastErr)
+	return result.([]chapterImage), nil
 }
 
 // asuraRawChapterImageUrls fetches all image URLs from a chapter page
@@ -698,26 +669,25 @@ func asuraExtractScriptsFromHTML(html string) []string {
 	return scripts
 }
 
-// asuraDownloadChapterImageWithRetry downloads and converts a chapterImage with retry logic
-func asuraDownloadChapterImageWithRetry(img chapterImage, targetDir, shortname, cbzName string) error {
-	maxRetries := 3
-	var lastErr error
+// asuraDownloadChapterImageWithBackoff downloads and converts a chapterImage using exponential backoff
+func asuraDownloadChapterImageWithBackoff(ctx context.Context, img chapterImage, targetDir, shortname, cbzName string) error {
+	// Configure backoff for image downloads (aggressive retries for transient network issues)
+	config := parser.DefaultBackoffConfig()
+	config.MaxRetries = 3
+	config.BaseDelay = 500 * time.Millisecond
+	config.MaxDelay = 8 * time.Second
+	config.InitialTimeout = 30 * time.Second
+	config.TimeoutMultiplier = 1.0 // Keep timeout constant
+	config.MaxTimeout = 30 * time.Second
+	config.Jitter = true
 
-	for attempt := 0; attempt <= maxRetries; attempt++ {
-		if attempt > 0 {
-			log.Printf("[%s:%s] Retry attempt %d/%d for image %d", shortname, cbzName, attempt, maxRetries, img.Order)
-		}
+	operationName := fmt.Sprintf("asura-img[%s:%s:%d]", shortname, cbzName, img.Order)
 
-		err := asuraDownloadChapterImage(img, targetDir)
-		if err == nil {
-			return nil
-		}
+	_, err := parser.RetryWithBackoff(ctx, config, operationName, func(ctx context.Context, attempt int) (interface{}, error) {
+		return nil, asuraDownloadChapterImage(img, targetDir)
+	})
 
-		lastErr = err
-		log.Printf("[%s:%s] Failed to download image (attempt %d/%d): %v", shortname, cbzName, attempt+1, maxRetries+1, err)
-	}
-
-	return lastErr
+	return err
 }
 
 // asuraDownloadChapterImage downloads and converts a chapterImage into a JPG file
