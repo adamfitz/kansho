@@ -21,7 +21,6 @@ import (
 	"kansho/parser"
 
 	"github.com/PuerkitoBio/goquery"
-	//"github.com/chai2010/webp"
 	"github.com/chromedp/chromedp"
 )
 
@@ -29,6 +28,18 @@ import (
 type chapterImage struct {
 	Order int
 	URL   string
+}
+
+// Image URL regex patterns - ordered by priority
+// Pattern 1 works for older chapters with numeric prefixes (e.g., "00-optimized.webp")
+// Pattern 2 works for newer chapters with alphanumeric IDs and JSON order fields
+var asuraImageRegexPatterns = []*regexp.Regexp{
+	// Pattern 1: Numeric prefix pattern (e.g., chapter 60 and earlier)
+	regexp.MustCompile(`https://gg\.asuracomic\.net/storage/media/[0-9]+/conversions/(\d{1,3})-optimized\.(webp|jpg|png)`),
+
+	// Pattern 2: JSON order + URL pattern (e.g., chapter 61+)
+	// Matches: {"order":1,"url":"https://...optimized.webp"}
+	regexp.MustCompile(`\\"order\\":\s*(\d+),\\"url\\":\\"(https://gg\.asuracomic\.net/storage/media/[0-9]+/conversions/[0-9A-Z]+-optimized\.(?:webp|jpg|png))`),
 }
 
 // AsuraDownloadChapters downloads manga chapters from asuracomic.net website
@@ -408,12 +419,6 @@ func asuraChapterUrls(seriesURL string, timeout time.Duration) ([]string, error)
 
 	if isCF {
 		log.Printf("<asura> ⚠️ Cloudflare challenge detected!")
-		log.Printf("<asura> CF Detection details:")
-		log.Printf("<asura>   Status: %d", cfInfo.StatusCode)
-		log.Printf("<asura>   Reason: %s", cfInfo.Reason)
-		log.Printf("<asura>   Indicators: %v", cfInfo.Indicators)
-		log.Printf("<asura>   Ray ID: %s", cfInfo.RayID)
-		log.Printf("<asura>   Body excerpt: %s", string(bodyBytes[:min(1000, len(bodyBytes))]))
 
 		// If stored data failed, drop it
 		if hasStoredData {
@@ -553,8 +558,9 @@ func asuraSortedChapterImagesWithRetry(chapterURL, shortname, cbzName string) ([
 	return nil, fmt.Errorf("failed after %d retries: %w", maxRetries+1, lastErr)
 }
 
-// asuraRawChapterImageUrls fetches all image URLs from a chapter page (unsorted)
-func asuraRawChapterImageUrls(chapterURL string) ([]string, error) {
+// asuraRawChapterImageUrls fetches all image URLs from a chapter page
+// Returns URLs and the script tag content with the most matches
+func asuraRawChapterImageUrls(chapterURL string) ([]chapterImage, error) {
 	log.Printf("<asura> Starting fetch for chapter images: %s", chapterURL)
 
 	ctx, cancel := chromedp.NewContext(context.Background())
@@ -576,102 +582,109 @@ func asuraRawChapterImageUrls(chapterURL string) ([]string, error) {
 	scripts := asuraExtractScriptsFromHTML(html)
 	log.Printf("<asura> Total <script> tags found: %d", len(scripts))
 
-	var urls []string
-	for i, script := range scripts {
-		matches := asuraExtractImageURLsFromScript(script)
-		log.Printf("<asura> Script %d matches found: %d", i, len(matches))
-		urls = append(urls, matches...)
-	}
+	// Try each regex pattern until we find one that works
+	for patternIdx, pattern := range asuraImageRegexPatterns {
+		log.Printf("<asura> Trying pattern %d...", patternIdx+1)
 
-	log.Printf("<asura> Total raw image URLs extracted: %d", len(urls))
-	return urls, nil
-}
+		// Find the script tag with the MOST matches for this pattern
+		maxMatches := 0
+		bestScriptIdx := -1
+		var bestImages []chapterImage
 
-// asuraFilterImageURLs filters URLs to only those with filenames like xx-optimized.webp
-func asuraFilterImageURLs(urls []string) []string {
-	var filtered []string
-	re := regexp.MustCompile(`(\d{1,3})-optimized\.webp$`)
+		for scriptIdx, script := range scripts {
+			images := asuraExtractImagesWithPattern(script, pattern, patternIdx)
+			matchCount := len(images)
 
-	for _, u := range urls {
-		if re.MatchString(u) {
-			filtered = append(filtered, u)
-		}
-	}
-
-	log.Printf("<asura> Filtered image URLs count: %d", len(filtered))
-	return filtered
-}
-
-// asuraBuildChapterImages converts filtered URLs into a sorted slice of chapterImage
-func asuraBuildChapterImages(urls []string) []chapterImage {
-	type temp struct {
-		order int
-		url   string
-	}
-
-	var tmpList []temp
-	re := regexp.MustCompile(`(\d{1,3})-optimized\.webp$`)
-
-	for _, u := range urls {
-		m := re.FindStringSubmatch(u)
-		if len(m) == 2 {
-			num, err := strconv.Atoi(m[1])
-			if err != nil {
-				log.Printf("<asura> Failed to parse number from URL %s: %v", u, err)
-				continue
+			if matchCount > maxMatches {
+				maxMatches = matchCount
+				bestScriptIdx = scriptIdx
+				bestImages = images
 			}
-			tmpList = append(tmpList, temp{order: num, url: u})
+		}
+
+		if maxMatches > 0 {
+			log.Printf("<asura> Pattern %d: Found script tag %d with %d matches", patternIdx+1, bestScriptIdx, maxMatches)
+			return bestImages, nil
+		}
+
+		log.Printf("<asura> Pattern %d: No matches found", patternIdx+1)
+	}
+
+	return nil, fmt.Errorf("no image URLs found with any pattern")
+}
+
+// asuraExtractImagesWithPattern extracts images using a specific regex pattern
+func asuraExtractImagesWithPattern(script string, pattern *regexp.Regexp, patternIdx int) []chapterImage {
+	matches := pattern.FindAllStringSubmatch(script, -1)
+
+	if len(matches) == 0 {
+		return []chapterImage{}
+	}
+
+	var images []chapterImage
+
+	// Pattern 1: Numeric prefix (older chapters)
+	if patternIdx == 0 {
+		for _, match := range matches {
+			if len(match) >= 3 {
+				url := match[0]
+				numStr := match[1]
+				num, err := strconv.Atoi(numStr)
+				if err != nil {
+					continue
+				}
+				images = append(images, chapterImage{
+					Order: num,
+					URL:   url,
+				})
+			}
+		}
+	} else if patternIdx == 1 {
+		// Pattern 2: JSON with order field (newer chapters)
+		for _, match := range matches {
+			if len(match) >= 3 {
+				orderStr := match[1]
+				url := match[2]
+				order, err := strconv.Atoi(orderStr)
+				if err != nil {
+					continue
+				}
+				images = append(images, chapterImage{
+					Order: order,
+					URL:   url,
+				})
+			}
 		}
 	}
 
-	// Sort by the numeric prefix
-	sort.Slice(tmpList, func(i, j int) bool {
-		return tmpList[i].order < tmpList[j].order
+	// Sort by order
+	sort.Slice(images, func(i, j int) bool {
+		return images[i].Order < images[j].Order
 	})
 
-	// Build final slice
-	images := make([]chapterImage, len(tmpList))
-	for i, t := range tmpList {
-		images[i] = chapterImage{
-			Order: i + 1,
-			URL:   t.url,
-		}
-	}
-
-	log.Printf("<asura> Total chapter images built: %d", len(images))
 	return images
 }
 
-// asuraSortedChapterImages deduplicates and sorts the chapter URLs
+// asuraSortedChapterImages gets and sorts chapter image URLs
 func asuraSortedChapterImages(chapterURL string) ([]chapterImage, error) {
-	rawURLs, err := asuraRawChapterImageUrls(chapterURL)
+	images, err := asuraRawChapterImageUrls(chapterURL)
 	if err != nil {
 		return nil, err
 	}
 
-	filtered := asuraFilterImageURLs(rawURLs)
-	deduped := asuraDeduplicateURLs(filtered)
-	chapterImages := asuraBuildChapterImages(deduped)
+	// Deduplicate by URL while preserving order
+	seen := make(map[string]bool)
+	var deduped []chapterImage
 
-	log.Printf("<asura> Total sorted chapter images after deduplication: %d", len(chapterImages))
-	return chapterImages, nil
-}
-
-// asuraDeduplicateURLs removes duplicate URLs from a slice while preserving order
-func asuraDeduplicateURLs(urls []string) []string {
-	seen := make(map[string]struct{})
-	var deduped []string
-
-	for _, u := range urls {
-		if _, ok := seen[u]; ok {
-			continue
+	for _, img := range images {
+		if !seen[img.URL] {
+			seen[img.URL] = true
+			deduped = append(deduped, img)
 		}
-		seen[u] = struct{}{}
-		deduped = append(deduped, u)
 	}
 
-	log.Printf("<asura> Deduplication complete. Remaining URLs: %d", len(deduped))
-	return deduped
+	log.Printf("<asura> Total sorted chapter images after deduplication: %d", len(deduped))
+	return deduped, nil
 }
 
 // asuraExtractScriptsFromHTML returns the content of all <script> tags in the HTML
@@ -683,13 +696,6 @@ func asuraExtractScriptsFromHTML(html string) []string {
 		scripts = append(scripts, m[1])
 	}
 	return scripts
-}
-
-// asuraExtractImageURLsFromScript parses a single script block for image URLs
-func asuraExtractImageURLsFromScript(script string) []string {
-	// Look for the Asura CDN images ending in optimized.webp or .jpg/.png
-	re := regexp.MustCompile(`https://gg\.asuracomic\.net/storage/media/[0-9]+/conversions/[0-9a-fA-F-]+-optimized\.(webp|jpg|png)`)
-	return re.FindAllString(script, -1)
 }
 
 // asuraDownloadChapterImageWithRetry downloads and converts a chapterImage with retry logic
