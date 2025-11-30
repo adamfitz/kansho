@@ -21,7 +21,6 @@ import (
 	"kansho/parser"
 
 	"github.com/PuerkitoBio/goquery"
-	"github.com/chromedp/chromedp"
 )
 
 // chapterImage holds URL and order
@@ -250,11 +249,11 @@ func asuraChapterUrlsWithBackoff(ctx context.Context, seriesURL string) ([]strin
 
 		chapters, err := asuraChapterUrls(seriesURL, timeout)
 
-		// Check if it's a CF challenge - don't retry
+		// Check if it's a CF challenge - return it directly without wrapping
+		// The error type itself indicates it's non-retryable
 		if _, isCfErr := err.(*cf.CfChallengeError); isCfErr {
-			log.Printf("<asura> CF challenge detected, not retrying")
-			// Return a wrapped error that will stop retries
-			return nil, fmt.Errorf("CF challenge (non-retryable): %w", err)
+			log.Printf("<asura> CF challenge detected - returning error to caller")
+			return nil, err
 		}
 
 		return chapters, err
@@ -506,21 +505,28 @@ func asuraChapterMap(urls []string) map[string]string {
 }
 
 // asuraSortedChapterImagesWithBackoff gets chapter images using exponential backoff
+// asuraSortedChapterImagesWithBackoff gets chapter images using exponential backoff
 func asuraSortedChapterImagesWithBackoff(ctx context.Context, chapterURL, shortname, cbzName string) ([]chapterImage, error) {
-	// Configure backoff for image list fetching (fewer retries, faster)
-	config := parser.DefaultBackoffConfig()
-	config.MaxRetries = 3
-	config.BaseDelay = 1 * time.Second
-	config.MaxDelay = 16 * time.Second
-	config.InitialTimeout = 15 * time.Second
-	config.TimeoutMultiplier = 1.0 // Keep timeout constant for chromedp
-	config.MaxTimeout = 15 * time.Second
+	backoffConfig := parser.DefaultBackoffConfig()
+	backoffConfig.MaxRetries = 3
+	backoffConfig.BaseDelay = 5 * time.Second
+	backoffConfig.MaxDelay = 30 * time.Second
+
+	// USE ASURA-SPECIFIC CONFIG WITH SCROLLING ENABLED
+	waitConfig := parser.AsuraChromedpWaitConfig()
 
 	operationName := fmt.Sprintf("asura-images[%s:%s]", shortname, cbzName)
 
-	result, err := parser.RetryWithBackoff(ctx, config, operationName, func(ctx context.Context, attempt int) (interface{}, error) {
-		return asuraSortedChapterImages(chapterURL)
-	})
+	result, err := parser.RetryWithChromedpWaits(
+		ctx,
+		backoffConfig,
+		waitConfig,
+		operationName,
+		chapterURL,
+		func(html string) (interface{}, error) {
+			return asuraExtractAndParseImages(html)
+		},
+	)
 
 	if err != nil {
 		return nil, err
@@ -529,35 +535,34 @@ func asuraSortedChapterImagesWithBackoff(ctx context.Context, chapterURL, shortn
 	return result.([]chapterImage), nil
 }
 
-// asuraRawChapterImageUrls fetches all image URLs from a chapter page
-// Returns URLs and the script tag content with the most matches
-func asuraRawChapterImageUrls(chapterURL string) ([]chapterImage, error) {
-	log.Printf("<asura> Starting fetch for chapter images: %s", chapterURL)
-
-	ctx, cancel := chromedp.NewContext(context.Background())
-	defer cancel()
-
-	var html string
-
-	startNav := time.Now()
-	if err := chromedp.Run(ctx,
-		chromedp.Navigate(chapterURL),
-		chromedp.WaitReady("body"),
-		chromedp.OuterHTML("html", &html),
-	); err != nil {
-		return nil, fmt.Errorf("navigation failed: %w", err)
+// asuraExtractAndParseImages extracts image URLs from HTML
+// asuraExtractAndParseImages extracts image URLs from HTML
+func asuraExtractAndParseImages(html string) (interface{}, error) {
+	// SAVE THE ENTIRE HTML TO FILE FOR DEBUGGING
+	debugFile := "/tmp/asura_debug_page.html"
+	if err := os.WriteFile(debugFile, []byte(html), 0644); err == nil {
+		log.Printf("<asura> 🔍 DEBUG: Saved full HTML to %s (%d bytes)", debugFile, len(html))
 	}
-	elapsedNav := time.Since(startNav)
-	log.Printf("<asura> Navigation complete in %s. HTML length: %d", elapsedNav, len(html))
 
 	scripts := asuraExtractScriptsFromHTML(html)
-	log.Printf("<asura> Total <script> tags found: %d", len(scripts))
+	log.Printf("<asura> 🔍 DEBUG: Extracted %d script tags", len(scripts))
 
-	// Try each regex pattern until we find one that works
+	// Save all scripts to separate files for inspection
+	for i, script := range scripts {
+		scriptFile := fmt.Sprintf("/tmp/asura_script_%d.js", i)
+		os.WriteFile(scriptFile, []byte(script), 0644)
+
+		// Show first 200 chars of each script
+		preview := script
+		if len(script) > 200 {
+			preview = script[:200]
+		}
+		log.Printf("<asura> 🔍 Script %d: %d bytes, starts with: %s", i, len(script), preview)
+	}
+
 	for patternIdx, pattern := range asuraImageRegexPatterns {
-		log.Printf("<asura> Trying pattern %d...", patternIdx+1)
+		log.Printf("<asura> 🔍 Trying pattern %d: %s", patternIdx+1, pattern.String())
 
-		// Find the script tag with the MOST matches for this pattern
 		maxMatches := 0
 		bestScriptIdx := -1
 		var bestImages []chapterImage
@@ -565,6 +570,8 @@ func asuraRawChapterImageUrls(chapterURL string) ([]chapterImage, error) {
 		for scriptIdx, script := range scripts {
 			images := asuraExtractImagesWithPattern(script, pattern, patternIdx)
 			matchCount := len(images)
+
+			log.Printf("<asura> 🔍 Pattern %d on script %d: found %d matches", patternIdx+1, scriptIdx, matchCount)
 
 			if matchCount > maxMatches {
 				maxMatches = matchCount
@@ -574,14 +581,53 @@ func asuraRawChapterImageUrls(chapterURL string) ([]chapterImage, error) {
 		}
 
 		if maxMatches > 0 {
-			log.Printf("<asura> Pattern %d: Found script tag %d with %d matches", patternIdx+1, bestScriptIdx, maxMatches)
-			return bestImages, nil
+			log.Printf("<asura> ✓ Pattern %d: Found %d images in script %d", patternIdx+1, maxMatches, bestScriptIdx)
+
+			// Log first few image URLs
+			for i, img := range bestImages {
+				if i < 5 {
+					log.Printf("<asura> 🔍 Image %d: order=%d url=%s", i, img.Order, img.URL)
+				}
+			}
+
+			seen := make(map[string]bool)
+			var deduped []chapterImage
+			for _, img := range bestImages {
+				if !seen[img.URL] {
+					seen[img.URL] = true
+					deduped = append(deduped, img)
+				}
+			}
+
+			log.Printf("<asura> ✓ Returning %d images after dedup", len(deduped))
+			return deduped, nil
 		}
 
-		log.Printf("<asura> Pattern %d: No matches found", patternIdx+1)
+		log.Printf("<asura> ✗ Pattern %d: No matches", patternIdx+1)
 	}
 
-	return nil, fmt.Errorf("no image URLs found with any pattern")
+	// ULTIMATE DEBUG: Search for ANY image URL in the entire HTML
+	log.Printf("<asura> 🔍 FINAL DEBUG: Searching entire HTML for ANY image references...")
+
+	// Look for the storage/media pattern
+	mediaRe := regexp.MustCompile(`storage/media/[0-9]+`)
+	mediaMatches := mediaRe.FindAllString(html, -1)
+	log.Printf("<asura> 🔍 Found %d 'storage/media/' references in HTML", len(mediaMatches))
+
+	// Look for optimized.webp
+	webpRe := regexp.MustCompile(`optimized\.webp`)
+	webpMatches := webpRe.FindAllString(html, -1)
+	log.Printf("<asura> 🔍 Found %d 'optimized.webp' references in HTML", len(webpMatches))
+
+	// Look for order field
+	orderRe := regexp.MustCompile(`"order":\s*\d+`)
+	orderMatches := orderRe.FindAllString(html, -1)
+	log.Printf("<asura> 🔍 Found %d '\"order\":' references in HTML", len(orderMatches))
+	if len(orderMatches) > 0 {
+		log.Printf("<asura> 🔍 First few order matches: %v", orderMatches[:min(5, len(orderMatches))])
+	}
+
+	return nil, fmt.Errorf("no image URLs found with any pattern - check /tmp/asura_debug_page.html and /tmp/asura_script_*.js")
 }
 
 // asuraExtractImagesWithPattern extracts images using a specific regex pattern
@@ -636,28 +682,6 @@ func asuraExtractImagesWithPattern(script string, pattern *regexp.Regexp, patter
 	return images
 }
 
-// asuraSortedChapterImages gets and sorts chapter image URLs
-func asuraSortedChapterImages(chapterURL string) ([]chapterImage, error) {
-	images, err := asuraRawChapterImageUrls(chapterURL)
-	if err != nil {
-		return nil, err
-	}
-
-	// Deduplicate by URL while preserving order
-	seen := make(map[string]bool)
-	var deduped []chapterImage
-
-	for _, img := range images {
-		if !seen[img.URL] {
-			seen[img.URL] = true
-			deduped = append(deduped, img)
-		}
-	}
-
-	log.Printf("<asura> Total sorted chapter images after deduplication: %d", len(deduped))
-	return deduped, nil
-}
-
 // asuraExtractScriptsFromHTML returns the content of all <script> tags in the HTML
 func asuraExtractScriptsFromHTML(html string) []string {
 	var scripts []string
@@ -671,14 +695,14 @@ func asuraExtractScriptsFromHTML(html string) []string {
 
 // asuraDownloadChapterImageWithBackoff downloads and converts a chapterImage using exponential backoff
 func asuraDownloadChapterImageWithBackoff(ctx context.Context, img chapterImage, targetDir, shortname, cbzName string) error {
-	// Configure backoff for image downloads (aggressive retries for transient network issues)
+	// Configure backoff for image downloads (more aggressive retries for network issues)
 	config := parser.DefaultBackoffConfig()
-	config.MaxRetries = 3
-	config.BaseDelay = 500 * time.Millisecond
-	config.MaxDelay = 8 * time.Second
-	config.InitialTimeout = 30 * time.Second
-	config.TimeoutMultiplier = 1.0 // Keep timeout constant
-	config.MaxTimeout = 30 * time.Second
+	config.MaxRetries = 5 // Try up to 6 times
+	config.BaseDelay = 1 * time.Second
+	config.MaxDelay = 16 * time.Second
+	config.InitialTimeout = 45 * time.Second // Longer timeout for slow downloads
+	config.TimeoutMultiplier = 1.0           // Keep timeout constant
+	config.MaxTimeout = 45 * time.Second
 	config.Jitter = true
 
 	operationName := fmt.Sprintf("asura-img[%s:%s:%d]", shortname, cbzName, img.Order)
