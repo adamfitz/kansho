@@ -129,6 +129,16 @@
         "title": true,
         "location": true
       }
+    },
+    {
+      "name": "mangakatana",
+      "display_name": "mangakatana",
+      "required_fields": {
+        "url": true,
+        "shortname": false,
+        "title": true,
+        "location": true
+      }
     }
   ]
 }
