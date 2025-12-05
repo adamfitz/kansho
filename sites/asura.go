@@ -32,14 +32,21 @@ type chapterImage struct {
 
 // Image URL regex patterns - ordered by priority
 // Pattern 1 works for older chapters with numeric prefixes (e.g., "00-optimized.webp")
-// Pattern 2 works for newer chapters with alphanumeric IDs and JSON order fields
+// Pattern 2 works for newer chapters with alphanumeric IDs and JSON order fields (escaped quotes)
+// Pattern 3 works for chapters with triple-escaped JSON (e.g., chapter 51)
 var asuraImageRegexPatterns = []*regexp.Regexp{
 	// Pattern 1: Numeric prefix pattern (e.g., chapter 60 and earlier)
 	regexp.MustCompile(`https://gg\.asuracomic\.net/storage/media/[0-9]+/conversions/(\d{1,3})-optimized\.(webp|jpg|png)`),
 
-	// Pattern 2: JSON order + URL pattern (e.g., chapter 61+)
-	// Matches: {"order":1,"url":"https://...optimized.webp"}
+	// Pattern 2: JSON order + URL pattern with escaped quotes (e.g., chapter 61+)
+	// Matches: {\"order\":1,\"url\":\"https://...optimized.webp\"}
 	regexp.MustCompile(`\\"order\\":\s*(\d+),\\"url\\":\\"(https://gg\.asuracomic\.net/storage/media/[0-9]+/conversions/[0-9A-Z]+-optimized\.(?:webp|jpg|png))`),
+
+	// Pattern 3: JSON order + URL pattern with double-backslash-escaped quotes (e.g., chapter 51)
+	// Matches: {\\\"order\\\":1,\\\"url\\\":\\\"https://...optimized.webp\\\"}
+	// Pattern 3: Same as Pattern 2 but with flexible filename matching
+	// Matches: {\"order\":1,\"url\":\"https://...optimized.webp\"}
+	regexp.MustCompile(`\\"order\\":\s*(\d+),\s*\\"url\\":\s*\\"(https://gg\.asuracomic\.net/storage/media/[0-9]+/conversions/[0-9A-Za-z-]+-optimized\.(?:webp|jpg|png))\\"`),
 }
 
 // AsuraDownloadChapters downloads manga chapters from asuracomic.net website
@@ -121,27 +128,27 @@ func AsuraDownloadChapters(ctx context.Context, manga *config.Bookmarks, progres
 			)
 		}
 
-		log.Printf("[%s:%s] Starting download from: %s", manga.Shortname, cbzName, chapterURL)
+		log.Printf("[%s:%s] Starting download from: %s", manga.Site, cbzName, chapterURL)
 
 		// Get sorted chapter images with retry
-		chapterImages, err := asuraSortedChapterImagesWithRetry(chapterURL, manga.Shortname, cbzName)
+		chapterImages, err := asuraSortedChapterImagesWithRetry(chapterURL, manga.Site, cbzName)
 		if err != nil {
-			log.Printf("[%s:%s] ✖ Failed to get chapter images after retries: %v", manga.Shortname, cbzName, err)
+			log.Printf("[%s:%s] ✖ Failed to get chapter images after retries: %v", manga.Site, cbzName, err)
 			continue
 		}
 
 		if len(chapterImages) == 0 {
-			log.Printf("[%s:%s] ⚠️ WARNING: No images found for chapter", manga.Shortname, cbzName)
+			log.Printf("[%s:%s] ⚠️ WARNING: No images found for chapter", manga.Site, cbzName)
 			continue
 		}
 
-		log.Printf("[%s:%s] Found %d images to download", manga.Shortname, cbzName, len(chapterImages))
+		log.Printf("[%s:%s] Found %d images to download", manga.Site, cbzName, len(chapterImages))
 
 		// Create temp directory
-		chapterDir := filepath.Join("/tmp", manga.Shortname, strings.TrimSuffix(cbzName, ".cbz"))
+		chapterDir := filepath.Join("/tmp", manga.Site, strings.TrimSuffix(cbzName, ".cbz"))
 		err = os.MkdirAll(chapterDir, 0755)
 		if err != nil {
-			log.Printf("[%s:%s] Failed to create temporary directory %s: %v", manga.Shortname, cbzName, chapterDir, err)
+			log.Printf("[%s:%s] Failed to create temporary directory %s: %v", manga.Site, cbzName, chapterDir, err)
 			continue
 		}
 
@@ -171,20 +178,20 @@ func AsuraDownloadChapters(ctx context.Context, manga *config.Bookmarks, progres
 				)
 			}
 
-			log.Printf("[%s:%s] Downloading image %d/%d: %s", manga.Shortname, cbzName, imgIdx+1, len(chapterImages), img.URL)
-			err := asuraDownloadChapterImageWithRetry(img, chapterDir, manga.Shortname, cbzName)
+			log.Printf("[%s:%s] Downloading image %d/%d: %s", manga.Site, cbzName, imgIdx+1, len(chapterImages), img.URL)
+			err := asuraDownloadChapterImageWithRetry(img, chapterDir, manga.Site, cbzName)
 			if err != nil {
-				log.Printf("[%s:%s] ⚠️ Failed to download/convert image %s: %v", manga.Shortname, cbzName, img.URL, err)
+				log.Printf("[%s:%s] ⚠️ Failed to download/convert image %s: %v", manga.Site, cbzName, img.URL, err)
 			} else {
 				successCount++
-				log.Printf("[%s:%s] ✓ Successfully downloaded and converted image %d/%d", manga.Shortname, cbzName, imgIdx+1, len(chapterImages))
+				log.Printf("[%s:%s] ✓ Successfully downloaded and converted image %d/%d", manga.Site, cbzName, imgIdx+1, len(chapterImages))
 			}
 		}
 
-		log.Printf("[%s:%s] Download complete: %d/%d images successful", manga.Shortname, cbzName, successCount, len(chapterImages))
+		log.Printf("[%s:%s] Download complete: %d/%d images successful", manga.Site, cbzName, successCount, len(chapterImages))
 
 		if successCount == 0 {
-			log.Printf("[%s:%s] ⚠️ Skipping CBZ creation - no images downloaded", manga.Shortname, cbzName)
+			log.Printf("[%s:%s] ⚠️ Skipping CBZ creation - no images downloaded", manga.Site, cbzName)
 			os.RemoveAll(chapterDir)
 			continue
 		}
@@ -203,14 +210,14 @@ func AsuraDownloadChapters(ctx context.Context, manga *config.Bookmarks, progres
 		cbzPath := filepath.Join(manga.Location, cbzName)
 		err = parser.CreateCbzFromDir(chapterDir, cbzPath)
 		if err != nil {
-			log.Printf("[%s:%s] Failed to create CBZ %s: %v", manga.Shortname, cbzName, cbzPath, err)
+			log.Printf("[%s:%s] Failed to create CBZ %s: %v", manga.Site, cbzName, cbzPath, err)
 		} else {
 			log.Printf("[%s] ✓ Created CBZ: %s (%d images)\n", manga.Title, cbzName, successCount)
 		}
 
 		err = os.RemoveAll(chapterDir)
 		if err != nil {
-			log.Printf("[%s:%s] Failed to remove temp directory %s: %v", manga.Shortname, cbzName, chapterDir, err)
+			log.Printf("[%s:%s] Failed to remove temp directory %s: %v", manga.Site, cbzName, chapterDir, err)
 		}
 	}
 
@@ -582,6 +589,76 @@ func asuraRawChapterImageUrls(chapterURL string) ([]chapterImage, error) {
 	scripts := asuraExtractScriptsFromHTML(html)
 	log.Printf("<asura> Total <script> tags found: %d", len(scripts))
 
+	// // This is debug code to find out what teh image url regexes are doing
+	// // can be removed after deebugging or kept for future if useful
+
+	// for i, script := range scripts {
+	// 	fmt.Printf("\n----- SCRIPT %d RAW -----\n", i)
+
+	// 	// Print exact Go-string escaped representation (shows every \  and  ")
+	// 	fmt.Printf("Go-escaped: %q\n", script)
+
+	// 	// Print raw characters to verify slashes/quotes visually
+	// 	fmt.Println("Raw preview:")
+	// 	for _, ch := range script {
+	// 		if ch < 32 {
+	// 			// control chars → show escaped
+	// 			fmt.Printf("\\x%02X", ch)
+	// 			continue
+	// 		}
+	// 		fmt.Print(string(ch))
+	// 	}
+	// 	fmt.Println("\n--------------------------")
+	// }
+
+	// Add this right after extracting scripts and before the pattern loop:
+	// for i, script := range scripts {
+	// 	if strings.Contains(script, "318923") {
+	// 		log.Printf("<asura> Found media ID 318923 in script %d", i)
+	// 		// Print a snippet around it
+	// 		idx := strings.Index(script, "318923")
+	// 		start := idx - 100
+	// 		if start < 0 {
+	// 			start = 0
+	// 		}
+	// 		end := idx + 200
+	// 		if end > len(script) {
+	// 			end = len(script)
+	// 		}
+	// 		log.Printf("<asura> Context: %q", script[start:end])
+	// 		break
+	// 	}
+	// 	// Right after the context logging, add this:
+	// 	if strings.Contains(script, "318923") {
+	// 		log.Printf("<asura> Found media ID 318923 in script %d", i)
+	// 		idx := strings.Index(script, "318923")
+	// 		start := idx - 100
+	// 		if start < 0 {
+	// 			start = 0
+	// 		}
+	// 		end := idx + 200
+	// 		if end > len(script) {
+	// 			end = len(script)
+	// 		}
+	// 		log.Printf("<asura> Context: %q", script[start:end])
+
+	// 		// NEW: Test if pattern 3 can match a simpler version
+	// 		testPattern := regexp.MustCompile(`order.*url.*318923`)
+	// 		if testPattern.MatchString(script) {
+	// 			log.Printf("<asura> Simple pattern MATCHED!")
+
+	// 			// Try to find what's between order and url
+	// 			orderIdx := strings.Index(script[idx-100:idx+200], "order")
+	// 			urlIdx := strings.Index(script[idx-100:idx+200], "url")
+	// 			if orderIdx >= 0 && urlIdx > orderIdx {
+	// 				between := script[idx-100+orderIdx : idx-100+urlIdx+10]
+	// 				log.Printf("<asura> Between 'order' and 'url': %q", between)
+	// 			}
+	// 		}
+	// 		break
+	// 	}
+	// }
+
 	// Try each regex pattern until we find one that works
 	for patternIdx, pattern := range asuraImageRegexPatterns {
 		log.Printf("<asura> Trying pattern %d...", patternIdx+1)
@@ -639,8 +716,8 @@ func asuraExtractImagesWithPattern(script string, pattern *regexp.Regexp, patter
 				})
 			}
 		}
-	} else if patternIdx == 1 {
-		// Pattern 2: JSON with order field (newer chapters)
+	} else if patternIdx == 1 || patternIdx == 2 {
+		// Pattern 2 & 3: JSON with order field (escaped or unescaped quotes)
 		for _, match := range matches {
 			if len(match) >= 3 {
 				orderStr := match[1]
