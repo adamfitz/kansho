@@ -12,6 +12,8 @@ package main
 // - bookmarks/     : Manga data loading (existing package)
 
 import (
+	"log"
+
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/driver/desktop"
@@ -44,12 +46,24 @@ func main() {
 	// -------------------------------------------------------------------------
 	// Create File menu with Quit option for graceful application shutdown
 	fileMenu := fyne.NewMenu("File",
-		fyne.NewMenuItem("Quit", func() {
-			kanshoApp.Quit()
+		fyne.NewMenuItem("Logs", func() {
+			log.Println("[UI] Kansho Logs opened (GUI)")
+			ui.ShowLogWindow(kanshoApp)
 		}),
+		fyne.NewMenuItem("Bookmarks", func() {
+			log.Println("[UI] Kansho Boomarks opened (GUI)")
+			ui.ShowBookmarksWindow(kanshoApp)
+		}),
+		// Dont expose to the user, leave the keybind for debugging
+		// fyne.NewMenuItem("Configuration", func() {
+		// 	log.Println("[UI] Kansho configuration opened (GUI)")
+		// 	ui.ShowConfigWindow(kanshoApp)
+		// }),
 	)
 
 	// Create main menu bar and add it to the window
+	// File is a well known application menu, so by default fyne injects its own Quit menu entry and it is not required
+	// to manually configure this (like the other entries above).
 	mainMenu := fyne.NewMainMenu(fileMenu)
 	myWindow.SetMainMenu(mainMenu)
 
@@ -60,9 +74,36 @@ func main() {
 	// This is a standard shortcut on many platforms
 	myWindow.Canvas().AddShortcut(&desktop.CustomShortcut{
 		KeyName:  fyne.KeyQ,
-		Modifier: desktop.ControlModifier,
+		Modifier: fyne.KeyModifierControl,
 	}, func(shortcut fyne.Shortcut) {
+		log.Println("[UI] User closed application (ctrl + q)")
 		kanshoApp.Quit()
+	})
+	myWindow.Canvas().AddShortcut(&desktop.CustomShortcut{
+		KeyName:  fyne.KeyL,
+		Modifier: fyne.KeyModifierControl,
+	}, func(shortcut fyne.Shortcut) {
+		log.Println("[UI] Kansho Logs opened (ctrl + l)")
+		ui.ShowLogWindow(kanshoApp)
+	})
+	myWindow.Canvas().AddShortcut(&desktop.CustomShortcut{
+		KeyName:  fyne.KeyB,
+		Modifier: fyne.KeyModifierControl,
+	}, func(shortcut fyne.Shortcut) {
+		log.Println("[UI] Kansho Boomarks opened (ctrl + b)")
+		ui.ShowBookmarksWindow(kanshoApp)
+	})
+	myWindow.Canvas().AddShortcut(&desktop.CustomShortcut{
+		KeyName:  fyne.KeyC,
+		Modifier: fyne.KeyModifierControl | fyne.KeyModifierShift, // bitwise OR operator to make both shift and ctrl the modifier keys
+	}, func(shortcut fyne.Shortcut) {
+		log.Println("[UI] Kansho configuration opened (ctrl + c)")
+		ui.ShowConfigWindow(kanshoApp)
+	})
+
+	myWindow.SetCloseIntercept(func() {
+		log.Println("[UI] User closed application (File menu)")
+		kanshoApp.Quit() // allow the app to actually close
 	})
 
 	// Set the initial window size

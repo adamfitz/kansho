@@ -1,6 +1,7 @@
 package sites
 
 import (
+	"embed"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,6 +10,15 @@ import (
 
 	"kansho/models"
 )
+
+//go:embed sites.json
+var embeddedFS embed.FS
+
+// GetEmbeddedSitesJSON returns the raw content of the embedded sites.json file
+// This allows other packages to access the embedded configuration
+func GetEmbeddedSitesJSON() ([]byte, error) {
+	return embeddedFS.ReadFile("sites.json")
+}
 
 // LoadSitesConfig loads the manga site configuration from config/sites.json.
 // This configuration determines which manga sites are supported and what information
