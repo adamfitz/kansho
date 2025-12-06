@@ -31,20 +31,30 @@ func ShowBookmarksWindow(kanshoApp fyne.App) {
 
 	var allLines []string
 
+	addLineNumbers := func(lines []string) string {
+		var numbered []string
+		for i, line := range lines {
+			numbered = append(numbered, fmt.Sprintf("%4d | %s", i+1, line))
+		}
+		return strings.Join(numbered, "\n")
+	}
+
 	performSearch := func() {
 		query := searchEntry.Text
 		if query == "" {
-			bookmarksLabel.SetText(strings.Join(allLines, "\n"))
+			bookmarksLabel.SetText(addLineNumbers(allLines))
 			return
 		}
 
 		go func() {
 			var filtered []string
+			var lineNumbers []int
 			queryLower := strings.ToLower(query)
 
-			for _, line := range allLines {
+			for i, line := range allLines {
 				if strings.Contains(strings.ToLower(line), queryLower) {
 					filtered = append(filtered, line)
+					lineNumbers = append(lineNumbers, i+1)
 				}
 			}
 
@@ -52,7 +62,11 @@ func ShowBookmarksWindow(kanshoApp fyne.App) {
 			if len(filtered) == 0 {
 				result = fmt.Sprintf("No results found for: %s", query)
 			} else {
-				result = strings.Join(filtered, "\n") + fmt.Sprintf("\n\n[Found %d matches]", len(filtered))
+				var resultLines []string
+				for i, line := range filtered {
+					resultLines = append(resultLines, fmt.Sprintf("Line %d | %s", lineNumbers[i], line))
+				}
+				result = strings.Join(resultLines, "\n") + fmt.Sprintf("\n\n[Found %d matches]", len(filtered))
 			}
 
 			fyne.Do(func() {
@@ -63,10 +77,9 @@ func ShowBookmarksWindow(kanshoApp fyne.App) {
 
 	clearSearch := func() {
 		searchEntry.SetText("")
-		bookmarksLabel.SetText(strings.Join(allLines, "\n"))
+		bookmarksLabel.SetText(addLineNumbers(allLines))
 	}
 
-	// Trigger search on Enter key
 	searchEntry.OnSubmitted = func(string) {
 		performSearch()
 	}
@@ -89,7 +102,6 @@ func ShowBookmarksWindow(kanshoApp fyne.App) {
 	bookmarksWindow.SetContent(content)
 	bookmarksWindow.Show()
 
-	// Load file asynchronously
 	go func() {
 		file, err := os.Open(bookmarksFilePath)
 		if err != nil {
@@ -118,7 +130,7 @@ func ShowBookmarksWindow(kanshoApp fyne.App) {
 		}
 
 		allLines = lines
-		finalContent := strings.Join(lines, "\n")
+		finalContent := addLineNumbers(lines)
 
 		fyne.Do(func() {
 			bookmarksLabel.SetText(finalContent)

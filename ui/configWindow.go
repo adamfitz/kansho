@@ -25,20 +25,30 @@ func ShowConfigWindow(kanshoApp fyne.App) {
 
 	var allLines []string
 
+	addLineNumbers := func(lines []string) string {
+		var numbered []string
+		for i, line := range lines {
+			numbered = append(numbered, fmt.Sprintf("%4d | %s", i+1, line))
+		}
+		return strings.Join(numbered, "\n")
+	}
+
 	performSearch := func() {
 		query := searchEntry.Text
 		if query == "" {
-			configLabel.SetText(strings.Join(allLines, "\n"))
+			configLabel.SetText(addLineNumbers(allLines))
 			return
 		}
 
 		go func() {
 			var filtered []string
+			var lineNumbers []int
 			queryLower := strings.ToLower(query)
 
-			for _, line := range allLines {
+			for i, line := range allLines {
 				if strings.Contains(strings.ToLower(line), queryLower) {
 					filtered = append(filtered, line)
+					lineNumbers = append(lineNumbers, i+1)
 				}
 			}
 
@@ -46,7 +56,11 @@ func ShowConfigWindow(kanshoApp fyne.App) {
 			if len(filtered) == 0 {
 				result = fmt.Sprintf("No results found for: %s", query)
 			} else {
-				result = strings.Join(filtered, "\n") + fmt.Sprintf("\n\n[Found %d matches]", len(filtered))
+				var resultLines []string
+				for i, line := range filtered {
+					resultLines = append(resultLines, fmt.Sprintf("Line %d | %s", lineNumbers[i], line))
+				}
+				result = strings.Join(resultLines, "\n") + fmt.Sprintf("\n\n[Found %d matches]", len(filtered))
 			}
 
 			fyne.Do(func() {
@@ -57,10 +71,9 @@ func ShowConfigWindow(kanshoApp fyne.App) {
 
 	clearSearch := func() {
 		searchEntry.SetText("")
-		configLabel.SetText(strings.Join(allLines, "\n"))
+		configLabel.SetText(addLineNumbers(allLines))
 	}
 
-	// Trigger search on Enter key
 	searchEntry.OnSubmitted = func(string) {
 		performSearch()
 	}
@@ -83,9 +96,7 @@ func ShowConfigWindow(kanshoApp fyne.App) {
 	configWindow.SetContent(content)
 	configWindow.Show()
 
-	// Load embedded file asynchronously
 	go func() {
-		// Read the embedded file from the sites package
 		fileData, err := sites.GetEmbeddedSitesJSON()
 		if err != nil {
 			fyne.Do(func() {
@@ -94,7 +105,6 @@ func ShowConfigWindow(kanshoApp fyne.App) {
 			return
 		}
 
-		// Parse the file content line by line
 		scanner := bufio.NewScanner(bytes.NewReader(fileData))
 		var lines []string
 
@@ -110,7 +120,7 @@ func ShowConfigWindow(kanshoApp fyne.App) {
 		}
 
 		allLines = lines
-		finalContent := strings.Join(lines, "\n")
+		finalContent := addLineNumbers(lines)
 
 		fyne.Do(func() {
 			configLabel.SetText(finalContent)

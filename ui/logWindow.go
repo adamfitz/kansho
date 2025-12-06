@@ -32,39 +32,49 @@ func ShowLogWindow(kanshoApp fyne.App) {
 	logWindow := kanshoApp.NewWindow("Kansho Log Content")
 	logWindow.Resize(fyne.NewSize(800, 600))
 
-	// Use a Label for better performance
 	logLabel := widget.NewLabel("Loading log file...")
 	logLabel.Wrapping = fyne.TextWrapWord
 
-	// Search functionality
 	searchEntry := widget.NewEntry()
 	searchEntry.SetPlaceHolder("Search in loaded lines...")
 
-	var allLines []string       // All lines read from file
-	var displayedLines []string // Currently displayed lines
-	var currentStartIndex int   // Index in allLines where displayedLines starts
+	var allLines []string
+	var displayedLines []string
+	var currentStartIndex int
 	var totalLineCount int
 	var isLoading bool
 
+	addLineNumbers := func(lines []string, startIndex int) string {
+		var numbered []string
+		for i, line := range lines {
+			lineNum := startIndex + i + 1
+			numbered = append(numbered, fmt.Sprintf("%6d | %s", lineNum, line))
+		}
+		return strings.Join(numbered, "\n")
+	}
+
 	updateDisplay := func() {
-		content := strings.Join(displayedLines, "\n")
+		content := addLineNumbers(displayedLines, currentStartIndex)
 		logLabel.SetText(content)
 	}
 
-	searchButton := widget.NewButton("Search", func() {
+	performSearch := func() {
 		query := searchEntry.Text
 		if query == "" {
+			updateDisplay()
 			return
 		}
 
 		go func() {
 			var filtered []string
+			var lineNumbers []int
 			queryLower := strings.ToLower(query)
 
-			// Only search in currently loaded lines
-			for _, line := range displayedLines {
+			// Search and collect line numbers
+			for i, line := range displayedLines {
 				if strings.Contains(strings.ToLower(line), queryLower) {
 					filtered = append(filtered, line)
+					lineNumbers = append(lineNumbers, currentStartIndex+i+1)
 				}
 			}
 
@@ -72,13 +82,27 @@ func ShowLogWindow(kanshoApp fyne.App) {
 			if len(filtered) == 0 {
 				result = fmt.Sprintf("No results found for: %s\n(Searching only in loaded lines)", query)
 			} else {
-				result = strings.Join(filtered, "\n") + fmt.Sprintf("\n\n[Found %d matches in loaded lines]", len(filtered))
+				// Show results with line numbers and context
+				var resultLines []string
+				for i, line := range filtered {
+					resultLines = append(resultLines, fmt.Sprintf("Line %d | %s", lineNumbers[i], line))
+				}
+				result = strings.Join(resultLines, "\n") + fmt.Sprintf("\n\n[Found %d matches in loaded lines]", len(filtered))
 			}
 
 			fyne.Do(func() {
 				logLabel.SetText(result)
 			})
 		}()
+	}
+
+	// Trigger search on Enter key
+	searchEntry.OnSubmitted = func(string) {
+		performSearch()
+	}
+
+	searchButton := widget.NewButton("Search", func() {
+		performSearch()
 	})
 
 	clearButton := widget.NewButton("Clear Search", func() {
@@ -99,7 +123,6 @@ func ShowLogWindow(kanshoApp fyne.App) {
 		go func() {
 			defer func() { isLoading = false }()
 
-			// Calculate how many more lines we can load
 			newStartIndex := currentStartIndex - linesPerScroll
 			if newStartIndex < 0 {
 				newStartIndex = 0
@@ -112,7 +135,6 @@ func ShowLogWindow(kanshoApp fyne.App) {
 				return
 			}
 
-			// Prepend the additional lines
 			additionalLines := allLines[newStartIndex:currentStartIndex]
 			displayedLines = append(additionalLines, displayedLines...)
 			currentStartIndex = newStartIndex
@@ -156,7 +178,6 @@ func ShowLogWindow(kanshoApp fyne.App) {
 
 		var lines []string
 
-		// Read all lines into memory
 		for scanner.Scan() {
 			lines = append(lines, scanner.Text())
 		}
@@ -171,7 +192,6 @@ func ShowLogWindow(kanshoApp fyne.App) {
 		totalLineCount = len(lines)
 		allLines = lines
 
-		// Show only the last N lines initially
 		if len(lines) > initialLinesToShow {
 			currentStartIndex = len(lines) - initialLinesToShow
 			displayedLines = lines[currentStartIndex:]
@@ -188,7 +208,6 @@ func ShowLogWindow(kanshoApp fyne.App) {
 	}()
 }
 
-// openDirectory opens the file manager to the specified directory
 func openDirectory(path string, parent fyne.Window) {
 	var cmd *exec.Cmd
 
