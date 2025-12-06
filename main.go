@@ -54,10 +54,11 @@ func main() {
 			log.Println("[UI] Kansho Boomarks opened (GUI)")
 			ui.ShowBookmarksWindow(kanshoApp)
 		}),
-		fyne.NewMenuItem("Configuration", func() {
-			log.Println("[UI] Kansho configuration opened (GUI)")
-			ui.ShowConfigWindow(kanshoApp)
-		}),
+		// Dont expose to the user, leave the keybind for debugging
+		// fyne.NewMenuItem("Configuration", func() {
+		// 	log.Println("[UI] Kansho configuration opened (GUI)")
+		// 	ui.ShowConfigWindow(kanshoApp)
+		// }),
 	)
 
 	// Create main menu bar and add it to the window
@@ -94,7 +95,7 @@ func main() {
 	})
 	myWindow.Canvas().AddShortcut(&desktop.CustomShortcut{
 		KeyName:  fyne.KeyC,
-		Modifier: fyne.KeyModifierControl,
+		Modifier: fyne.KeyModifierControl | fyne.KeyModifierShift, // bitwise OR operator to make both shift and ctrl the modifier keys
 	}, func(shortcut fyne.Shortcut) {
 		log.Println("[UI] Kansho configuration opened (ctrl + c)")
 		ui.ShowConfigWindow(kanshoApp)

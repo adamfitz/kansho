@@ -3,6 +3,7 @@ package ui
 import (
 	"bufio"
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -12,6 +13,18 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/widget"
 )
+
+// SiteConfig represents a single site configuration block
+type SiteConfig struct {
+	Name           string          `json:"name"`
+	DisplayName    string          `json:"display_name"`
+	RequiredFields map[string]bool `json:"required_fields"`
+}
+
+// SitesConfig represents the full sites.json structure
+type SitesConfigFile struct {
+	Sites []SiteConfig `json:"sites"`
+}
 
 func ShowConfigWindow(kanshoApp fyne.App) {
 	configWindow := kanshoApp.NewWindow("Kansho Site Configuration")
@@ -24,6 +37,7 @@ func ShowConfigWindow(kanshoApp fyne.App) {
 	searchEntry.SetPlaceHolder("Search configuration...")
 
 	var allLines []string
+	var sitesConfig SitesConfigFile
 
 	addLineNumbers := func(lines []string) string {
 		var numbered []string
@@ -31,6 +45,52 @@ func ShowConfigWindow(kanshoApp fyne.App) {
 			numbered = append(numbered, fmt.Sprintf("%4d | %s", i+1, line))
 		}
 		return strings.Join(numbered, "\n")
+	}
+
+	// Check if query exactly matches a site name or display_name
+	findExactSiteMatch := func(query string) *SiteConfig {
+		queryLower := strings.ToLower(strings.TrimSpace(query))
+		for _, site := range sitesConfig.Sites {
+			if strings.ToLower(site.Name) == queryLower || strings.ToLower(site.DisplayName) == queryLower {
+				return &site
+			}
+		}
+		return nil
+	}
+
+	// Find the line range for a site block in the JSON
+	findSiteBlockLines := func(siteName string) (startLine, endLine int) {
+		inSiteBlock := false
+		braceCount := 0
+
+		for i, line := range allLines {
+			trimmed := strings.TrimSpace(line)
+
+			// Check if this line contains the site name
+			if strings.Contains(line, fmt.Sprintf(`"name": "%s"`, siteName)) {
+				// Walk backwards to find the opening brace of this block
+				for j := i; j >= 0; j-- {
+					if strings.Contains(allLines[j], "{") && !strings.Contains(allLines[j], `"required_fields"`) {
+						startLine = j
+						inSiteBlock = true
+						break
+					}
+				}
+			}
+
+			// If we're in the site block, count braces to find the end
+			if inSiteBlock {
+				braceCount += strings.Count(trimmed, "{")
+				braceCount -= strings.Count(trimmed, "}")
+
+				if braceCount == 0 && strings.Contains(trimmed, "}") {
+					endLine = i
+					return startLine, endLine
+				}
+			}
+		}
+
+		return -1, -1
 	}
 
 	performSearch := func() {
@@ -41,6 +101,30 @@ func ShowConfigWindow(kanshoApp fyne.App) {
 		}
 
 		go func() {
+			// Check for exact site name/display_name match
+			if exactSite := findExactSiteMatch(query); exactSite != nil {
+				startLine, endLine := findSiteBlockLines(exactSite.Name)
+
+				if startLine != -1 && endLine != -1 {
+					// Extract the full block with line numbers
+					blockLines := allLines[startLine : endLine+1]
+					var numberedBlock []string
+					for i, line := range blockLines {
+						numberedBlock = append(numberedBlock, fmt.Sprintf("Line %d | %s", startLine+i+1, line))
+					}
+
+					result := fmt.Sprintf("Exact match found for site: %s\n\n", exactSite.Name)
+					result += strings.Join(numberedBlock, "\n")
+					result += "\n\n[Showing complete site configuration block]"
+
+					fyne.Do(func() {
+						configLabel.SetText(result)
+					})
+					return
+				}
+			}
+
+			// Otherwise, do regular line-by-line search
 			var filtered []string
 			var lineNumbers []int
 			queryLower := strings.ToLower(query)
@@ -101,6 +185,14 @@ func ShowConfigWindow(kanshoApp fyne.App) {
 		if err != nil {
 			fyne.Do(func() {
 				configLabel.SetText(fmt.Sprintf("Failed to load embedded configuration: %v", err))
+			})
+			return
+		}
+
+		// Parse the JSON structure for exact matching
+		if err := json.Unmarshal(fileData, &sitesConfig); err != nil {
+			fyne.Do(func() {
+				configLabel.SetText(fmt.Sprintf("Failed to parse configuration: %v", err))
 			})
 			return
 		}
