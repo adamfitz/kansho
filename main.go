@@ -47,13 +47,16 @@ func main() {
 	// Create File menu with Quit option for graceful application shutdown
 	fileMenu := fyne.NewMenu("File",
 		fyne.NewMenuItem("Logs", func() {
-			log.Println("[UI] Kansho Logs!")
+			log.Println("[UI] Kansho Logs opened (GUI)")
+			ui.ShowLogWindow(kanshoApp)
 		}),
 		fyne.NewMenuItem("Bookmarks", func() {
-			log.Println("[UI] Kansho Boomarks!")
+			log.Println("[UI] Kansho Boomarks opened (GUI)")
+			ui.ShowBookmarksWindow(kanshoApp)
 		}),
 		fyne.NewMenuItem("Configuration", func() {
-			log.Println("[UI] Kansho Configuration!")
+			log.Println("[UI] Kansho configuration opened (GUI)")
+			ui.ShowConfigWindow(kanshoApp)
 		}),
 	)
 
@@ -79,19 +82,22 @@ func main() {
 		KeyName:  fyne.KeyL,
 		Modifier: fyne.KeyModifierControl,
 	}, func(shortcut fyne.Shortcut) {
-		log.Println("[UI] Kansho Logs!")
+		log.Println("[UI] Kansho Logs opened (ctrl + l)")
+		ui.ShowLogWindow(kanshoApp)
 	})
 	myWindow.Canvas().AddShortcut(&desktop.CustomShortcut{
 		KeyName:  fyne.KeyB,
 		Modifier: fyne.KeyModifierControl,
 	}, func(shortcut fyne.Shortcut) {
-		log.Println("[UI] Kansho Boomarks!")
+		log.Println("[UI] Kansho Boomarks opened (ctrl + b)")
+		ui.ShowBookmarksWindow(kanshoApp)
 	})
 	myWindow.Canvas().AddShortcut(&desktop.CustomShortcut{
 		KeyName:  fyne.KeyC,
 		Modifier: fyne.KeyModifierControl,
 	}, func(shortcut fyne.Shortcut) {
-		log.Println("[UI] Kansho Configuration!")
+		log.Println("[UI] Kansho configuration opened (ctrl + c)")
+		ui.ShowConfigWindow(kanshoApp)
 	})
 
 	myWindow.SetCloseIntercept(func() {
