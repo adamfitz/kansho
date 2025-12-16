@@ -139,6 +139,16 @@
         "title": true,
         "location": true
       }
+    },
+    {
+      "name": "mangadex",
+      "display_name": "mangadex",
+      "required_fields": {
+        "url": true,
+        "shortname": false,
+        "title": true,
+        "location": true
+      }
     }
   ]
 }

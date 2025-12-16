@@ -100,19 +100,19 @@ func MgekoDownloadChapters(ctx context.Context, manga *config.Bookmarks, progres
 			)
 		}
 
-		log.Printf("[%s:%s] Starting download from: %s", manga.Shortname, cbzName, chapterURL)
+		log.Printf("[%s:%s] Starting download from: %s", manga.Site, cbzName, chapterURL)
 
 		// Create collector and apply CF bypass
 		c := colly.NewCollector(
 			colly.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"),
 		)
 
-		log.Printf("[%s:%s] Applying cf bypass for chapter page", manga.Shortname, cbzName)
+		log.Printf("[%s:%s] Applying cf bypass for chapter page", manga.Site, cbzName)
 
 		if applyErr := cf.ApplyToCollector(c, chapterURL); applyErr != nil {
-			log.Printf("[%s:%s] WARNING: Failed to apply bypass data: %v", manga.Shortname, cbzName, applyErr)
+			log.Printf("[%s:%s] WARNING: Failed to apply bypass data: %v", manga.Site, cbzName, applyErr)
 		} else {
-			log.Printf("[%s:%s] ✓ cf bypass applied to chapter collector", manga.Shortname, cbzName)
+			log.Printf("[%s:%s] ✓ cf bypass applied to chapter collector", manga.Site, cbzName)
 		}
 
 		// Scrape images
@@ -121,51 +121,51 @@ func MgekoDownloadChapters(ctx context.Context, manga *config.Bookmarks, progres
 			src := e.Attr("src")
 			if src != "" {
 				imgURLs = append(imgURLs, src)
-				log.Printf("[%s:%s] Found image URL: %s", manga.Shortname, cbzName, src)
+				log.Printf("[%s:%s] Found image URL: %s", manga.Site, cbzName, src)
 			}
 		})
 
 		c.OnError(func(r *colly.Response, err error) {
 			log.Printf("[%s:%s] ERROR fetching chapter page %s: %v (status: %d)",
-				manga.Shortname, cbzName, chapterURL, err, r.StatusCode)
+				manga.Site, cbzName, chapterURL, err, r.StatusCode)
 
 			isCF, cfInfo, _ := cf.DetectFromColly(r)
 			if isCF {
-				log.Printf("[%s:%s] ⚠️ cf challenge detected on chapter page!", manga.Shortname, cbzName)
-				log.Printf("[%s:%s] Indicators: %v", manga.Shortname, cbzName, cfInfo.Indicators)
+				log.Printf("[%s:%s] ⚠️ cf challenge detected on chapter page!", manga.Site, cbzName)
+				log.Printf("[%s:%s] Indicators: %v", manga.Site, cbzName, cfInfo.Indicators)
 			}
 		})
 
 		c.OnResponse(func(r *colly.Response) {
 			if decompressed, err := cf.DecompressResponse(r, fmt.Sprintf("[%s]", cbzName)); err != nil {
-				log.Printf("[%s:%s] ERROR: Failed to decompress: %v", manga.Shortname, cbzName, err)
+				log.Printf("[%s:%s] ERROR: Failed to decompress: %v", manga.Site, cbzName, err)
 				return
 			} else if decompressed {
-				log.Printf("[%s:%s] ✓ Chapter page decompressed", manga.Shortname, cbzName)
+				log.Printf("[%s:%s] ✓ Chapter page decompressed", manga.Site, cbzName)
 			}
 
 			log.Printf("[%s:%s] Chapter page response: status=%d, size=%d bytes",
-				manga.Shortname, cbzName, r.StatusCode, len(r.Body))
+				manga.Site, cbzName, r.StatusCode, len(r.Body))
 		})
 
 		err = c.Visit(chapterURL)
 		if err != nil {
-			log.Printf("[%s:%s] Failed to visit %s: %v", manga.Shortname, cbzName, chapterURL, err)
+			log.Printf("[%s:%s] Failed to visit %s: %v", manga.Site, cbzName, chapterURL, err)
 			continue
 		}
 
 		if len(imgURLs) == 0 {
-			log.Printf("[%s:%s] ⚠️ WARNING: No images found for chapter", manga.Shortname, cbzName)
+			log.Printf("[%s:%s] ⚠️ WARNING: No images found for chapter", manga.Site, cbzName)
 			continue
 		}
 
-		log.Printf("[%s:%s] Found %d images to download", manga.Shortname, cbzName, len(imgURLs))
+		log.Printf("[%s:%s] Found %d images to download", manga.Site, cbzName, len(imgURLs))
 
 		// Create temp directory
 		chapterDir := filepath.Join("/tmp", manga.Shortname, strings.TrimSuffix(cbzName, ".cbz"))
 		err = os.MkdirAll(chapterDir, 0755)
 		if err != nil {
-			log.Printf("[%s:%s] Failed to create temporary directory %s: %v", manga.Shortname, cbzName, chapterDir, err)
+			log.Printf("[%s:%s] Failed to create temporary directory %s: %v", manga.Site, cbzName, chapterDir, err)
 			continue
 		}
 
@@ -195,20 +195,20 @@ func MgekoDownloadChapters(ctx context.Context, manga *config.Bookmarks, progres
 				)
 			}
 
-			log.Printf("[%s:%s] Downloading image %d/%d: %s", manga.Shortname, cbzName, imgIdx+1, len(imgURLs), imgURL)
+			log.Printf("[%s:%s] Downloading image %d/%d: %s", manga.Site, cbzName, imgIdx+1, len(imgURLs), imgURL)
 			err := parser.DownloadAndConvertToJPG(imgURL, chapterDir)
 			if err != nil {
-				log.Printf("[%s:%s] ⚠️ Failed to download/convert image %s: %v", manga.Shortname, cbzName, imgURL, err)
+				log.Printf("[%s:%s] ⚠️ Failed to download/convert image %s: %v", manga.Site, cbzName, imgURL, err)
 			} else {
 				successCount++
-				log.Printf("[%s:%s] ✓ Successfully downloaded and converted image %d/%d", manga.Shortname, cbzName, imgIdx+1, len(imgURLs))
+				log.Printf("[%s:%s] ✓ Successfully downloaded and converted image %d/%d", manga.Site, cbzName, imgIdx+1, len(imgURLs))
 			}
 		}
 
-		log.Printf("[%s:%s] Download complete: %d/%d images successful", manga.Shortname, cbzName, successCount, len(imgURLs))
+		log.Printf("[%s:%s] Download complete: %d/%d images successful", manga.Site, cbzName, successCount, len(imgURLs))
 
 		if successCount == 0 {
-			log.Printf("[%s:%s] ⚠️ Skipping CBZ creation - no images downloaded", manga.Shortname, cbzName)
+			log.Printf("[%s:%s] ⚠️ Skipping CBZ creation - no images downloaded", manga.Site, cbzName)
 			os.RemoveAll(chapterDir)
 			continue
 		}
@@ -227,14 +227,14 @@ func MgekoDownloadChapters(ctx context.Context, manga *config.Bookmarks, progres
 		cbzPath := filepath.Join(manga.Location, cbzName)
 		err = parser.CreateCbzFromDir(chapterDir, cbzPath)
 		if err != nil {
-			log.Printf("[%s:%s] Failed to create CBZ %s: %v", manga.Shortname, cbzName, cbzPath, err)
+			log.Printf("[%s:%s] Failed to create CBZ %s: %v", manga.Site, cbzName, cbzPath, err)
 		} else {
 			log.Printf("[%s] ✓ Created CBZ: %s (%d images)\n", manga.Title, cbzName, successCount)
 		}
 
 		err = os.RemoveAll(chapterDir)
 		if err != nil {
-			log.Printf("[%s:%s] Failed to remove temp directory %s: %v", manga.Shortname, cbzName, chapterDir, err)
+			log.Printf("[%s:%s] Failed to remove temp directory %s: %v", manga.Site, cbzName, chapterDir, err)
 		}
 	}
 
