@@ -18,7 +18,9 @@ const SUPPORTED_DOMAINS = [
   "*://asuracomic.net/*",
   "*://*.asuracomic.net/*",
   "*://mangakatana.com/*",
-  "*://*.mangakatana.com/*"
+  "*://*.mangakatana.com/*",
+  "*://mangadex.org/*",
+  "*://*.mangadex.org/*"
 ];
 
 // URL_PATTERNS is just the SUPPORTED_DOMAINS since they're already properly formatted

@@ -15,6 +15,7 @@ func init() {
 	config.RegisterSite("hls", HlsDownloadChapters)
 	config.RegisterSite("asurascans", AsuraDownloadChapters)
 	config.RegisterSite("mangakatana", MangakatanaDownloadChapters)
+	config.RegisterSite("mangadex", MangadexDownloadChapters)
 
 	// Add new sites here in the future:
 	// config.RegisterSite("newsite", NewsiteDownloadChapters)
