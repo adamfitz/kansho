@@ -1,14 +1,13 @@
-name: Build Debian package
+name: Build and Release Debian Package
 
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
 
 jobs:
-  build-deb:
-    runs-on: ubuntu-22.04
+  build-release-deb:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # Needed to create GitHub Release
 
     env:
       APP_NAME: kansho
@@ -36,8 +35,8 @@ jobs:
 
       - name: Install system dependencies
         run: |
-            sudo apt-get update
-            sudo apt-get install -y \
+          sudo apt-get update
+          sudo apt-get install -y \
             dpkg-dev \
             gcc \
             libgl1-mesa-dev \
@@ -84,11 +83,19 @@ jobs:
 
       - name: Build deb package
         run: |
+          mkdir -p builds
           dpkg-deb --build rootfs \
-            ${APP_NAME}_${{ steps.version.outputs.version }}_amd64.deb
+          builds/${APP_NAME}_${{ steps.version.outputs.version }}_amd64.deb
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - name: Create GitHub Release (gh-release)
+        id: release
+        uses: softprops/action-gh-release@v2
         with:
-          name: debian-package
-          path: "*.deb"
+          tag_name: ${{ steps.version.outputs.version  }}
+          name: ${{ steps.version.outputs.version  }}
+          draft: false
+          prerelease: false
+          files: |
+            builds/*.deb
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
