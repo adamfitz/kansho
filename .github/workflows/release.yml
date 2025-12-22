@@ -68,7 +68,7 @@ jobs:
 
       - name: Build application binary
         run: |
-          BUILD_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ") # ISO-8601 UTC
+          BUILD_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
           COMMIT=$(git rev-parse --short HEAD)
 
           GOOS=${GOOS} GOARCH=${GOARCH} CGO_ENABLED=1 \
@@ -78,7 +78,8 @@ jobs:
               -X github.com/backyard/kansho/config.GitCommit=${COMMIT} \
               -X github.com/backyard/kansho/config.BuildTime=${BUILD_TIME}" \
             -o rootfs/usr/bin/${APP_NAME} \
-            ./main.go
+            .
+
 
       - name: Fix permissions
         run: |
