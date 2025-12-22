@@ -68,7 +68,7 @@ jobs:
 
       - name: Build application binary
         run: |
-          BUILD_TIME=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          BUILD_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ") # ISO-8601 UTC
           COMMIT=$(git rev-parse --short HEAD)
 
           GOOS=${GOOS} GOARCH=${GOARCH} CGO_ENABLED=1 \
