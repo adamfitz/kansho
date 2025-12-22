@@ -36,8 +36,8 @@ jobs:
 
       - name: Install system dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
+            sudo apt-get update
+            sudo apt-get install -y \
             dpkg-dev \
             gcc \
             libgl1-mesa-dev \
@@ -45,8 +45,9 @@ jobs:
             libxcursor-dev \
             libxrandr-dev \
             libxinerama-dev \
-            libxi-dev
-      
+            libxi-dev \
+            libxxf86vm-dev
+
       - name: Clean rootfs
         run: rm -rf rootfs
 
