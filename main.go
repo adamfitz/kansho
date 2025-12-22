@@ -32,7 +32,6 @@ func main() {
 		ID:      "com.backyard.kansho",
 		Name:    "Kansho",
 		Version: config.Version,
-		Build:   1,
 	}
 
 	app.SetMetadata(kanshoMetadata)

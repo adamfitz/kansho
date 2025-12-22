@@ -12,7 +12,13 @@ func ShowAboutDialog(kanshoApp fyne.App) {
 	title := widget.NewLabel("Kansho")
 	title.TextStyle = fyne.TextStyle{Bold: true}
 
-	version := widget.NewLabel("Version: " + config.Version)
+	version := widget.NewLabel(
+		"Version: " + config.Version +
+			"\nCommit: " + config.GitCommit +
+			"\nBuilt: " + config.BuildTime,
+	)
+
+	version.Alignment = fyne.TextAlignCenter
 
 	description := widget.NewLabel(
 		"Adhoc download of manga chapters for offline reading.",
@@ -66,7 +72,7 @@ func ShowAboutDialog(kanshoApp fyne.App) {
 	// Create and show window
 	aboutWin = kanshoApp.NewWindow("About Kansho")
 	aboutWin.SetContent(content)
-	aboutWin.Resize(fyne.NewSize(400, 350))
+	aboutWin.Resize(fyne.NewSize(400, 400))
 	aboutWin.SetFixedSize(true)
 	aboutWin.Show()
 }

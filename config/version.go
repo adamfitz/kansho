@@ -1,9 +1,23 @@
 package config
 
-import (
-	"time"
+import "time"
+
+// These are injected at build time via -ldflags
+var (
+	Version   string
+	GitCommit string
+	BuildTime string
 )
 
-var dateString = time.Now().Format("2006-01-02")
-
-var Version = "dev-" + dateString
+func init() {
+	// Local / dev fallback
+	if Version == "" {
+		Version = "dev"
+	}
+	if GitCommit == "" {
+		GitCommit = "local"
+	}
+	if BuildTime == "" {
+		BuildTime = time.Now().Format("2006-01-02 15:04:05")
+	}
+}
