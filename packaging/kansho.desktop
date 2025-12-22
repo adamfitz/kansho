@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Kansho
+Comment=Manga and Manhwa offline downloader GUI
+Exec=kansho
+Icon=kansho
+Terminal=false
+Categories=Utility;Database;
+StartupNotify=true
+StartupWMClass=kansho

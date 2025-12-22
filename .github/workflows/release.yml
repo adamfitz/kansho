@@ -1,0 +1,93 @@
+name: Build Debian package
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  build-deb:
+    runs-on: ubuntu-22.04
+
+    env:
+      APP_NAME: kansho
+      GOOS: linux
+      GOARCH: amd64
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Resolve version
+        id: version
+        run: |
+          VERSION=$(git describe --tags --abbrev=0)
+          CLEAN_VERSION=${VERSION#v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "clean_version=$CLEAN_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            dpkg-dev \
+            gcc \
+            libgl1-mesa-dev \
+            libx11-dev \
+            libxcursor-dev \
+            libxrandr-dev \
+            libxinerama-dev \
+            libxi-dev
+      
+      - name: Clean rootfs
+        run: rm -rf rootfs
+
+      - name: Prepare rootfs
+        run: |
+          mkdir -p rootfs/DEBIAN
+          mkdir -p rootfs/usr/bin
+          mkdir -p rootfs/usr/share/applications
+          mkdir -p rootfs/usr/share/icons/hicolor/256x256/apps
+
+          sed "s/@VERSION@/${{ steps.version.outputs.clean_version }}/" \
+            packaging/DEBIAN/control.in > rootfs/DEBIAN/control
+
+          cp packaging/kansho.desktop \
+            rootfs/usr/share/applications/${APP_NAME}.desktop
+
+          cp packaging/kansho.png \
+            rootfs/usr/share/icons/hicolor/256x256/apps/${APP_NAME}.png
+
+      - name: Build application binary
+        run: |
+          GOOS=${GOOS} GOARCH=${GOARCH} CGO_ENABLED=1 \
+          go build \
+            -ldflags "-X kansho/config.Version=${{ steps.version.outputs.version }}" \
+            -o rootfs/usr/bin/${APP_NAME} \
+            ./main.go
+
+      - name: Fix permissions
+        run: |
+          chmod 755 rootfs/usr/bin/${APP_NAME}
+          chmod 644 rootfs/usr/share/applications/${APP_NAME}.desktop
+          chmod 644 rootfs/usr/share/icons/hicolor/256x256/apps/${APP_NAME}.png
+          chmod 755 rootfs/DEBIAN
+
+      - name: Build deb package
+        run: |
+          dpkg-deb --build rootfs \
+            ${APP_NAME}_${{ steps.version.outputs.version }}_amd64.deb
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: debian-package
+          path: "*.deb"
