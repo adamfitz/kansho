@@ -334,7 +334,7 @@ func (q *DownloadQueue) executeTask(task *DownloadTask) {
 			// Check if this is a Cloudflare challenge error
 			if cfErr, ok := err.(*cf.CfChallengeError); ok {
 				task.Status = "waiting_cf"
-				task.StatusMessage = fmt.Sprintf("Cloudflare challenge detected - browser opened")
+				task.StatusMessage = "Cloudflare challenge detected - browser opened"
 				task.Error = cfErr
 
 				log.Printf("[Queue] CF challenge detected for %s (URL: %s)", task.Manga.Title, cfErr.URL)

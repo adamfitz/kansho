@@ -1,0 +1,9 @@
+Package: kansho
+Version: @VERSION@
+Section: utils
+Priority: optional
+Architecture: amd64
+Maintainer: Adam adam@networknoob.net
+Depends: libc6
+Description: Manga and Manhwa offline downloader GUI
+ Kansho manga downloader

@@ -18,6 +18,7 @@ import (
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/driver/desktop"
 
+	"kansho/config"
 	"kansho/ui"
 )
 
@@ -30,9 +31,8 @@ func main() {
 	kanshoMetadata := fyne.AppMetadata{
 		ID:      "com.backyard.kansho",
 		Name:    "Kansho",
-		Version: "0.0.1",
+		Version: config.Version,
 		Build:   1,
-		Icon:    bundled,
 	}
 
 	app.SetMetadata(kanshoMetadata)
@@ -61,10 +61,17 @@ func main() {
 		// }),
 	)
 
+	helpMenu := fyne.NewMenu("Help",
+		fyne.NewMenuItem("About", func() {
+			log.Println("[UI] About dialog opened") // ← Add logging like the others
+			ui.ShowAboutDialog(kanshoApp)           // ← Pass kanshoApp like the others
+		}),
+	)
+
 	// Create main menu bar and add it to the window
 	// File is a well known application menu, so by default fyne injects its own Quit menu entry and it is not required
 	// to manually configure this (like the other entries above).
-	mainMenu := fyne.NewMainMenu(fileMenu)
+	mainMenu := fyne.NewMainMenu(fileMenu, helpMenu)
 	myWindow.SetMainMenu(mainMenu)
 
 	// -------------------------------------------------------------------------
