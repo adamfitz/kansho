@@ -68,9 +68,15 @@ jobs:
 
       - name: Build application binary
         run: |
+          BUILD_TIME=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          COMMIT=$(git rev-parse --short HEAD)
+
           GOOS=${GOOS} GOARCH=${GOARCH} CGO_ENABLED=1 \
           go build \
-            -ldflags "-X kansho/config.Version=${{ steps.version.outputs.version }}" \
+            -ldflags "\
+              -X github.com/backyard/kansho/config.Version=${{ steps.version.outputs.version }} \
+              -X github.com/backyard/kansho/config.GitCommit=${COMMIT} \
+              -X github.com/backyard/kansho/config.BuildTime=${BUILD_TIME}" \
             -o rootfs/usr/bin/${APP_NAME} \
             ./main.go
 
