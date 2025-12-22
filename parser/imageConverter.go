@@ -13,7 +13,10 @@ import (
 	"path/filepath"
 	"strings"
 
+	"kansho/cf"
+
 	"github.com/disintegration/imaging"
+	"github.com/gocolly/colly"
 	"golang.org/x/image/webp"
 )
 
@@ -196,4 +199,226 @@ func DownloadConvertToJPGRename(filename, imageURL, targetDir string) error {
 // saveRawBytes saves bytes directly to file without conversion
 func saveRawBytes(data []byte, outputPath string) error {
 	return os.WriteFile(outputPath, data, 0644)
+}
+
+// DownloadConvertToJPGRenameCf downloads an image using Cloudflare bypass,
+// converts it to JPEG if needed, and saves it with the specified filename.
+// This function uses Colly with CF bypass data for sites that require it.
+//
+// Parameters:
+//   - filename: Base filename without extension (e.g., "1", "2", "3")
+//   - imageURL: Full URL of the image to download
+//   - targetDir: Directory where the image should be saved
+//   - domain: Domain for which to load CF bypass data (e.g., "manhuaus.com")
+//
+// Returns:
+//   - error: Any error encountered during download/conversion, nil on success
+//
+// The function will:
+// 1. Create a Colly collector with CF bypass applied
+// 2. Download the image using the collector
+// 3. Convert to JPEG if needed (reuses ConvertImageToJPEG)
+// 4. Save with padded filename (reuses padFileName)
+func DownloadConvertToJPGRenameCf(filename, imageURL, targetDir, domain string) error {
+	var lastErr error
+	maxRetries := 3
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			log.Printf("Retry attempt %d/%d for: %s", attempt, maxRetries, imageURL)
+		}
+
+		err := downloadConvertToJPGRenameCf(filename, imageURL, targetDir, domain)
+		if err == nil {
+			return nil
+		}
+
+		lastErr = err
+		log.Printf("Download/conversion failed (attempt %d/%d): %v", attempt+1, maxRetries+1, err)
+	}
+
+	return lastErr
+}
+
+// downloadConvertToJPGRenameCf is the internal function without retry logic
+func downloadConvertToJPGRenameCf(filename, imageURL, targetDir, domain string) error {
+	// Create a new Colly collector for this download
+	c := colly.NewCollector(
+		colly.UserAgent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"),
+	)
+
+	// Load CF bypass data for the provided domain
+	bypassData, err := cf.LoadFromFile(domain)
+	if err != nil {
+		log.Printf("No bypass data found for domain: %s", domain)
+		// Continue anyway - maybe the site doesn't need bypass for images
+	} else {
+		// CRITICAL FIX: Ensure cookie domain has dot prefix for subdomain support
+		if bypassData.CfClearanceStruct != nil {
+			originalDomain := bypassData.CfClearanceStruct.Domain
+			if originalDomain != "" && !strings.HasPrefix(originalDomain, ".") {
+				bypassData.CfClearanceStruct.Domain = "." + originalDomain
+				log.Printf("Modified cookie domain from '%s' to '%s' for subdomain support", originalDomain, bypassData.CfClearanceStruct.Domain)
+			}
+
+			// Manually set the cookie with the modified domain
+			httpCookie := &http.Cookie{
+				Name:     bypassData.CfClearanceStruct.Name,
+				Value:    bypassData.CfClearanceStruct.Value,
+				Path:     bypassData.CfClearanceStruct.Path,
+				Domain:   bypassData.CfClearanceStruct.Domain, // This now has the dot prefix
+				Secure:   bypassData.CfClearanceStruct.Secure,
+				HttpOnly: bypassData.CfClearanceStruct.HttpOnly,
+			}
+
+			if bypassData.CfClearanceStruct.Expires != nil {
+				httpCookie.Expires = *bypassData.CfClearanceStruct.Expires
+			}
+
+			c.SetCookies(imageURL, []*http.Cookie{httpCookie})
+
+			// Set User-Agent
+			c.UserAgent = bypassData.Entropy.UserAgent
+
+			log.Printf("✓ Applied CF bypass with cookie domain: %s for URL: %s", bypassData.CfClearanceStruct.Domain, imageURL)
+		}
+	}
+
+	// Variables to capture response
+	var imgBytes []byte
+	var downloadErr error
+
+	// Handle successful response
+	c.OnResponse(func(r *colly.Response) {
+		if r.StatusCode != 200 {
+			statusText := http.StatusText(r.StatusCode)
+			downloadErr = errors.New("bad response status: " + string(rune(r.StatusCode)) + " " + statusText)
+			log.Printf("Image download error: status=%d, url=%s", r.StatusCode, imageURL)
+			return
+		}
+		imgBytes = r.Body
+	})
+
+	// Handle errors
+	c.OnError(func(r *colly.Response, err error) {
+		if r != nil {
+			statusText := http.StatusText(r.StatusCode)
+			downloadErr = errors.New("request failed: " + string(rune(r.StatusCode)) + " " + statusText + " - " + err.Error())
+			log.Printf("Image download error: status=%d, error=%v, url=%s", r.StatusCode, err, imageURL)
+		} else {
+			downloadErr = errors.New("request failed: " + err.Error())
+			log.Printf("Image download error: %v, url=%s", err, imageURL)
+		}
+	})
+
+	// Visit the image URL
+	visitErr := c.Visit(imageURL)
+	if visitErr != nil {
+		log.Printf("Failed to visit image URL: %v, url=%s", visitErr, imageURL)
+		return errors.New("failed to visit URL: " + visitErr.Error())
+	}
+
+	// Check for download errors
+	if downloadErr != nil {
+		return downloadErr
+	}
+
+	// Check for empty response
+	if len(imgBytes) == 0 {
+		log.Printf("Empty response body for image: %s", imageURL)
+		return errors.New("empty response body")
+	}
+
+	// Pad the image filename to 3 digits (reuse existing helper)
+	paddedFileName := padFileName(filename + ".jpg")
+
+	// Join the padded dir / filename back together
+	outputFile := filepath.Join(targetDir, paddedFileName)
+
+	// Convert and save (reuse existing function)
+	convertErr := ConvertImageToJPEG(imgBytes, outputFile)
+	if convertErr != nil {
+		log.Printf("Failed to convert/save image: %v, url=%s, output=%s", convertErr, imageURL, outputFile)
+		return convertErr
+	}
+
+	return nil
+}
+
+// DownloadConvertToJPGRenameCfWithCollector allows passing a pre-configured Colly collector.
+// This is useful when you want to share a single collector (with CF bypass already applied)
+// across multiple image downloads for better performance.
+//
+// Parameters:
+//   - c: Pre-configured Colly collector (should already have CF bypass applied)
+//   - filename: Base filename without extension (e.g., "1", "2", "3")
+//   - imageURL: Full URL of the image to download
+//   - targetDir: Directory where the image should be saved
+//
+// Returns:
+//   - error: Any error encountered during download/conversion, nil on success
+func DownloadConvertToJPGRenameCfWithCollector(c *colly.Collector, filename, imageURL, targetDir string) error {
+	// Variables to capture response
+	var imgBytes []byte
+	var downloadErr error
+
+	// Create a new collector that clones the settings
+	// This prevents callback conflicts when reusing the same collector
+	imgCollector := c.Clone()
+
+	// Handle successful response
+	imgCollector.OnResponse(func(r *colly.Response) {
+		if r.StatusCode != 200 {
+			statusText := http.StatusText(r.StatusCode)
+			downloadErr = errors.New("bad response status: " + string(rune(r.StatusCode)) + " " + statusText)
+			log.Printf("Image download error: status=%d, url=%s", r.StatusCode, imageURL)
+			return
+		}
+		imgBytes = r.Body
+	})
+
+	// Handle errors
+	imgCollector.OnError(func(r *colly.Response, err error) {
+		if r != nil {
+			statusText := http.StatusText(r.StatusCode)
+			downloadErr = errors.New("request failed: " + string(rune(r.StatusCode)) + " " + statusText + " - " + err.Error())
+			log.Printf("Image download error: status=%d, error=%v, url=%s", r.StatusCode, err, imageURL)
+		} else {
+			downloadErr = errors.New("request failed: " + err.Error())
+			log.Printf("Image download error: %v, url=%s", err, imageURL)
+		}
+	})
+
+	// Visit the image URL
+	visitErr := imgCollector.Visit(imageURL)
+	if visitErr != nil {
+		log.Printf("Failed to visit image URL: %v, url=%s", visitErr, imageURL)
+		return errors.New("failed to visit URL: " + visitErr.Error())
+	}
+
+	// Check for download errors
+	if downloadErr != nil {
+		return downloadErr
+	}
+
+	// Check for empty response
+	if len(imgBytes) == 0 {
+		log.Printf("Empty response body for image: %s", imageURL)
+		return errors.New("empty response body")
+	}
+
+	// Pad the image filename to 3 digits (reuse existing helper)
+	paddedFileName := padFileName(filename + ".jpg")
+
+	// Join the padded dir / filename back together
+	outputFile := filepath.Join(targetDir, paddedFileName)
+
+	// Convert and save (reuse existing function)
+	convertErr := ConvertImageToJPEG(imgBytes, outputFile)
+	if convertErr != nil {
+		log.Printf("Failed to convert/save image: %v, url=%s, output=%s", convertErr, imageURL, outputFile)
+		return convertErr
+	}
+
+	return nil
 }

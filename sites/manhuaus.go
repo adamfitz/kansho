@@ -55,6 +55,14 @@ func ManhuausDownloadChapters(ctx context.Context, manga *config.Bookmarks, prog
 		return fmt.Errorf("manga location is empty")
 	}
 
+	// Extract the domain from the manga URL for CF bypass
+	parsedMangaURL, err := url.Parse(manga.Url)
+	if err != nil {
+		return fmt.Errorf("failed to parse manga URL: %v", err)
+	}
+	cfDomain := parsedMangaURL.Hostname()
+	log.Printf("<%s> Using CF domain for bypass: %s", manga.Site, cfDomain)
+
 	log.Printf("<%s> Starting download [%s]", manga.Site, manga.Title)
 	if progressCallback != nil {
 		progressCallback(fmt.Sprintf("Fetching chapter list for %s...", manga.Title), 0, 0, 0, 0)
@@ -166,7 +174,6 @@ func ManhuausDownloadChapters(ctx context.Context, manga *config.Bookmarks, prog
 		defer rateLimiter.Stop()
 
 		for i, imgURL := range imgURLs {
-
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -191,7 +198,9 @@ func ManhuausDownloadChapters(ctx context.Context, manga *config.Bookmarks, prog
 			log.Printf("[%s:%s] Downloading image %d/%d: %s", manga.Title, cbzName, imgNum, len(imgURLs), imgURL)
 
 			filename := fmt.Sprintf("%d", imgNum)
-			imgConvertErr := parser.DownloadConvertToJPGRename(filename, imgURL, chapterDir)
+
+			// Use cfDomain instead of manga.Site
+			imgConvertErr := parser.DownloadConvertToJPGRenameCf(filename, imgURL, chapterDir, cfDomain)
 			if imgConvertErr != nil {
 				log.Printf("[%s:%s] ⚠️ Failed to download/convert image %s: %v", manga.Title, cbzName, imgURL, imgConvertErr)
 			} else {
