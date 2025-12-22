@@ -74,9 +74,9 @@ jobs:
           GOOS=${GOOS} GOARCH=${GOARCH} CGO_ENABLED=1 \
           go build \
             -ldflags "\
-              -X github.com/backyard/kansho/config.Version=${{ steps.version.outputs.version }} \
-              -X github.com/backyard/kansho/config.GitCommit=${COMMIT} \
-              -X github.com/backyard/kansho/config.BuildTime=${BUILD_TIME}" \
+              -X kansho/config.Version=${{ steps.version.outputs.version }} \
+              -X kansho/config.GitCommit=${COMMIT} \
+              -X kansho/config.BuildTime=${BUILD_TIME}" \
             -o rootfs/usr/bin/${APP_NAME} \
             .
 
