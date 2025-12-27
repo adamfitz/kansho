@@ -65,7 +65,7 @@ jobs:
 
           cp packaging/kansho.png \
             rootfs/usr/share/icons/hicolor/256x256/apps/${APP_NAME}.png
-
+      
       - name: Build application binary
         run: |
           BUILD_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -73,13 +73,13 @@ jobs:
 
           GOOS=${GOOS} GOARCH=${GOARCH} CGO_ENABLED=1 \
           go build \
+            -tags release \
             -ldflags "\
               -X kansho/config.Version=${{ steps.version.outputs.version }} \
               -X kansho/config.GitCommit=${COMMIT} \
               -X kansho/config.BuildTime=${BUILD_TIME}" \
             -o rootfs/usr/bin/${APP_NAME} \
             .
-
 
       - name: Fix permissions
         run: |

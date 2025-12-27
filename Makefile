@@ -30,7 +30,7 @@ prepare:
 build:
 	@echo "==> Building Go binary"
 	GOOS=$(GOOS) GOARCH=$(GOARCH) CGO_ENABLED=1 \
-	go build -ldflags "-X github.com/backyard/kansho/config.GitCommit=$(git rev-parse --short HEAD)" -o $(BIN_DIR)/$(BINARY) ./main.go
+	go build -tags release -ldflags "-X github.com/backyard/kansho/config.GitCommit=$(git rev-parse --short HEAD)" -o $(BIN_DIR)/$(BINARY) .
 
 install_files:
 	@echo "==> Setting permissions"
