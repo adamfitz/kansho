@@ -470,23 +470,25 @@ func xbatoChapterUrlsAttempt(url string, timeout time.Duration) ([]string, error
 //   - entries: Slice of chapter entries from xbato.com in format "Chapter X|URL"
 //
 // Returns:
-//   - map[string]string: Map where key = normalized filename (ch###.cbz or ch###.part.cbz)
+//   - map[string]string: Map where key = normalized filename (ch###.cbz or special.cbz)
 //     and value = full chapter URL
 //
-// The function extracts chapter numbers from the text and normalizes them to a standard format:
-// - Main chapters: ch001.cbz, ch002.cbz, etc.
-// - Split chapters: ch001.1.cbz, ch001.2.cbz, etc.
-//
-// Example input:
-//   - "Chapter 1|https://xbato.com/chapter/3890889" -> ch001.cbz
-//   - "Chapter 1.5|https://xbato.com/chapter/3890890" -> ch001.5.cbz
+// The function handles:
+// - Standard chapters: "Chapter 1" -> ch001.cbz
+// - Decimal chapters: "Chapter 1.5" -> ch001.5.cbz
+// - Prologues: "Prologue", "Prologue 1", "Prologue 2" -> prologue.cbz, prologue_1.cbz, etc.
+// - Epilogues: "Epilogue", "Epilogue 1", "Epilogue 7 (Epilogue Finale)" -> epilogue.cbz, epilogue_1.cbz, etc.
+// - Afterwords: "Afterword" -> afterword.cbz
 func xbatoChapterMap(entries []string) map[string]string {
 	chapterMap := make(map[string]string)
 
 	log.Printf("<xbato> Processing %d chapter entries", len(entries))
 
-	// Regex to extract chapter numbers from text like "Chapter 1", "Chapter 1.5", "Chapter 123"
-	re := regexp.MustCompile(`Chapter\s+(\d+)(?:\.(\d+))?`)
+	// Regex patterns
+	chapterRe := regexp.MustCompile(`Chapter\s+(\d+)(?:\.(\d+))?`)
+	prologueRe := regexp.MustCompile(`(?i)Prologue(?:\s+(\d+))?`)
+	epilogueRe := regexp.MustCompile(`(?i)Epilogue(?:\s+(\d+))?`)
+	afterwordRe := regexp.MustCompile(`(?i)Afterword`)
 
 	for _, entry := range entries {
 		// Split the entry into text and URL
@@ -498,28 +500,51 @@ func xbatoChapterMap(entries []string) map[string]string {
 
 		chapterText := parts[0]
 		url := parts[1]
+		var filename string
 
-		// Extract chapter number from text
-		matches := re.FindStringSubmatch(chapterText)
-		if len(matches) > 0 {
-			mainNum := matches[1] // Main chapter number (e.g., "1", "10", "123")
+		// Try to match standard chapter
+		if matches := chapterRe.FindStringSubmatch(chapterText); len(matches) > 0 {
+			mainNum := matches[1] // Main chapter number
 			partNum := ""
 			if len(matches) > 2 && matches[2] != "" {
-				partNum = matches[2] // Decimal part (e.g., "5" from "1.5")
+				partNum = matches[2] // Decimal part
 			}
 
-			// Build final filename: pad main number to 3 digits
-			filename := fmt.Sprintf("ch%03s", mainNum)
+			filename = fmt.Sprintf("ch%03s", mainNum)
 			if partNum != "" {
 				filename += "." + partNum
 			}
 			filename += ".cbz"
-
-			chapterMap[filename] = url
-			log.Printf("<xbato> Mapped: %s → %s", filename, url)
+		} else if matches := prologueRe.FindStringSubmatch(chapterText); matches != nil {
+			// Handle prologue
+			if len(matches) > 1 && matches[1] != "" {
+				// Prologue with number (e.g., "Prologue 1", "Prologue 2")
+				num := matches[1]
+				filename = fmt.Sprintf("prologue_%s.cbz", num)
+			} else {
+				// Just "Prologue"
+				filename = "prologue.cbz"
+			}
+		} else if matches := epilogueRe.FindStringSubmatch(chapterText); matches != nil {
+			// Handle epilogue
+			if len(matches) > 1 && matches[1] != "" {
+				// Epilogue with number (e.g., "Epilogue 1", "Epilogue 7")
+				num := matches[1]
+				filename = fmt.Sprintf("epilogue_%s.cbz", num)
+			} else {
+				// Just "Epilogue"
+				filename = "epilogue.cbz"
+			}
+		} else if afterwordRe.MatchString(chapterText) {
+			// Handle afterword
+			filename = "afterword.cbz"
 		} else {
-			log.Printf("<xbato> WARNING: Could not parse chapter number from text: %s", chapterText)
+			log.Printf("<xbato> WARNING: Could not parse chapter type from text: %s", chapterText)
+			continue
 		}
+
+		chapterMap[filename] = url
+		log.Printf("<xbato> Mapped '%s' -> %s (URL: %s)", chapterText, filename, url)
 	}
 
 	log.Printf("<xbato> Created chapter map with %d entries", len(chapterMap))
