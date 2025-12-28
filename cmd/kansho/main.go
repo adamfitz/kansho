@@ -47,7 +47,7 @@ func main() {
 	fileMenu := fyne.NewMenu("File",
 		fyne.NewMenuItem("Logs", func() {
 			log.Println("[UI] Kansho Logs opened (GUI)")
-			ui.ShowLogWindow(kanshoApp)
+			ui.ShowLogWindow(myWindow)
 		}),
 		fyne.NewMenuItem("Bookmarks", func() {
 			log.Println("[UI] Kansho Boomarks opened (GUI)")
@@ -90,7 +90,7 @@ func main() {
 		Modifier: fyne.KeyModifierControl,
 	}, func(shortcut fyne.Shortcut) {
 		log.Println("[UI] Kansho Logs opened (ctrl + l)")
-		ui.ShowLogWindow(kanshoApp)
+		ui.ShowLogWindow(myWindow)
 	})
 	myWindow.Canvas().AddShortcut(&desktop.CustomShortcut{
 		KeyName:  fyne.KeyB,

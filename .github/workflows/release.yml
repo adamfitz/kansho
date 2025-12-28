@@ -7,10 +7,11 @@ jobs:
   build-release-deb:
     runs-on: ubuntu-latest
     permissions:
-      contents: write   # Needed to create GitHub Release
+      contents: write
 
     env:
       APP_NAME: kansho
+      LOGVIEWER_NAME: kansho-logviewer
       GOOS: linux
       GOARCH: amd64
 
@@ -66,11 +67,12 @@ jobs:
           cp packaging/kansho.png \
             rootfs/usr/share/icons/hicolor/256x256/apps/${APP_NAME}.png
       
-      - name: Build application binary
+      - name: Build application binaries
         run: |
           BUILD_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
           COMMIT=$(git rev-parse --short HEAD)
 
+          # Build main application
           GOOS=${GOOS} GOARCH=${GOARCH} CGO_ENABLED=1 \
           go build \
             -tags release \
@@ -79,11 +81,22 @@ jobs:
               -X kansho/config.GitCommit=${COMMIT} \
               -X kansho/config.BuildTime=${BUILD_TIME}" \
             -o rootfs/usr/bin/${APP_NAME} \
-            .
+            ./cmd/kansho
+
+          # Build log viewer
+          GOOS=${GOOS} GOARCH=${GOARCH} CGO_ENABLED=1 \
+          go build \
+            -tags release \
+            -ldflags "\
+              -X main.Version=${{ steps.version.outputs.version }} \
+              -X main.GitCommit=${COMMIT}" \
+            -o rootfs/usr/bin/${LOGVIEWER_NAME} \
+            ./cmd/kansho-logviewer
 
       - name: Fix permissions
         run: |
           chmod 755 rootfs/usr/bin/${APP_NAME}
+          chmod 755 rootfs/usr/bin/${LOGVIEWER_NAME}
           chmod 644 rootfs/usr/share/applications/${APP_NAME}.desktop
           chmod 644 rootfs/usr/share/icons/hicolor/256x256/apps/${APP_NAME}.png
           chmod 755 rootfs/DEBIAN
@@ -94,12 +107,12 @@ jobs:
           dpkg-deb --build rootfs \
           builds/${APP_NAME}_${{ steps.version.outputs.version }}_amd64.deb
 
-      - name: Create GitHub Release (gh-release)
+      - name: Create GitHub Release
         id: release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.version.outputs.version  }}
-          name: ${{ steps.version.outputs.version  }}
+          tag_name: ${{ steps.version.outputs.version }}
+          name: ${{ steps.version.outputs.version }}
           draft: false
           prerelease: false
           files: |
