@@ -1,7 +1,7 @@
 package main
 
 // Refactored main.go
-// This file has been simplified to focus only on application initialization.
+// This file focuses on application initialization.
 // All UI layout, components, and state management have been moved to separate packages:
 //
 // Package structure:
@@ -14,6 +14,8 @@ package main
 import (
 	"log"
 
+	_ "embed" // required for go:embed
+
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/driver/desktop"
@@ -22,10 +24,12 @@ import (
 	"kansho/ui"
 )
 
+//go:embed packaging/kansho.png
+var iconBytes []byte
+
 func main() {
 
 	// Create a new Fyne application instance
-	// This initializes the application and sets up the event loop
 	kanshoApp := app.NewWithID("com.backyard.kansho") // must match your AppMetadata.ID
 
 	kanshoMetadata := fyne.AppMetadata{
@@ -37,13 +41,17 @@ func main() {
 	app.SetMetadata(kanshoMetadata)
 
 	// Create the main application window
-	// The window title "kansho" (鑑賞) means "appreciation" or "viewing" in Japanese
 	myWindow := kanshoApp.NewWindow("kansho")
+
+	// -------------------------
+	// Set title bar & taskbar icon
+	// -------------------------
+	appIcon := fyne.NewStaticResource("kansho.png", iconBytes)
+	myWindow.SetIcon(appIcon)
 
 	// -------------------------------------------------------------------------
 	// FILE MENU WITH QUIT OPTION
 	// -------------------------------------------------------------------------
-	// Create File menu with Quit option for graceful application shutdown
 	fileMenu := fyne.NewMenu("File",
 		fyne.NewMenuItem("Logs", func() {
 			log.Println("[UI] Kansho Logs opened (GUI)")
@@ -53,31 +61,21 @@ func main() {
 			log.Println("[UI] Kansho Boomarks opened (GUI)")
 			ui.ShowBookmarksWindow(kanshoApp)
 		}),
-		// Dont expose to the user, leave the keybind for debugging
-		// fyne.NewMenuItem("Configuration", func() {
-		// 	log.Println("[UI] Kansho configuration opened (GUI)")
-		// 	ui.ShowConfigWindow(kanshoApp)
-		// }),
 	)
 
 	helpMenu := fyne.NewMenu("Help",
 		fyne.NewMenuItem("About", func() {
-			log.Println("[UI] About dialog opened") // ← Add logging like the others
-			ui.ShowAboutDialog(kanshoApp)           // ← Pass kanshoApp like the others
+			log.Println("[UI] About dialog opened")
+			ui.ShowAboutDialog(kanshoApp)
 		}),
 	)
 
-	// Create main menu bar and add it to the window
-	// File is a well known application menu, so by default fyne injects its own Quit menu entry and it is not required
-	// to manually configure this (like the other entries above).
 	mainMenu := fyne.NewMainMenu(fileMenu, helpMenu)
 	myWindow.SetMainMenu(mainMenu)
 
 	// -------------------------------------------------------------------------
-	// KEYBOARD SHORTCUT: CTRL+Q TO QUIT
+	// KEYBOARD SHORTCUTS
 	// -------------------------------------------------------------------------
-	// Register Ctrl+Q keyboard shortcut for quick application exit
-	// This is a standard shortcut on many platforms
 	myWindow.Canvas().AddShortcut(&desktop.CustomShortcut{
 		KeyName:  fyne.KeyQ,
 		Modifier: fyne.KeyModifierControl,
@@ -101,7 +99,7 @@ func main() {
 	})
 	myWindow.Canvas().AddShortcut(&desktop.CustomShortcut{
 		KeyName:  fyne.KeyC,
-		Modifier: fyne.KeyModifierControl | fyne.KeyModifierShift, // bitwise OR operator to make both shift and ctrl the modifier keys
+		Modifier: fyne.KeyModifierControl | fyne.KeyModifierShift,
 	}, func(shortcut fyne.Shortcut) {
 		log.Println("[UI] Kansho configuration opened (ctrl + c)")
 		ui.ShowConfigWindow(kanshoApp)
@@ -109,31 +107,16 @@ func main() {
 
 	myWindow.SetCloseIntercept(func() {
 		log.Println("[UI] User closed application (File menu)")
-		kanshoApp.Quit() // allow the app to actually close
+		kanshoApp.Quit()
 	})
 
-	// Set the initial window size
-	// Users can resize the window, but this provides a good starting size
+	// Set initial window size
 	myWindow.Resize(fyne.NewSize(ui.DefaultWindowWidth, ui.DefaultWindowHeight))
 
 	// Build the complete UI layout
-	// This creates all components, sets up state management, and assembles the layout
-	// The ui.BuildMainLayout function handles all the complexity of:
-	// - Creating the gradient background
-	// - Initializing the application state
-	// - Creating all view components (manga list, add manga, chapter list)
-	// - Setting up callbacks for inter-component communication
-	// - Assembling everything into a cohesive layout
 	content := ui.BuildMainLayout(myWindow)
-
-	// Set the window content to our complete layout
 	myWindow.SetContent(content)
 
-	// Show the window and start the application event loop
-	// This call blocks until the window is closed by the user
-	// The event loop handles:
-	// - User input (clicks, keyboard)
-	// - Window events (resize, close)
-	// - Redraws and updates
+	// Show the window and run the event loop
 	myWindow.ShowAndRun()
 }
