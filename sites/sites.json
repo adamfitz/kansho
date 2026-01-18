@@ -11,16 +11,6 @@
       }
     },
     {
-      "name": "xbato",
-      "display_name": "xbato",
-      "required_fields": {
-        "url": false,
-        "shortname": true,
-        "title": true,
-        "location": true
-      }
-    },
-    {
       "name": "asurascans",
       "display_name": "asurascans",
       "required_fields": {

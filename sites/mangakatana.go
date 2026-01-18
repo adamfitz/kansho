@@ -21,8 +21,6 @@ import (
 )
 
 // MangakatanaDownloadChapters downloads manga chapters from mangakatana website.
-// This function follows the same pattern as XbatoDownloadChapters for consistency.
-//
 // Parameters:
 //   - manga: Pointer to the manga bookmark containing URL, location, and metadata
 //   - progressCallback: Optional callback function for progress updates

@@ -8,7 +8,6 @@ import (
 // This registers all site download functions with the queue system
 func init() {
 	config.RegisterSite("mgeko", MgekoDownloadChapters)
-	config.RegisterSite("xbato", XbatoDownloadChapters)
 	config.RegisterSite("rizzfables", RizzfablesDownloadChapters)
 	config.RegisterSite("manhuaus", ManhuausDownloadChapters)
 	config.RegisterSite("kunmanga", KunmangaDownloadChapters)

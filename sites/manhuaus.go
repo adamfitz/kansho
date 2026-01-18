@@ -22,9 +22,7 @@ import (
 )
 
 // ManhuausDownloadChapters downloads manga chapters from manhuaus-like websites.
-// This function follows the same pattern as XbatoDownloadChapters and RizzfablesDownloadChapters for consistency.
-//
-// NOTE: Unlike xbato (which uses shortname), this function uses the full manga URL from the bookmark,
+// Note: this function uses the full manga URL from the bookmark,
 // making it flexible for different domains (manhuaus.com, manhuaus.org, etc.)
 //
 // Parameters:

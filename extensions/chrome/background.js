@@ -5,8 +5,8 @@
 const SUPPORTED_DOMAINS = [
   "*://*.mgeko.cc/*",
   "*://challenges.cloudflare.com/*",
-  "*://*.xbato.com/*",
-  "*://xbato.com/*",
+  // "*://*.xbato.com/*", // removed xbato from supported domains, due to site uptime issues
+  // "*://xbato.com/*", // removed xbato from supported domains, due to site uptime issues
   "*://rizzfables.com/*",
   "*://*.rizzfables.com/*",
   "*://manhuaus.com/*",
