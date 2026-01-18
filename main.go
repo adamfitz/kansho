@@ -57,10 +57,6 @@ func main() {
 			log.Println("[UI] Kansho Logs opened (GUI)")
 			ui.ShowLogWindow(kanshoApp)
 		}),
-		fyne.NewMenuItem("Bookmarks", func() {
-			log.Println("[UI] Kansho Boomarks opened (GUI)")
-			ui.ShowBookmarksWindow(kanshoApp)
-		}),
 	)
 
 	helpMenu := fyne.NewMenu("Help",
@@ -70,7 +66,22 @@ func main() {
 		}),
 	)
 
-	mainMenu := fyne.NewMainMenu(fileMenu, helpMenu)
+	bookmarksMenu := fyne.NewMenu("Bookmarks",
+		fyne.NewMenuItem("Bookmarks", func() {
+			log.Println("[UI] Kansho Bookmarks opened (GUI)")
+			ui.ShowBookmarksWindow(kanshoApp)
+		}),
+		fyne.NewMenuItem("Export Bookmarks", func() {
+			log.Println("[UI] Export Bookmarks triggered (GUI)")
+			ui.ShowExportBookmarksDialog(kanshoApp, myWindow)
+		}),
+		fyne.NewMenuItem("Import Bookmarks", func() {
+			log.Println("[UI] Import Bookmarks triggered (GUI)")
+			ui.ShowImportBookmarksDialog(kanshoApp, myWindow)
+		}),
+	)
+
+	mainMenu := fyne.NewMainMenu(fileMenu, bookmarksMenu, helpMenu)
 	myWindow.SetMainMenu(mainMenu)
 
 	// -------------------------------------------------------------------------
@@ -94,7 +105,7 @@ func main() {
 		KeyName:  fyne.KeyB,
 		Modifier: fyne.KeyModifierControl,
 	}, func(shortcut fyne.Shortcut) {
-		log.Println("[UI] Kansho Boomarks opened (ctrl + b)")
+		log.Println("[UI] Kansho Bookmarks opened (ctrl + b)")
 		ui.ShowBookmarksWindow(kanshoApp)
 	})
 	myWindow.Canvas().AddShortcut(&desktop.CustomShortcut{
