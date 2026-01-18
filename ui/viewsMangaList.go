@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"sort"
 
 	"fyne.io/fyne/v2"
@@ -25,6 +26,7 @@ type MangaListView struct {
 	// List is the scrollable list widget showing manga titles
 	List         *widget.List
 	deleteButton *widget.Button // Button to delete the selected manga
+	editButton   *widget.Button // Button to edit the selected manga
 
 	// Track the currently selected manga index
 	selectedIndex int
@@ -32,6 +34,9 @@ type MangaListView struct {
 	// state is a reference to the shared application state
 	// This allows the view to access manga data and notify of selection changes
 	state *KanshoAppState
+
+	// Reference to the edit manga view for loading manga data
+	editMangaView *EditMangaView
 }
 
 // NewMangaListView creates a new manga list view component.
@@ -57,68 +62,66 @@ func NewMangaListView(state *KanshoAppState) *MangaListView {
 	view.deleteButton = widget.NewButton("Delete Manga", func() {
 		view.onDeleteButtonClicked()
 	})
-	// Initially disable the delete button since nothing is selected
 	view.deleteButton.Disable()
 
+	// Create the Edit Manga button
+	view.editButton = widget.NewButton("Edit Manga", func() {
+		view.onEditButtonClicked()
+	})
+	view.editButton.Disable()
+
 	// Sort manga alphabetically by title for consistent display
-	// This makes it easier for users to find specific manga
 	sort.Slice(view.state.MangaData.Manga, func(i, j int) bool {
 		return view.state.MangaData.Manga[i].Title < view.state.MangaData.Manga[j].Title
 	})
 
 	// Create the list widget
-	// widget.NewList uses three callbacks:
-	// 1. Length function - tells the list how many items exist
-	// 2. CreateItem function - creates a template for list items (called once)
-	// 3. UpdateItem function - populates each item with actual data (called for each visible item)
 	view.List = widget.NewList(
 		// Length: Return the number of manga in our data
 		func() int {
 			return len(view.state.MangaData.Manga)
 		},
 		// CreateItem: Create a template label that will be reused
-		// This is called once to create the item template
 		func() fyne.CanvasObject {
 			label := widget.NewLabel("template")
-			label.Truncation = fyne.TextTruncateEllipsis // Prevent long titles from expanding the card
+			label.Truncation = fyne.TextTruncateEllipsis
 			return label
 		},
 		// UpdateItem: Fill in the label with actual manga data
-		// This is called for each visible list item
-		// id is the index in the manga array
 		func(id widget.ListItemID, item fyne.CanvasObject) {
-			// Cast the generic CanvasObject back to a Label
 			label := item.(*widget.Label)
-			// Set the label text to the manga title
 			label.SetText(view.state.MangaData.Manga[id].Title)
 		},
 	)
 
 	// Set up the selection handler
-	// This is called when a user clicks on a list item
 	view.List.OnSelected = func(id widget.ListItemID) {
-		// Store the selected index
 		view.selectedIndex = int(id)
 
-		// Enable the delete button since something is now selected
+		// Enable both buttons since something is now selected
 		view.deleteButton.Enable()
+		view.editButton.Enable()
 
 		// Notify the app state that selection changed
-		// This will trigger callbacks in other views (like the chapter list)
 		view.state.SelectManga(int(id))
 	}
 
-	// Build the card content with header, list, and delete button
+	// Build the card content with header, list, and buttons
 	cardContent := container.NewBorder(
 		// Top: Card title and separator
 		container.NewVBox(
 			NewBoldLabel("Manga List"),
 			NewSeparator(),
 		),
-		// Bottom: Delete button centered
+		// Bottom: Buttons centered
 		container.NewVBox(
 			NewSeparator(),
-			container.NewCenter(view.deleteButton),
+			container.NewCenter(
+				container.NewHBox(
+					view.deleteButton,
+					view.editButton,
+				),
+			),
 		),
 		nil, // Left
 		nil, // Right
@@ -142,9 +145,14 @@ func NewMangaListView(state *KanshoAppState) *MangaListView {
 	return view
 }
 
+// SetEditMangaView sets the reference to the edit manga view
+// This allows the manga list to load manga data into the edit form
+func (v *MangaListView) SetEditMangaView(editView *EditMangaView) {
+	v.editMangaView = editView
+}
+
 // refresh updates the list to reflect current data.
 // This is called automatically when manga are added or deleted.
-// It re-sorts the manga and tells the list widget to redraw.
 func (v *MangaListView) refresh() {
 	// Re-sort manga alphabetically
 	sort.Slice(v.state.MangaData.Manga, func(i, j int) bool {
@@ -155,14 +163,13 @@ func (v *MangaListView) refresh() {
 	v.selectedIndex = -1
 	v.List.UnselectAll()
 	v.deleteButton.Disable()
+	v.editButton.Disable()
 
 	// Tell the list widget to refresh its display
-	// This causes UpdateItem to be called again for all visible items
 	v.List.Refresh()
 }
 
 // onDeleteButtonClicked is called when the user clicks the Delete Manga button.
-// This shows a confirmation dialog and deletes the selected manga.
 func (v *MangaListView) onDeleteButtonClicked() {
 	// Validate that something is selected
 	if v.selectedIndex < 0 || v.selectedIndex >= len(v.state.MangaData.Manga) {
@@ -189,4 +196,29 @@ func (v *MangaListView) onDeleteButtonClicked() {
 		},
 		v.state.Window,
 	)
+}
+
+// onEditButtonClicked is called when the user clicks the Edit Manga button.
+func (v *MangaListView) onEditButtonClicked() {
+	// Validate that something is selected
+	if v.selectedIndex < 0 || v.selectedIndex >= len(v.state.MangaData.Manga) {
+		dialog.ShowInformation(
+			"Edit Manga",
+			"Please select a manga to edit.",
+			v.state.Window,
+		)
+		return
+	}
+
+	// Check if we have a reference to the edit manga view
+	if v.editMangaView == nil {
+		dialog.ShowError(
+			fmt.Errorf("edit manga view not initialized"),
+			v.state.Window,
+		)
+		return
+	}
+
+	// Load the selected manga into the edit form
+	v.editMangaView.LoadMangaForEditing(v.selectedIndex)
 }
