@@ -2,6 +2,7 @@ package ui
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -12,6 +13,19 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/widget"
 )
+
+type Bookmark struct {
+	Title     string `json:"title"`
+	URL       string `json:"url"`
+	Chapters  string `json:"chapters"`
+	Location  string `json:"location"`
+	Site      string `json:"site"`
+	Shortname string `json:"shortname"`
+}
+
+type BookmarksData struct {
+	Manga []Bookmark `json:"manga"`
+}
 
 func ShowBookmarksWindow(kanshoApp fyne.App) {
 	configDir, err := parser.ExpandPath("~/.config/kansho")
@@ -30,6 +44,7 @@ func ShowBookmarksWindow(kanshoApp fyne.App) {
 	searchEntry.SetPlaceHolder("Search bookmarks...")
 
 	var allLines []string
+	var bookmarksData BookmarksData
 
 	addLineNumbers := func(lines []string) string {
 		var numbered []string
@@ -37,6 +52,45 @@ func ShowBookmarksWindow(kanshoApp fyne.App) {
 			numbered = append(numbered, fmt.Sprintf("%4d | %s", i+1, line))
 		}
 		return strings.Join(numbered, "\n")
+	}
+
+	// Find which block a line belongs to and return the block's line range
+	findBlockRange := func(lineNum int) (start, end int) {
+		inMangaArray := false
+		blockStart := -1
+		braceCount := 0
+
+		for i, line := range allLines {
+			trimmed := strings.TrimSpace(line)
+
+			// Check if we're entering the manga array
+			if strings.Contains(trimmed, `"manga":`) {
+				inMangaArray = true
+				continue
+			}
+
+			if !inMangaArray {
+				continue
+			}
+
+			// Track opening braces for blocks
+			if trimmed == "{" && blockStart == -1 {
+				blockStart = i
+				braceCount = 1
+			} else if blockStart != -1 {
+				braceCount += strings.Count(trimmed, "{")
+				braceCount -= strings.Count(trimmed, "}")
+
+				if braceCount == 0 {
+					// Block is complete
+					if i >= lineNum && lineNum >= blockStart {
+						return blockStart, i
+					}
+					blockStart = -1
+				}
+			}
+		}
+		return -1, -1
 	}
 
 	performSearch := func() {
@@ -47,26 +101,32 @@ func ShowBookmarksWindow(kanshoApp fyne.App) {
 		}
 
 		go func() {
-			var filtered []string
-			var lineNumbers []int
 			queryLower := strings.ToLower(query)
+			matchedBlocks := make(map[int]bool) // Track unique blocks by start line
+			var results []string
 
+			// Search through each line
 			for i, line := range allLines {
 				if strings.Contains(strings.ToLower(line), queryLower) {
-					filtered = append(filtered, line)
-					lineNumbers = append(lineNumbers, i+1)
+					start, end := findBlockRange(i)
+					if start != -1 && !matchedBlocks[start] {
+						matchedBlocks[start] = true
+
+						// Extract the block
+						var blockLines []string
+						for j := start; j <= end; j++ {
+							blockLines = append(blockLines, fmt.Sprintf("%4d | %s", j+1, allLines[j]))
+						}
+						results = append(results, strings.Join(blockLines, "\n"))
+					}
 				}
 			}
 
 			result := ""
-			if len(filtered) == 0 {
+			if len(results) == 0 {
 				result = fmt.Sprintf("No results found for: %s", query)
 			} else {
-				var resultLines []string
-				for i, line := range filtered {
-					resultLines = append(resultLines, fmt.Sprintf("Line %d | %s", lineNumbers[i], line))
-				}
-				result = strings.Join(resultLines, "\n") + fmt.Sprintf("\n\n[Found %d matches]", len(filtered))
+				result = strings.Join(results, "\n\n") + fmt.Sprintf("\n\n[Found %d matching blocks]", len(results))
 			}
 
 			fyne.Do(func() {
@@ -130,6 +190,15 @@ func ShowBookmarksWindow(kanshoApp fyne.App) {
 		}
 
 		allLines = lines
+
+		// Also parse the JSON for potential future use
+		file.Seek(0, 0)
+		decoder := json.NewDecoder(file)
+		if err := decoder.Decode(&bookmarksData); err != nil {
+			// Non-fatal, just log it
+			fmt.Printf("Warning: Could not parse JSON: %v\n", err)
+		}
+
 		finalContent := addLineNumbers(lines)
 
 		fyne.Do(func() {
