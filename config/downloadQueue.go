@@ -11,10 +11,10 @@ import (
 
 // DownloadTask represents a single manga download task
 type DownloadTask struct {
-	ID            string // Unique ID for this task
-	Manga         *Bookmarks
-	Status        string  // "queued", "downloading", "completed", "cancelled", "failed", "waiting_cf"
-	Progress      float64 // 0.0 to 1.0
+	ID            string    // Unique ID for this task
+	Manga         Bookmarks // Changed from pointer to value - this creates a copy!
+	Status        string    // "queued", "downloading", "completed", "cancelled", "failed", "waiting_cf"
+	Progress      float64   // 0.0 to 1.0
 	StatusMessage string
 	CancelFunc    context.CancelFunc
 	Error         error
@@ -81,9 +81,13 @@ func (q *DownloadQueue) AddTask(manga *Bookmarks) (*DownloadTask, error) {
 		}
 	}
 
+	// CRITICAL FIX: Create a copy of the manga data
+	// This prevents the task from being affected by changes to the original bookmarks
+	mangaCopy := *manga
+
 	task := &DownloadTask{
 		ID:            fmt.Sprintf("%s-%d", manga.Shortname, len(q.tasks)),
-		Manga:         manga,
+		Manga:         mangaCopy, // Store the copy, not a pointer
 		Status:        "queued",
 		StatusMessage: "Waiting in queue...",
 		Progress:      0.0,
@@ -92,7 +96,7 @@ func (q *DownloadQueue) AddTask(manga *Bookmarks) (*DownloadTask, error) {
 	q.tasks = append(q.tasks, task)
 	q.mu.Unlock()
 
-	log.Printf("[Queue] Added task: %s (%s)", task.Manga.Title, task.ID)
+	log.Printf("[Queue] Added task: %s (%s) - Location: %s", task.Manga.Title, task.ID, task.Manga.Location)
 
 	if q.onTaskAdded != nil {
 		q.onTaskAdded(task)
@@ -259,7 +263,7 @@ func (q *DownloadQueue) processQueue() {
 			break
 		}
 
-		log.Printf("[Queue] Processing task: %s", task.Manga.Title)
+		log.Printf("[Queue] Processing task: %s (Location: %s)", task.Manga.Title, task.Manga.Location)
 		q.executeTask(task)
 
 		// Check if we should continue
@@ -322,8 +326,10 @@ func (q *DownloadQueue) executeTask(task *DownloadTask) {
 		}
 	}
 
-	// Execute the download using the site-specific download function
-	err := ExecuteSiteDownload(ctx, task.Manga, progressCallback)
+	// CRITICAL: Pass a pointer to the manga copy
+	// This ensures the download uses the snapshot taken when the task was created
+	log.Printf("[Queue] Starting download for: %s to location: %s", task.Manga.Title, task.Manga.Location)
+	err := ExecuteSiteDownload(ctx, &task.Manga, progressCallback)
 
 	q.mu.Lock()
 	if err != nil {
