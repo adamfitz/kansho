@@ -296,6 +296,10 @@ func asuraChapterUrlsWithRetry(seriesURL string) ([]string, error) {
 }
 
 // asuraChapterUrls fetches the series page and returns all valid chapter URLs
+// Replace these functions in your asura.go file
+
+// asuraChapterUrls fetches the series page and returns all valid chapter URLs
+// asuraChapterUrls fetches the series page and returns all valid chapter URLs
 func asuraChapterUrls(seriesURL string, timeout time.Duration) ([]string, error) {
 	parsedURL, _ := url2.Parse(seriesURL)
 	domain := parsedURL.Hostname()
@@ -303,24 +307,39 @@ func asuraChapterUrls(seriesURL string, timeout time.Duration) ([]string, error)
 	bypassData, err := cf.LoadFromFile(domain)
 	hasStoredData := (err == nil)
 
+	if !hasStoredData {
+		log.Printf("<asura> No stored bypass data found for %s", domain)
+		cf.LogCFError("asuraChapterUrls", domain, fmt.Errorf("no stored bypass data found"))
+
+		// Open browser for manual solve
+		if err := cf.OpenInBrowser(seriesURL); err != nil {
+			return nil, fmt.Errorf("failed to open browser: %w", err)
+		}
+
+		return nil, &cf.CfChallengeError{
+			URL:        seriesURL,
+			StatusCode: 0,
+			Indicators: []string{"No stored cookies - manual solve required"},
+		}
+	}
+
+	log.Printf("<asura> Found stored bypass data for %s (type: %s)", domain, bypassData.Type)
+	// CF Debug logging happens automatically in LoadFromFile
+
 	client := &http.Client{Timeout: timeout}
 
-	if hasStoredData {
-		log.Printf("<asura> Found stored bypass data for %s (type: %s)", domain, bypassData.Type)
-
-		// Check if cookies are expired
-		if bypassData.HasCookies() {
-			if bypassData.IsExpired(24 * time.Hour) {
-				log.Printf("<asura> Stored Cloudflare cookies are expired")
-				hasStoredData = false
-			}
+	// Check if cookies are expired
+	if bypassData.HasCookies() {
+		if bypassData.IsExpired(24 * time.Hour) {
+			log.Printf("<asura> Stored Cloudflare cookies are expired")
+			cf.LogCFError("asuraChapterUrls", domain, fmt.Errorf("cookies expired"))
+			hasStoredData = false
 		}
-	} else {
-		log.Printf("<asura> No stored bypass data found for %s", domain)
 	}
 
 	req, err := http.NewRequest("GET", seriesURL, nil)
 	if err != nil {
+		cf.LogCFError("asuraChapterUrls", domain, fmt.Errorf("failed to create request: %w", err))
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
@@ -354,6 +373,7 @@ func asuraChapterUrls(seriesURL string, timeout time.Duration) ([]string, error)
 
 	// Apply cookies if we have stored data
 	cookiesAdded := 0
+	var cookieStrings []string
 	if hasStoredData && bypassData.HasCookies() {
 		// CRITICAL: Add cf_clearance first from CfClearanceStruct
 		if bypassData.CfClearanceStruct != nil {
@@ -364,6 +384,8 @@ func asuraChapterUrls(seriesURL string, timeout time.Duration) ([]string, error)
 				Path:   bypassData.CfClearanceStruct.Path,
 			})
 			cookiesAdded++
+			cookieStrings = append(cookieStrings, fmt.Sprintf("cf_clearance=%s",
+				bypassData.CfClearanceStruct.Value[:min(20, len(bypassData.CfClearanceStruct.Value))]))
 			log.Printf("<asura>   ✓ Added cf_clearance cookie (domain: %s)", bypassData.CfClearanceStruct.Domain)
 		}
 
@@ -381,12 +403,18 @@ func asuraChapterUrls(seriesURL string, timeout time.Duration) ([]string, error)
 				Path:   ck.Path,
 			})
 			cookiesAdded++
+			cookieStrings = append(cookieStrings, fmt.Sprintf("%s=%s",
+				ck.Name, ck.Value[:min(20, len(ck.Value))]))
 		}
 		log.Printf("<asura> ✓ Applied stored Cloudflare cookies (%d)", cookiesAdded)
+
+		// CF Debug: Log the request
+		cf.LogCFRequest(domain, seriesURL, bypassData.Entropy.UserAgent, cookieStrings)
 	}
 
 	resp, err := client.Do(req)
 	if err != nil {
+		cf.LogCFError("asuraChapterUrls HTTP request", domain, err)
 		return nil, fmt.Errorf("failed to fetch series page: %w", err)
 	}
 	defer resp.Body.Close()
@@ -396,6 +424,7 @@ func asuraChapterUrls(seriesURL string, timeout time.Duration) ([]string, error)
 	// Read and decompress response body
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
+		cf.LogCFError("asuraChapterUrls read body", domain, err)
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 
@@ -405,6 +434,7 @@ func asuraChapterUrls(seriesURL string, timeout time.Duration) ([]string, error)
 	contentEncoding := resp.Header.Get("Content-Encoding")
 	decompressed, wasCompressed, err := cf.DecompressResponseBody(bodyBytes, contentEncoding)
 	if err != nil {
+		cf.LogCFError("asuraChapterUrls decompress", domain, err)
 		return nil, fmt.Errorf("failed to decompress response: %w", err)
 	}
 
@@ -421,15 +451,19 @@ func asuraChapterUrls(seriesURL string, timeout time.Duration) ([]string, error)
 	// Check for Cloudflare challenge
 	isCF, cfInfo, err := cf.Detectcf(resp)
 	if err != nil {
+		cf.LogCFError("asuraChapterUrls CF detection", domain, err)
 		return nil, fmt.Errorf("detectcf error: %w", err)
 	}
 
 	if isCF {
-		log.Printf("<asura> ⚠️ Cloudflare challenge detected!")
+		log.Printf("<asura> ⚠️  Cloudflare challenge detected!")
+		cf.LogCFError("HTTP client challenge detected", domain,
+			fmt.Errorf("challenge indicators: %v", cfInfo.Indicators))
 
 		// If stored data failed, drop it
 		if hasStoredData {
 			log.Printf("<asura> Stored bypass invalid — deleting domain data")
+			cf.MarkCookieAsFailed(domain)
 			cf.DeleteDomain(domain)
 		}
 
@@ -448,12 +482,15 @@ func asuraChapterUrls(seriesURL string, timeout time.Duration) ([]string, error)
 	}
 
 	if resp.StatusCode != 200 {
+		cf.LogCFError("asuraChapterUrls non-200 status", domain,
+			fmt.Errorf("status code %d", resp.StatusCode))
 		return nil, fmt.Errorf("failed to fetch series page: status code %d", resp.StatusCode)
 	}
 
 	// Parse the decompressed HTML
 	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(bodyBytes))
 	if err != nil {
+		cf.LogCFError("asuraChapterUrls HTML parse", domain, err)
 		return nil, fmt.Errorf("failed to parse HTML: %w", err)
 	}
 
@@ -570,10 +607,36 @@ func asuraSortedChapterImagesWithRetry(chapterURL, shortname, cbzName string) ([
 func asuraRawChapterImageUrls(chapterURL string) ([]chapterImage, error) {
 	log.Printf("<asura> Starting fetch for chapter images: %s", chapterURL)
 
+	parsedURL, _ := url2.Parse(chapterURL)
+	domain := parsedURL.Hostname()
+
+	// Load stored cookies
+	bypassData, err := cf.LoadFromFile(domain)
+	if err != nil {
+		log.Printf("<asura> No stored bypass data for chapter fetch, using browser without cookies")
+		cf.LogCFError("asuraRawChapterImageUrls", domain, fmt.Errorf("no bypass data: %v", err))
+		bypassData = nil // Will fetch without cookies
+	}
+
 	ctx, cancel := chromedp.NewContext(context.Background())
 	defer cancel()
 
 	var html string
+
+	// CF Debug: Log the browser action we're about to take
+	if bypassData != nil {
+		var cookieStrings []string
+		if bypassData.CfClearanceStruct != nil {
+			cookieStrings = append(cookieStrings, "cf_clearance=...")
+		}
+		for _, cookie := range bypassData.AllCookies {
+			if cookie.Name != "" && cookie.Name != "cf_clearance" {
+				cookieStrings = append(cookieStrings, fmt.Sprintf("%s=...", cookie.Name))
+			}
+		}
+		cf.LogCFRequest(domain, chapterURL, bypassData.Entropy.UserAgent, cookieStrings)
+		cf.LogCFBrowserAction("Fetch chapter images (start)", chapterURL, len(cookieStrings), false, nil)
+	}
 
 	startNav := time.Now()
 	if err := chromedp.Run(ctx,
@@ -581,83 +644,20 @@ func asuraRawChapterImageUrls(chapterURL string) ([]chapterImage, error) {
 		chromedp.WaitReady("body"),
 		chromedp.OuterHTML("html", &html),
 	); err != nil {
+		cf.LogCFBrowserAction("Fetch chapter images", chapterURL, 0, false, err)
+		cf.LogCFError("Chapter image fetch - chromedp", domain, err)
 		return nil, fmt.Errorf("navigation failed: %w", err)
 	}
 	elapsedNav := time.Since(startNav)
 	log.Printf("<asura> Navigation complete in %s. HTML length: %d", elapsedNav, len(html))
 
+	// CF Debug: Log successful browser action
+	if bypassData != nil {
+		cf.LogCFBrowserAction("Fetch chapter images (success)", chapterURL, 0, true, nil)
+	}
+
 	scripts := asuraExtractScriptsFromHTML(html)
 	log.Printf("<asura> Total <script> tags found: %d", len(scripts))
-
-	// // This is debug code to find out what teh image url regexes are doing
-	// // can be removed after deebugging or kept for future if useful
-
-	// for i, script := range scripts {
-	// 	fmt.Printf("\n----- SCRIPT %d RAW -----\n", i)
-
-	// 	// Print exact Go-string escaped representation (shows every \  and  ")
-	// 	fmt.Printf("Go-escaped: %q\n", script)
-
-	// 	// Print raw characters to verify slashes/quotes visually
-	// 	fmt.Println("Raw preview:")
-	// 	for _, ch := range script {
-	// 		if ch < 32 {
-	// 			// control chars → show escaped
-	// 			fmt.Printf("\\x%02X", ch)
-	// 			continue
-	// 		}
-	// 		fmt.Print(string(ch))
-	// 	}
-	// 	fmt.Println("\n--------------------------")
-	// }
-
-	// Add this right after extracting scripts and before the pattern loop:
-	// for i, script := range scripts {
-	// 	if strings.Contains(script, "318923") {
-	// 		log.Printf("<asura> Found media ID 318923 in script %d", i)
-	// 		// Print a snippet around it
-	// 		idx := strings.Index(script, "318923")
-	// 		start := idx - 100
-	// 		if start < 0 {
-	// 			start = 0
-	// 		}
-	// 		end := idx + 200
-	// 		if end > len(script) {
-	// 			end = len(script)
-	// 		}
-	// 		log.Printf("<asura> Context: %q", script[start:end])
-	// 		break
-	// 	}
-	// 	// Right after the context logging, add this:
-	// 	if strings.Contains(script, "318923") {
-	// 		log.Printf("<asura> Found media ID 318923 in script %d", i)
-	// 		idx := strings.Index(script, "318923")
-	// 		start := idx - 100
-	// 		if start < 0 {
-	// 			start = 0
-	// 		}
-	// 		end := idx + 200
-	// 		if end > len(script) {
-	// 			end = len(script)
-	// 		}
-	// 		log.Printf("<asura> Context: %q", script[start:end])
-
-	// 		// NEW: Test if pattern 3 can match a simpler version
-	// 		testPattern := regexp.MustCompile(`order.*url.*318923`)
-	// 		if testPattern.MatchString(script) {
-	// 			log.Printf("<asura> Simple pattern MATCHED!")
-
-	// 			// Try to find what's between order and url
-	// 			orderIdx := strings.Index(script[idx-100:idx+200], "order")
-	// 			urlIdx := strings.Index(script[idx-100:idx+200], "url")
-	// 			if orderIdx >= 0 && urlIdx > orderIdx {
-	// 				between := script[idx-100+orderIdx : idx-100+urlIdx+10]
-	// 				log.Printf("<asura> Between 'order' and 'url': %q", between)
-	// 			}
-	// 		}
-	// 		break
-	// 	}
-	// }
 
 	// Try each regex pattern until we find one that works
 	for patternIdx, pattern := range asuraImageRegexPatterns {
@@ -687,7 +687,9 @@ func asuraRawChapterImageUrls(chapterURL string) ([]chapterImage, error) {
 		log.Printf("<asura> Pattern %d: No matches found", patternIdx+1)
 	}
 
-	return nil, fmt.Errorf("no image URLs found with any pattern")
+	err = fmt.Errorf("no image URLs found with any pattern")
+	cf.LogCFError("Chapter image extraction", domain, err)
+	return nil, err
 }
 
 // asuraExtractImagesWithPattern extracts images using a specific regex pattern
