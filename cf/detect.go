@@ -28,7 +28,7 @@ type CfInfo struct {
 }
 
 // Detectcf inspects the HTTP response and determines
-// whether cf is blocking or challenging the request.
+// whether CF is blocking or challenging the request.
 func Detectcf(resp *http.Response) (bool, *CfInfo, error) {
 	if resp == nil {
 		return false, nil, nil
@@ -50,6 +50,19 @@ func Detectcf(resp *http.Response) (bool, *CfInfo, error) {
 		ServerHeader: resp.Header.Get("Server"),
 	}
 
+	// Log response details
+	headers := make(map[string]string)
+	for key, values := range resp.Header {
+		if len(values) > 0 {
+			headers[key] = values[0]
+		}
+	}
+	bodyPreview := string(bodyBytes)
+	if len(bodyPreview) > 500 {
+		bodyPreview = bodyPreview[:500]
+	}
+	LogCFResponse(resp.StatusCode, len(bodyBytes), headers, bodyPreview)
+
 	match := false
 
 	// ---------------------------
@@ -58,65 +71,100 @@ func Detectcf(resp *http.Response) (bool, *CfInfo, error) {
 	if resp.StatusCode == 403 {
 		info.Indicators = append(info.Indicators, "403 Forbidden")
 		match = true
+		logCF("  Indicator: 403 Forbidden")
 	}
 	if resp.StatusCode == 503 {
 		info.Indicators = append(info.Indicators, "503 Service Unavailable")
 		match = true
+		logCF("  Indicator: 503 Service Unavailable")
 	}
 	if resp.StatusCode == 429 {
 		info.Indicators = append(info.Indicators, "429 Rate limit")
+		logCF("  Indicator: 429 Rate Limit")
 	}
 
-	// Identify cf Server Header
-	if strings.Contains(strings.ToLower(info.ServerHeader), "cf") {
-		info.Indicators = append(info.Indicators, "cf server header")
+	// Identify Cloudflare Server Header
+	if strings.Contains(strings.ToLower(info.ServerHeader), "cloudflare") {
+		info.Indicators = append(info.Indicators, "Cloudflare server header")
 		match = true
+		logCF("  Indicator: Cloudflare server header detected")
 	}
 
-	// Ray ID (cf always includes this) - INFORMATIONAL ONLY, NOT A MATCH TRIGGER
+	// Ray ID (informational only)
 	if ray := resp.Header.Get("CF-Ray"); ray != "" {
 		info.RayID = ray
-		// REMOVED: match = true
-		// Note: CF-Ray is present on ALL Cloudflare responses, not just challenges
+		logCF("  CF-Ray present (informational): %s", ray)
+	}
+
+	// Check for Set-Cookie with new cf_clearance
+	setCookies := resp.Header["Set-Cookie"]
+	for _, cookie := range setCookies {
+		if strings.Contains(cookie, "cf_clearance") {
+			info.Indicators = append(info.Indicators, "New cf_clearance cookie in response")
+			match = true
+			logCF("  Indicator: New cf_clearance cookie issued by server")
+			logCF("    Cookie value: %s", cookie[:min(100, len(cookie))])
+		}
 	}
 
 	// ---------------------------
 	// Body content checks
 	// ---------------------------
-
 	checks := map[string]string{
-		"cf-browser-verification":      "JS browser verification challenge",
-		"challenge-form":               "cf challenge form",
-		"/cdn-cgi/challenge-platform/": "cf challenge JS",
-		"cf-chl-":                      "cf challenge token",
-		"attention required":           "cf BIC",
+		"cloudflare-browser-verification": "JS browser verification challenge",
+		"challenge-form":                  "Cloudflare challenge form",
+		"/cdn-cgi/challenge-platform/":    "Cloudflare challenge JS",
+		"cf-chl-":                         "Cloudflare challenge token",
+		"attention required":              "Cloudflare BIC",
+		"just a moment":                   "Cloudflare challenge page",
+		"checking your browser":           "Cloudflare browser check",
+		"verify you are human":            "Cloudflare human verification",
 	}
 
-	for subs, reason := range checks {
-		if strings.Contains(body, subs) {
+	for substr, reason := range checks {
+		if strings.Contains(body, substr) {
 			info.Indicators = append(info.Indicators, reason)
 			match = true
+			logCF("  Indicator: Found '%s' (%s)", substr, reason)
+
+			// Log context around the indicator
+			if idx := strings.Index(body, substr); idx >= 0 {
+				start := max(0, idx-100)
+				end := min(len(body), idx+200)
+				logCF("    Context: %s", body[start:end])
+			}
 		}
 	}
 
 	// Detect BIC (Browser Integrity Check)
 	if strings.Contains(body, "verify you are human") {
 		info.IsBIC = true
+		logCF("  Browser Integrity Check detected")
 	}
 
 	// Extract cf_chl_* tokens
 	chlTokenRe := regexp.MustCompile(`cf_chl_[a-zA-Z0-9_-]+`)
 	info.CHLTokens = chlTokenRe.FindAllString(body, -1)
+	if len(info.CHLTokens) > 0 {
+		logCF("  Found %d CF challenge tokens: %v", len(info.CHLTokens), info.CHLTokens)
+	}
 
 	// Extract JS challenge URLs
 	jsRe := regexp.MustCompile(`/cdn-cgi/challenge-platform/[^"']+`)
 	info.JSChallenges = jsRe.FindAllString(body, -1)
+	if len(info.JSChallenges) > 0 {
+		logCF("  Found %d JS challenge URLs", len(info.JSChallenges))
+		for i, url := range info.JSChallenges {
+			logCF("    [%d] %s", i+1, url)
+		}
+	}
 
 	// Extract challenge form action
 	formRe := regexp.MustCompile(`<form[^>]+id="challenge-form"[^>]+action="([^"]+)"`)
 	if m := formRe.FindStringSubmatch(body); len(m) > 1 {
 		info.FormAction = m[1]
-		info.Indicators = append(info.Indicators, "cf challenge form detected")
+		info.Indicators = append(info.Indicators, "Cloudflare challenge form detected")
+		logCF("  Challenge form action: %s", info.FormAction)
 	}
 
 	// Extract meta redirect
@@ -124,6 +172,7 @@ func Detectcf(resp *http.Response) (bool, *CfInfo, error) {
 	if m := metaRedirectRe.FindStringSubmatch(body); len(m) > 1 {
 		info.MetaRedirect = m[1]
 		info.Indicators = append(info.Indicators, "Meta redirect present")
+		logCF("  Meta redirect: %s", info.MetaRedirect)
 	}
 
 	// Detect Turnstile CAPTCHA
@@ -131,21 +180,23 @@ func Detectcf(resp *http.Response) (bool, *CfInfo, error) {
 		info.Turnstile = true
 		info.Indicators = append(info.Indicators, "Turnstile CAPTCHA")
 		match = true
+		logCF("  Indicator: Turnstile CAPTCHA detected")
 	}
 
 	// ---------------------------
-	// Final match?
+	// Final detection result
 	// ---------------------------
 	if match {
-		info.Reason = "cf anti-bot challenge detected"
+		info.Reason = "Cloudflare anti-bot challenge detected"
+		LogCFDetection(true, info.Indicators, info)
 		return true, info, nil
 	}
 
+	LogCFDetection(false, nil, nil)
 	return false, nil, nil
 }
 
-// Wraps Detectcf so it can be used directly
-// with Colly scrapers without duplicating conversion code.
+// Wraps Detectcf so it can be used directly with Colly scrapers
 func DetectFromColly(r *colly.Response) (bool, *CfInfo, error) {
 	if r == nil {
 		return false, nil, nil

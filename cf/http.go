@@ -146,14 +146,6 @@ func ApplyCookieBypass(c *colly.Collector, data *BypassData, targetURL string) e
 	return nil
 }
 
-// Helper function for min (Go 1.21+ has this built-in)
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 // MakeRequest makes an HTTP request with the appropriate bypass method
 // This is for use with standard http.Client (not Colly)
 func MakeRequest(client *http.Client, targetURL string) (*http.Response, error) {

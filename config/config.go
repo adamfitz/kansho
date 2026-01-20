@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"kansho/cf"
 	"kansho/parser"
 )
 
@@ -29,7 +30,6 @@ type Bookmarks struct {
 	Shortname string `json:"shortname"`
 }
 
-// load bookmarks return custom struct
 // load bookmarks return custom struct
 func LoadBookmarks() Manga {
 	bookmarksLocation, err := verifyConfigFiles()
@@ -110,7 +110,6 @@ func verifyConfigFiles() (string, error) {
 	}
 
 	bookmarksFile := filepath.Join(bookmarksDir, "bookmarks.json")
-	//templateFile := filepath.Join(bookmarksDir, "bookmarks.template")
 
 	// Check if the bookmarks file exists
 	_, err = os.Stat(bookmarksFile)
@@ -148,7 +147,8 @@ func logging() error {
 	if configDirErr != nil {
 		return configDirErr
 	}
-	// open log file or creat it if it does not exist
+
+	// open log file or create it if it does not exist
 	logFilePath := fmt.Sprintf("%s/kansho.log", configDir)
 	logFile, logFileErr := os.OpenFile(logFilePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if logFileErr != nil {
@@ -157,5 +157,17 @@ func logging() error {
 
 	log.SetOutput(logFile)
 
+	// Initialize CloudFlare debug logger
+	if err := cf.InitCFLogger(configDir); err != nil {
+		log.Printf("Failed to initialize CF debug logger: %v", err)
+		// Don't fail the app if CF logger fails, just log the error
+	}
+
 	return nil
+}
+
+// CloseLoggers closes all logger file handles
+// Should be called before application exit
+func CloseLoggers() {
+	cf.CloseCFLogger()
 }
