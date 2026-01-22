@@ -54,12 +54,13 @@ func InitCFLogger(configDir string) error {
 	cfLogFile = file
 	cfLogger = log.New(file, "", log.LstdFlags|log.Lmicroseconds)
 
-	// Log initialization
-	logCF("=== CloudFlare Debug Logger Initialized ===")
-	logCF("Log file: %s", logPath)
-	logCF("Max size: %d MB", maxLogSize/(1024*1024))
-	logCF("Max backup files: %d", maxLogFiles)
-	logCF("Current log size: %d bytes", cfLogSize)
+	// CRITICAL FIX: Write directly to logger, not through logCF()
+	// which would cause deadlock since we already hold the mutex
+	cfLogger.Output(2, "=== CloudFlare Debug Logger Initialized ===")
+	cfLogger.Output(2, fmt.Sprintf("Log file: %s", logPath))
+	cfLogger.Output(2, fmt.Sprintf("Max size: %d MB", maxLogSize/(1024*1024)))
+	cfLogger.Output(2, fmt.Sprintf("Max backup files: %d", maxLogFiles))
+	cfLogger.Output(2, fmt.Sprintf("Current log size: %d bytes", cfLogSize))
 
 	return nil
 }
@@ -70,13 +71,17 @@ func CloseCFLogger() {
 	defer cfLogMutex.Unlock()
 
 	if cfLogFile != nil {
-		logCF("=== CloudFlare Debug Logger Closing ===")
+		// Write directly to avoid deadlock
+		if cfLogger != nil {
+			cfLogger.Output(2, "=== CloudFlare Debug Logger Closing ===")
+		}
 		cfLogFile.Close()
 		cfLogFile = nil
 	}
 }
 
 // rotateCFLogs performs log rotation
+// MUST be called with cfLogMutex already locked
 func rotateCFLogs() error {
 	if cfLogFile != nil {
 		cfLogFile.Close()
@@ -141,7 +146,8 @@ func logCF(format string, args ...interface{}) {
 		cfLogger = log.New(file, "", log.LstdFlags|log.Lmicroseconds)
 		cfLogSize = 0
 
-		logCF("=== Log Rotated ===")
+		// Write directly to avoid recursion issues
+		cfLogger.Output(2, "=== Log Rotated ===")
 	}
 }
 
