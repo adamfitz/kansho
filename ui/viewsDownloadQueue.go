@@ -210,11 +210,17 @@ func (v *DownloadQueueView) getStatusIcon(status string) string {
 }
 
 func (v *DownloadQueueView) showCFDialog(task *config.DownloadTask) {
+	log.Printf("[UI] showCFDialog called for task: %s", task.ID)
+	log.Printf("[UI] task.Error type: %T", task.Error)
+	log.Printf("[UI] task.Error value: %v", task.Error)
+
 	cfErr, ok := task.Error.(*cf.CfChallengeError)
 	if !ok {
+		log.Printf("[UI] ERROR: task.Error is NOT a *cf.CfChallengeError!")
 		return
 	}
 
+	log.Printf("[UI] Showing CF dialog for URL: %s", cfErr.URL)
 	ShowcfDialog(v.state.Window, cfErr.URL, func() {
 		queue := config.GetDownloadQueue()
 		delete(v.cfDialogShown, task.ID)
@@ -222,6 +228,7 @@ func (v *DownloadQueueView) showCFDialog(task *config.DownloadTask) {
 			dialog.ShowError(fmt.Errorf("failed to retry: %w", err), v.state.Window)
 		}
 	})
+	log.Printf("[UI] CF dialog should be visible now")
 }
 
 func (v *DownloadQueueView) onCancelDownload() {
