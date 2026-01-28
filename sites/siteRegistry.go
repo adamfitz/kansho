@@ -15,6 +15,7 @@ func init() {
 	config.RegisterSite("asurascans", AsuraDownloadChapters)
 	config.RegisterSite("mangakatana", MangakatanaDownloadChapters)
 	config.RegisterSite("mangadex", MangadexDownloadChapters)
+	config.RegisterSite("stonescape", StonescapeDownloadChapters) // Implements downloader interface
 
 	// Add new sites here in the future:
 	// config.RegisterSite("newsite", NewsiteDownloadChapters)

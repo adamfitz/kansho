@@ -86,8 +86,9 @@ func Detectcf(resp *http.Response) (bool, *CfInfo, error) {
 	// Identify Cloudflare Server Header
 	if strings.Contains(strings.ToLower(info.ServerHeader), "cloudflare") {
 		info.Indicators = append(info.Indicators, "Cloudflare server header")
-		match = true
-		logCF("  Indicator: Cloudflare server header detected")
+		// informational only — DO NOT mark as challenge (removed match = true)
+		//match = true
+		logCF("  Indicator: Cloudflare server header detected (info only - asuracomics.net serves ALL pages from CF (not only images))")
 	}
 
 	// Ray ID (informational only)

@@ -250,7 +250,7 @@ func ValidateCookieData(data *BypassData) error {
 		err := "bypass data is nil"
 		validationErrors = append(validationErrors, err)
 		LogCFValidation("unknown", false, validationErrors)
-		return fmt.Errorf(err)
+		return fmt.Errorf("%s", err)
 	}
 
 	// Check if data is too old (24 hours max age)
@@ -262,7 +262,7 @@ func ValidateCookieData(data *BypassData) error {
 				errMsg := fmt.Sprintf("bypass data is too old: %v (max: 24h)", age.Round(time.Minute))
 				validationErrors = append(validationErrors, errMsg)
 				LogCFValidation(data.Domain, false, validationErrors)
-				return fmt.Errorf(errMsg)
+				return fmt.Errorf("%s", errMsg)
 			}
 			logCF("ValidateCookieData: Bypass data age: %v (OK)", age.Round(time.Minute))
 		}
@@ -278,7 +278,7 @@ func ValidateCookieData(data *BypassData) error {
 					data.CfClearanceStruct.Expires.Format(time.RFC3339))
 				validationErrors = append(validationErrors, errMsg)
 				LogCFValidation(data.Domain, false, validationErrors)
-				return fmt.Errorf(errMsg)
+				return fmt.Errorf("%s", errMsg)
 			}
 
 			// Warn if expiring soon (within 1 hour)
@@ -295,7 +295,7 @@ func ValidateCookieData(data *BypassData) error {
 			errMsg := "cf_clearance value is empty"
 			validationErrors = append(validationErrors, errMsg)
 			LogCFValidation(data.Domain, false, validationErrors)
-			return fmt.Errorf(errMsg)
+			return fmt.Errorf("%s", errMsg)
 		}
 
 		// Check domain matches
@@ -303,7 +303,7 @@ func ValidateCookieData(data *BypassData) error {
 			errMsg := "cf_clearance domain is empty"
 			validationErrors = append(validationErrors, errMsg)
 			LogCFValidation(data.Domain, false, validationErrors)
-			return fmt.Errorf(errMsg)
+			return fmt.Errorf("%s", errMsg)
 		}
 
 		logCF("ValidateCookieData: cf_clearance cookie structure: OK")
@@ -311,7 +311,7 @@ func ValidateCookieData(data *BypassData) error {
 		errMsg := "no cf_clearance cookie structure found"
 		validationErrors = append(validationErrors, errMsg)
 		LogCFValidation(data.Domain, false, validationErrors)
-		return fmt.Errorf(errMsg)
+		return fmt.Errorf("%s", errMsg)
 	}
 
 	// Check if cookie recently failed (within last 5 minutes)
@@ -324,7 +324,7 @@ func ValidateCookieData(data *BypassData) error {
 					timeSinceFail.Round(time.Second))
 				validationErrors = append(validationErrors, errMsg)
 				LogCFValidation(data.Domain, false, validationErrors)
-				return fmt.Errorf(errMsg)
+				return fmt.Errorf("%s", errMsg)
 			}
 			logCF("ValidateCookieData: Previous failure was %v ago (OK to retry)",
 				timeSinceFail.Round(time.Minute))
