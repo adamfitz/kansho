@@ -1,9 +1,12 @@
 package downloader
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"time"
 
 	"kansho/cf"
@@ -109,23 +112,73 @@ func (bs *BrowserSession) NavigateAndEvaluate(url, waitSelector, javascript stri
 	// Navigate
 	tasks = append(tasks, chromedp.Navigate(url))
 
-	// Wait for selector or body
+	// Wait for body
+	tasks = append(tasks, chromedp.WaitReady("body"))
+
+	// Execute navigation
+	err := chromedp.Run(ctx, tasks...)
+	if err != nil {
+		return fmt.Errorf("navigation failed: %w", err)
+	}
+
+	// Give CF a moment to process cookies and redirect (if valid)
+	time.Sleep(2 * time.Second)
+
+	// Get HTML and check for CF challenge using the PROPER cf.Detectcf() function
+	html, htmlErr := bs.GetHTML()
+	if htmlErr == nil {
+		// Create a fake HTTP response to use with cf.Detectcf()
+		fakeResp := &http.Response{
+			StatusCode: 200, // We don't have real status from chromedp, assume 200
+			Body:       io.NopCloser(bytes.NewReader([]byte(html))),
+			Header:     make(http.Header),
+		}
+
+		isCF, cfInfo, cfErr := cf.Detectcf(fakeResp)
+		if cfErr != nil {
+			log.Printf("[Browser:%s] CF detection error: %v", bs.domain, cfErr)
+		}
+
+		if isCF {
+			log.Printf("[Browser:%s] ⚠️ Cloudflare challenge detected!", bs.domain)
+
+			// Mark stored data as failed if we had any
+			if bs.bypassData != nil {
+				log.Printf("[Browser:%s] Stored CF bypass data is invalid", bs.domain)
+				cf.MarkCookieAsFailed(bs.domain)
+				cf.DeleteDomain(bs.domain)
+			}
+
+			// Open browser for manual solve
+			challengeURL := cf.GetChallengeURL(cfInfo, url)
+			if openErr := cf.OpenInBrowser(challengeURL); openErr != nil {
+				return fmt.Errorf("CF detected but failed to open browser: %w", openErr)
+			}
+
+			return &cf.CfChallengeError{
+				URL:        challengeURL,
+				StatusCode: cfInfo.StatusCode,
+				Indicators: cfInfo.Indicators,
+			}
+		}
+	}
+
+	// No CF challenge, proceed with selector wait and evaluation
+	var evalTasks []chromedp.Action
+
 	if waitSelector != "" {
 		log.Printf("[Browser:%s] Waiting for selector: %s", bs.domain, waitSelector)
-		tasks = append(tasks, chromedp.WaitVisible(waitSelector, chromedp.ByQuery))
-	} else {
-		tasks = append(tasks, chromedp.WaitReady("body"))
+		evalTasks = append(evalTasks, chromedp.WaitVisible(waitSelector, chromedp.ByQuery))
 	}
 
 	// Evaluate JavaScript
 	log.Printf("[Browser:%s] Evaluating JavaScript", bs.domain)
-	tasks = append(tasks, chromedp.Evaluate(javascript, result))
+	evalTasks = append(evalTasks, chromedp.Evaluate(javascript, result))
 
-	// Execute ALL tasks in a SINGLE chromedp.Run() call
-	// This is how the working CLI version does it!
-	err := chromedp.Run(ctx, tasks...)
+	// Execute evaluation
+	err = chromedp.Run(ctx, evalTasks...)
 	if err != nil {
-		return fmt.Errorf("navigation and evaluation failed: %w", err)
+		return fmt.Errorf("evaluation failed: %w", err)
 	}
 
 	log.Printf("[Browser:%s] ✓ Navigation and JavaScript evaluation successful", bs.domain)
@@ -198,15 +251,27 @@ func (bs *BrowserSession) Navigate(url string, waitSelector string) error {
 		return fmt.Errorf("navigation failed: %w", err)
 	}
 
-	// After navigation, check for CF challenge
+	// After navigation, check for CF challenge using proper cf.Detectcf()
 	html, htmlErr := bs.GetHTML()
 	if htmlErr != nil {
 		log.Printf("[Browser:%s] Warning: Could not get HTML for CF detection: %v", bs.domain, htmlErr)
 		return nil // Don't fail navigation, just warn
 	}
 
-	// Check for CF challenge in the HTML
-	if isCF := detectCFInHTML(html); isCF {
+	// Create fake HTTP response for CF detection
+	fakeResp := &http.Response{
+		StatusCode: 200,
+		Body:       io.NopCloser(bytes.NewReader([]byte(html))),
+		Header:     make(http.Header),
+	}
+
+	// Use proper CF detection from cf package
+	isCF, cfInfo, cfErr := cf.Detectcf(fakeResp)
+	if cfErr != nil {
+		log.Printf("[Browser:%s] CF detection error: %v", bs.domain, cfErr)
+	}
+
+	if isCF {
 		log.Printf("[Browser:%s] ⚠️ Cloudflare challenge detected in page!", bs.domain)
 
 		// Mark stored data as failed if we had any
@@ -217,54 +282,20 @@ func (bs *BrowserSession) Navigate(url string, waitSelector string) error {
 		}
 
 		// Open browser for manual solve
-		if err := cf.OpenInBrowser(url); err != nil {
+		challengeURL := cf.GetChallengeURL(cfInfo, url)
+		if err := cf.OpenInBrowser(challengeURL); err != nil {
 			return fmt.Errorf("CF detected but failed to open browser: %w", err)
 		}
 
 		return &cf.CfChallengeError{
-			URL:        url,
-			StatusCode: 0, // We don't have HTTP status from chromedp
-			Indicators: []string{"cf_challenge_detected_in_html"},
+			URL:        challengeURL,
+			StatusCode: cfInfo.StatusCode,
+			Indicators: cfInfo.Indicators,
 		}
 	}
 
 	log.Printf("[Browser:%s] ✓ Navigation successful", bs.domain)
 	return nil
-}
-
-// detectCFInHTML checks if HTML contains Cloudflare challenge indicators
-func detectCFInHTML(html string) bool {
-	indicators := []string{
-		"cf-browser-verification",
-		"cf_captcha_kind",
-		"cf-challenge-running",
-		"Checking your browser",
-		"Just a moment",
-		"ray_id",
-		"cf-error-details",
-	}
-
-	for _, indicator := range indicators {
-		if len(html) > 0 && containsString(html, indicator) {
-			return true
-		}
-	}
-
-	return false
-}
-
-// containsString is a simple substring check
-func containsString(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > len(substr) && (s[:len(substr)] == substr || s[len(s)-len(substr):] == substr || findSubstring(s, substr)))
-}
-
-func findSubstring(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }
 
 // Evaluate runs JavaScript and returns the result
