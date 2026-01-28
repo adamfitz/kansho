@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"kansho/cf"
@@ -26,134 +27,206 @@ type BrowserSession struct {
 
 // NewBrowserSession creates a new browser session with optional CF bypass
 func NewBrowserSession(ctx context.Context, domain string, needsCF bool) (*BrowserSession, error) {
+	// Start with default options
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
-		chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"),
 		chromedp.Flag("headless", true),
 		chromedp.Flag("disable-blink-features", "AutomationControlled"),
 		chromedp.Flag("disable-gpu", true),
 	)
 
+	// We’ll load bypass data *before* creating the context if CF is needed
+	var bypassData *cf.BypassData
+	if needsCF {
+		data, err := cf.LoadFromFile(domain)
+		if err != nil {
+			log.Printf("[Browser:%s] No CF bypass data found", domain)
+		} else {
+			bypassData = data
+			log.Printf("[Browser:%s] ✓ Loaded CF bypass data", domain)
+
+			// CRITICAL: use the same User-Agent that earned the cookie
+			if ua := strings.TrimSpace(data.Entropy.UserAgent); ua != "" {
+				opts = append(opts, chromedp.UserAgent(ua))
+				log.Printf("[Browser:%s] Using captured User-Agent: %s", domain, ua)
+			} else {
+				log.Printf("[Browser:%s] WARNING: bypass data has empty User-Agent, falling back to default", domain)
+				opts = append(opts,
+					chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"),
+				)
+			}
+		}
+	} else {
+		// No CF, just use a sane default UA
+		opts = append(opts,
+			chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"),
+		)
+	}
+
 	allocCtx, cancelAlloc := chromedp.NewExecAllocator(ctx, opts...)
 	browserCtx, cancelBrowser := chromedp.NewContext(allocCtx)
 
 	session := &BrowserSession{
-		ctx:     browserCtx,
-		cancel:  func() { cancelBrowser(); cancelAlloc() },
-		domain:  domain,
-		needsCF: needsCF,
-	}
-
-	// Load CF bypass data if needed (no validation, just load if exists)
-	if needsCF {
-		data, err := cf.LoadFromFile(domain)
-		if err != nil {
-			log.Printf("[Browser:%s] No CF bypass data found, will attempt without cookies", domain)
-		} else {
-			session.bypassData = data
-			log.Printf("[Browser:%s] ✓ Loaded CF bypass data (will inject on navigation)", domain)
-		}
+		ctx:        browserCtx,
+		cancel:     func() { cancelBrowser(); cancelAlloc() },
+		domain:     domain,
+		needsCF:    needsCF,
+		bypassData: bypassData,
 	}
 
 	return session, nil
 }
 
-// NavigateAndEvaluate performs navigation, waiting, and JavaScript evaluation in a SINGLE chromedp.Run()
-// This is critical - splitting these into separate Run() calls can cause context/state issues
+// normalizeDomain ensures cookie domain is valid for Chromium
+func normalizeDomain(d string) string {
+	if d == "" {
+		return ""
+	}
+	if !strings.HasPrefix(d, ".") {
+		return "." + d
+	}
+	return d
+}
+
+// injectCookies builds and injects cookies into the browser
+func (bs *BrowserSession) injectCookies(tasks *[]chromedp.Action) int {
+	if bs.bypassData == nil {
+		return 0
+	}
+
+	injected := 0
+	var cookies []*network.CookieParam
+
+	// Inject cf_clearance first
+	if bs.bypassData.CfClearanceStruct != nil {
+		domain := normalizeDomain(bs.bypassData.CfClearanceStruct.Domain)
+		path := bs.bypassData.CfClearanceStruct.Path
+		if path == "" {
+			path = "/"
+		}
+
+		cookie := &network.CookieParam{
+			Name:     bs.bypassData.CfClearanceStruct.Name,
+			Value:    bs.bypassData.CfClearanceStruct.Value,
+			Domain:   domain,
+			Path:     path,
+			Secure:   bs.bypassData.CfClearanceStruct.Secure,
+			HTTPOnly: bs.bypassData.CfClearanceStruct.HttpOnly,
+		}
+
+		cookies = append(cookies, cookie)
+		injected++
+	}
+
+	// Inject all other cookies
+	for _, ck := range bs.bypassData.AllCookies {
+		if ck.Name == "" {
+			continue
+		}
+
+		domain := normalizeDomain(ck.Domain)
+		path := ck.Path
+		if path == "" {
+			path = "/"
+		}
+
+		cookie := &network.CookieParam{
+			Name:   ck.Name,
+			Value:  ck.Value,
+			Domain: domain,
+			Path:   path,
+			Secure: ck.Secure,
+		}
+
+		cookies = append(cookies, cookie)
+		injected++
+	}
+
+	// Log injection
+	cf.LogCFBrowserAction("InjectCookies", bs.domain, len(cookies), true, nil)
+
+	// Inject into browser
+	*tasks = append(*tasks, chromedp.ActionFunc(func(ctx context.Context) error {
+		return network.SetCookies(cookies).Do(ctx)
+	}))
+
+	return injected
+}
+
+// dumpBrowserCookies logs all cookies currently in Chromium
+func dumpBrowserCookies(ctx context.Context, domain string) {
+	var cookies []*network.Cookie
+
+	err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+		var err error
+		cookies, err = network.GetCookies().Do(ctx)
+		return err
+	}))
+
+	if err != nil {
+		cf.LogCFError("DumpBrowserCookies", domain, err)
+		return
+	}
+
+	for _, ck := range cookies {
+		cf.LogCFBrowserAction("BrowserCookie", domain, 1, true, nil)
+		cf.LogCFError("BrowserCookie",
+			domain,
+			fmt.Errorf("%s=%s domain=%s path=%s",
+				ck.Name, ck.Value, ck.Domain, ck.Path,
+			),
+		)
+	}
+}
+
+// NavigateAndEvaluate performs navigation, waiting, and JS evaluation
 func (bs *BrowserSession) NavigateAndEvaluate(url, waitSelector, javascript string, result interface{}) error {
-	timeout := 60 * time.Second // Generous timeout for the entire operation
+	timeout := 60 * time.Second
 	ctx, cancel := context.WithTimeout(bs.ctx, timeout)
 	defer cancel()
 
 	var tasks []chromedp.Action
 
-	// If we have CF bypass data, inject cookies BEFORE navigation
-	if bs.bypassData != nil {
-		log.Printf("[Browser:%s] Injecting CF cookies before navigation", bs.domain)
-
-		// Build cookie list
-		var cookies []*network.CookieParam
-
-		// Add cf_clearance
-		if bs.bypassData.CfClearanceStruct != nil {
-			cookie := &network.CookieParam{
-				Name:     bs.bypassData.CfClearanceStruct.Name,
-				Value:    bs.bypassData.CfClearanceStruct.Value,
-				Domain:   bs.bypassData.CfClearanceStruct.Domain,
-				Path:     bs.bypassData.CfClearanceStruct.Path,
-				Secure:   bs.bypassData.CfClearanceStruct.Secure,
-				HTTPOnly: bs.bypassData.CfClearanceStruct.HttpOnly,
-			}
-
-			cookies = append(cookies, cookie)
-			log.Printf("[Browser:%s]   ✓ Added cf_clearance cookie", bs.domain)
-		}
-
-		// Add all other cookies
-		for _, ck := range bs.bypassData.AllCookies {
-			if ck.Name != "" && ck.Name != "cf_clearance" {
-				cookie := &network.CookieParam{
-					Name:   ck.Name,
-					Value:  ck.Value,
-					Domain: ck.Domain,
-					Path:   ck.Path,
-				}
-				cookies = append(cookies, cookie)
-			}
-		}
-
-		log.Printf("[Browser:%s] ✓ Injecting %d cookies", bs.domain, len(cookies))
-
-		// Inject cookies
-		tasks = append(tasks, chromedp.ActionFunc(func(ctx context.Context) error {
-			return network.SetCookies(cookies).Do(ctx)
-		}))
-	}
+	// Inject cookies
+	injected := bs.injectCookies(&tasks)
 
 	// Navigate
 	tasks = append(tasks, chromedp.Navigate(url))
-
-	// Wait for body
 	tasks = append(tasks, chromedp.WaitReady("body"))
 
 	// Execute navigation
 	err := chromedp.Run(ctx, tasks...)
 	if err != nil {
+		cf.LogCFError("NavigateAndEvaluate-Navigation", bs.domain, err)
 		return fmt.Errorf("navigation failed: %w", err)
 	}
 
-	// Give CF a moment to process cookies and redirect (if valid)
-	time.Sleep(2 * time.Second)
+	// Dump cookies after navigation
+	dumpBrowserCookies(ctx, bs.domain)
 
-	// Get HTML and check for CF challenge using the PROPER cf.Detectcf() function
+	// CF detection
 	html, htmlErr := bs.GetHTML()
 	if htmlErr == nil {
-		// Create a fake HTTP response to use with cf.Detectcf()
 		fakeResp := &http.Response{
-			StatusCode: 200, // We don't have real status from chromedp, assume 200
+			StatusCode: 200,
 			Body:       io.NopCloser(bytes.NewReader([]byte(html))),
 			Header:     make(http.Header),
 		}
 
 		isCF, cfInfo, cfErr := cf.Detectcf(fakeResp)
 		if cfErr != nil {
-			log.Printf("[Browser:%s] CF detection error: %v", bs.domain, cfErr)
+			cf.LogCFError("DetectCF", bs.domain, cfErr)
 		}
 
 		if isCF {
-			log.Printf("[Browser:%s] ⚠️ Cloudflare challenge detected!", bs.domain)
+			cf.LogCFBrowserAction("CFChallengeDetected", url, injected, false, nil)
 
-			// Mark stored data as failed if we had any
 			if bs.bypassData != nil {
-				log.Printf("[Browser:%s] Stored CF bypass data is invalid", bs.domain)
 				cf.MarkCookieAsFailed(bs.domain)
 				cf.DeleteDomain(bs.domain)
 			}
 
-			// Open browser for manual solve
 			challengeURL := cf.GetChallengeURL(cfInfo, url)
-			if openErr := cf.OpenInBrowser(challengeURL); openErr != nil {
-				return fmt.Errorf("CF detected but failed to open browser: %w", openErr)
-			}
+			cf.OpenInBrowser(challengeURL)
 
 			return &cf.CfChallengeError{
 				URL:        challengeURL,
@@ -163,29 +236,23 @@ func (bs *BrowserSession) NavigateAndEvaluate(url, waitSelector, javascript stri
 		}
 	}
 
-	// No CF challenge, proceed with selector wait and evaluation
+	// Evaluate JS
 	var evalTasks []chromedp.Action
-
 	if waitSelector != "" {
-		log.Printf("[Browser:%s] Waiting for selector: %s", bs.domain, waitSelector)
 		evalTasks = append(evalTasks, chromedp.WaitVisible(waitSelector, chromedp.ByQuery))
 	}
-
-	// Evaluate JavaScript
-	log.Printf("[Browser:%s] Evaluating JavaScript", bs.domain)
 	evalTasks = append(evalTasks, chromedp.Evaluate(javascript, result))
 
-	// Execute evaluation
 	err = chromedp.Run(ctx, evalTasks...)
 	if err != nil {
+		cf.LogCFError("NavigateAndEvaluate-Eval", bs.domain, err)
 		return fmt.Errorf("evaluation failed: %w", err)
 	}
 
-	log.Printf("[Browser:%s] ✓ Navigation and JavaScript evaluation successful", bs.domain)
 	return nil
 }
 
-// Navigate navigates to a URL and waits for page load with CF cookie injection
+// Navigate navigates to a URL and waits for page load
 func (bs *BrowserSession) Navigate(url string, waitSelector string) error {
 	timeout := 30 * time.Second
 	ctx, cancel := context.WithTimeout(bs.ctx, timeout)
@@ -193,53 +260,12 @@ func (bs *BrowserSession) Navigate(url string, waitSelector string) error {
 
 	var tasks []chromedp.Action
 
-	// If we have CF bypass data, inject cookies BEFORE navigation
-	if bs.bypassData != nil {
-		log.Printf("[Browser:%s] Injecting CF cookies before navigation", bs.domain)
-
-		// Build cookie list
-		var cookies []*network.CookieParam
-
-		// Add cf_clearance
-		if bs.bypassData.CfClearanceStruct != nil {
-			cookie := &network.CookieParam{
-				Name:     bs.bypassData.CfClearanceStruct.Name,
-				Value:    bs.bypassData.CfClearanceStruct.Value,
-				Domain:   bs.bypassData.CfClearanceStruct.Domain,
-				Path:     bs.bypassData.CfClearanceStruct.Path,
-				Secure:   bs.bypassData.CfClearanceStruct.Secure,
-				HTTPOnly: bs.bypassData.CfClearanceStruct.HttpOnly,
-			}
-
-			cookies = append(cookies, cookie)
-			log.Printf("[Browser:%s]   ✓ Added cf_clearance cookie", bs.domain)
-		}
-
-		// Add all other cookies
-		for _, ck := range bs.bypassData.AllCookies {
-			if ck.Name != "" && ck.Name != "cf_clearance" {
-				cookie := &network.CookieParam{
-					Name:   ck.Name,
-					Value:  ck.Value,
-					Domain: ck.Domain,
-					Path:   ck.Path,
-				}
-				cookies = append(cookies, cookie)
-			}
-		}
-
-		log.Printf("[Browser:%s] ✓ Injecting %d cookies", bs.domain, len(cookies))
-
-		// Inject cookies
-		tasks = append(tasks, chromedp.ActionFunc(func(ctx context.Context) error {
-			return network.SetCookies(cookies).Do(ctx)
-		}))
-	}
+	// Inject cookies
+	injected := bs.injectCookies(&tasks)
 
 	// Navigate
 	tasks = append(tasks, chromedp.Navigate(url))
 
-	// Wait for selector or body
 	if waitSelector != "" {
 		tasks = append(tasks, chromedp.WaitVisible(waitSelector, chromedp.ByQuery))
 	} else {
@@ -248,44 +274,41 @@ func (bs *BrowserSession) Navigate(url string, waitSelector string) error {
 
 	err := chromedp.Run(ctx, tasks...)
 	if err != nil {
+		cf.LogCFError("Navigate-Navigation", bs.domain, err)
 		return fmt.Errorf("navigation failed: %w", err)
 	}
 
-	// After navigation, check for CF challenge using proper cf.Detectcf()
+	// Dump cookies after navigation
+	dumpBrowserCookies(ctx, bs.domain)
+
+	// CF detection
 	html, htmlErr := bs.GetHTML()
 	if htmlErr != nil {
-		log.Printf("[Browser:%s] Warning: Could not get HTML for CF detection: %v", bs.domain, htmlErr)
-		return nil // Don't fail navigation, just warn
+		cf.LogCFError("Navigate-GetHTML", bs.domain, htmlErr)
+		return nil
 	}
 
-	// Create fake HTTP response for CF detection
 	fakeResp := &http.Response{
 		StatusCode: 200,
 		Body:       io.NopCloser(bytes.NewReader([]byte(html))),
 		Header:     make(http.Header),
 	}
 
-	// Use proper CF detection from cf package
 	isCF, cfInfo, cfErr := cf.Detectcf(fakeResp)
 	if cfErr != nil {
-		log.Printf("[Browser:%s] CF detection error: %v", bs.domain, cfErr)
+		cf.LogCFError("Navigate-DetectCF", bs.domain, cfErr)
 	}
 
 	if isCF {
-		log.Printf("[Browser:%s] ⚠️ Cloudflare challenge detected in page!", bs.domain)
+		cf.LogCFBrowserAction("CFChallengeDetected", url, injected, false, nil)
 
-		// Mark stored data as failed if we had any
 		if bs.bypassData != nil {
-			log.Printf("[Browser:%s] Stored CF bypass data is invalid", bs.domain)
 			cf.MarkCookieAsFailed(bs.domain)
 			cf.DeleteDomain(bs.domain)
 		}
 
-		// Open browser for manual solve
 		challengeURL := cf.GetChallengeURL(cfInfo, url)
-		if err := cf.OpenInBrowser(challengeURL); err != nil {
-			return fmt.Errorf("CF detected but failed to open browser: %w", err)
-		}
+		cf.OpenInBrowser(challengeURL)
 
 		return &cf.CfChallengeError{
 			URL:        challengeURL,
@@ -294,7 +317,6 @@ func (bs *BrowserSession) Navigate(url string, waitSelector string) error {
 		}
 	}
 
-	log.Printf("[Browser:%s] ✓ Navigation successful", bs.domain)
 	return nil
 }
 
@@ -304,7 +326,11 @@ func (bs *BrowserSession) Evaluate(js string, res interface{}) error {
 	ctx, cancel := context.WithTimeout(bs.ctx, timeout)
 	defer cancel()
 
-	return chromedp.Run(ctx, chromedp.Evaluate(js, res))
+	err := chromedp.Run(ctx, chromedp.Evaluate(js, res))
+	if err != nil {
+		cf.LogCFError("Evaluate", bs.domain, err)
+	}
+	return err
 }
 
 // GetHTML returns the page HTML
@@ -315,6 +341,9 @@ func (bs *BrowserSession) GetHTML() (string, error) {
 
 	var html string
 	err := chromedp.Run(ctx, chromedp.OuterHTML("html", &html))
+	if err != nil {
+		cf.LogCFError("GetHTML", bs.domain, err)
+	}
 	return html, err
 }
 
@@ -326,7 +355,6 @@ func (bs *BrowserSession) Close() {
 }
 
 // FetchHTML fetches a URL using chromedp and returns the HTML
-// This is the main function sites should use through the downloader
 func FetchHTML(ctx context.Context, url, domain string, needsCF bool, waitSelector string) (string, error) {
 	session, err := NewBrowserSession(ctx, domain, needsCF)
 	if err != nil {
