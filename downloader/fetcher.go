@@ -3,6 +3,7 @@ package downloader
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"math"
@@ -15,28 +16,38 @@ import (
 
 // FetchChapterURLs fetches chapter URLs using site's extraction method
 func FetchChapterURLs(ctx context.Context, mangaURL string, site SitePlugin) (map[string]string, error) {
-	maxRetries := 3
-	var lastErr error
+	// Try to extract chapters
+	chapterMap, err := extractChapters(ctx, mangaURL, site)
+	if err == nil {
+		return chapterMap, nil
+	}
 
-	for attempt := 0; attempt < maxRetries; attempt++ {
-		if attempt > 0 {
-			backoff := time.Duration(math.Pow(2, float64(attempt))) * time.Second
-			log.Printf("[Downloader] Retry %d/%d for chapter list after %v", attempt+1, maxRetries, backoff)
-			time.Sleep(backoff)
-		}
+	// Check for CF challenge (including wrapped errors) - return immediately to let queue handle it
+	var cfErr *cf.CfChallengeError
+	if errors.As(err, &cfErr) {
+		log.Printf("[Downloader] ⚠️ CF challenge detected - returning error to queue")
+		return nil, cfErr
+	}
+
+	// For non-CF errors, retry with backoff
+	maxRetries := 3
+	var lastErr error = err
+
+	for attempt := 1; attempt < maxRetries; attempt++ {
+		backoff := time.Duration(math.Pow(2, float64(attempt))) * time.Second
+		log.Printf("[Downloader] Retry %d/%d for chapter list after %v", attempt+1, maxRetries, backoff)
+		time.Sleep(backoff)
 
 		chapterMap, err := extractChapters(ctx, mangaURL, site)
 		if err == nil {
-			if attempt > 0 {
-				log.Printf("[Downloader] ✓ Success fetching chapters after %d retries", attempt+1)
-			}
+			log.Printf("[Downloader] ✓ Success fetching chapters after %d retries", attempt+1)
 			return chapterMap, nil
 		}
 
-		// Check for CF challenge
-		if cfErr, ok := err.(*cf.CfChallengeError); ok {
-			log.Printf("[Downloader] CF challenge detected: %s", cfErr.URL)
-			return nil, cfErr // Return immediately, don't retry
+		// Check for CF challenge on retry (including wrapped errors) - return immediately
+		if errors.As(err, &cfErr) {
+			log.Printf("[Downloader] ⚠️ CF challenge detected - returning error to queue")
+			return nil, cfErr
 		}
 
 		lastErr = err
@@ -48,27 +59,37 @@ func FetchChapterURLs(ctx context.Context, mangaURL string, site SitePlugin) (ma
 
 // FetchChapterImages fetches image URLs using site's extraction method
 func FetchChapterImages(ctx context.Context, chapterURL string, site SitePlugin) ([]string, error) {
-	maxRetries := 3
-	var lastErr error
+	// Try to extract images
+	imageURLs, err := extractImages(ctx, chapterURL, site)
+	if err == nil {
+		return imageURLs, nil
+	}
 
-	for attempt := 0; attempt < maxRetries; attempt++ {
-		if attempt > 0 {
-			backoff := time.Duration(math.Pow(2, float64(attempt))) * time.Second
-			log.Printf("[Downloader] Retry %d/%d for chapter images after %v", attempt+1, maxRetries, backoff)
-			time.Sleep(backoff)
-		}
+	// Check for CF challenge (including wrapped errors) - return immediately to let queue handle it
+	var cfErr *cf.CfChallengeError
+	if errors.As(err, &cfErr) {
+		log.Printf("[Downloader] ⚠️ CF challenge detected - returning error to queue")
+		return nil, cfErr
+	}
+
+	// For non-CF errors, retry with backoff
+	maxRetries := 3
+	var lastErr error = err
+
+	for attempt := 1; attempt < maxRetries; attempt++ {
+		backoff := time.Duration(math.Pow(2, float64(attempt))) * time.Second
+		log.Printf("[Downloader] Retry %d/%d for chapter images after %v", attempt+1, maxRetries, backoff)
+		time.Sleep(backoff)
 
 		imageURLs, err := extractImages(ctx, chapterURL, site)
 		if err == nil {
-			if attempt > 0 {
-				log.Printf("[Downloader] ✓ Success fetching images after %d retries", attempt+1)
-			}
+			log.Printf("[Downloader] ✓ Success fetching images after %d retries", attempt+1)
 			return imageURLs, nil
 		}
 
-		// Check for CF challenge
-		if cfErr, ok := err.(*cf.CfChallengeError); ok {
-			log.Printf("[Downloader] CF challenge detected: %s", cfErr.URL)
+		// Check for CF challenge on retry (including wrapped errors) - return immediately
+		if errors.As(err, &cfErr) {
+			log.Printf("[Downloader] ⚠️ CF challenge detected - returning error to queue")
 			return nil, cfErr
 		}
 

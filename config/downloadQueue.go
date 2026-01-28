@@ -2,6 +2,7 @@ package config
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -337,8 +338,9 @@ func (q *DownloadQueue) executeTask(task *DownloadTask) {
 			task.Status = "cancelled"
 			task.StatusMessage = "Cancelled by user"
 		} else {
-			// Check if this is a Cloudflare challenge error
-			if cfErr, ok := err.(*cf.CfChallengeError); ok {
+			// Check if this is a Cloudflare challenge error (including wrapped errors)
+			var cfErr *cf.CfChallengeError
+			if errors.As(err, &cfErr) {
 				task.Status = "waiting_cf"
 				task.StatusMessage = "Cloudflare challenge detected - browser opened"
 				task.Error = cfErr
