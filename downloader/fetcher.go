@@ -111,6 +111,8 @@ func extractChapters(ctx context.Context, mangaURL string, site SitePlugin) (map
 		return extractChaptersWithSelector(ctx, mangaURL, site, method)
 	case "custom":
 		return extractChaptersCustom(ctx, mangaURL, site, method)
+	case "api":
+		return extractChaptersWithAPI(ctx, mangaURL, site, method)
 	default:
 		return nil, fmt.Errorf("unknown extraction type: %s", method.Type)
 	}
@@ -127,6 +129,8 @@ func extractImages(ctx context.Context, chapterURL string, site SitePlugin) ([]s
 		return extractImagesWithSelector(ctx, chapterURL, site, method)
 	case "custom":
 		return extractImagesCustom(ctx, chapterURL, site, method)
+	case "api":
+		return extractImagesWithAPI(ctx, chapterURL, site, method)
 	default:
 		return nil, fmt.Errorf("unknown extraction type: %s", method.Type)
 	}
@@ -262,4 +266,69 @@ func extractImagesCustom(ctx context.Context, chapterURL string, site SitePlugin
 	}
 
 	return method.CustomParser(html)
+}
+
+// extractChaptersWithAPI uses API-based extraction
+func extractChaptersWithAPI(ctx context.Context, mangaURL string, site SitePlugin, method *ChapterExtractionMethod) (map[string]string, error) {
+	if method.APIFunc == nil {
+		return nil, fmt.Errorf("API function not provided")
+	}
+
+	// Create API client
+	client, err := NewAPIClient(site.GetDomain(), site.NeedsCFBypass())
+	if err != nil {
+		return nil, fmt.Errorf("failed to create API client: %w", err)
+	}
+
+	// Call the site's API function
+	rawData, err := method.APIFunc(mangaURL, client)
+	if err != nil {
+		return nil, err
+	}
+
+	// Convert raw data to chapter map using site's normalization
+	result := make(map[string]string)
+	for _, data := range rawData {
+		filename := site.NormalizeChapterFilename(data)
+		url := site.NormalizeChapterURL(data["url"], mangaURL)
+
+		// Check for duplicates - keep the first one
+		if existingURL, exists := result[filename]; exists {
+			log.Printf("[Downloader:API] WARNING: Duplicate chapter %s found (existing: %s, new: %s) - keeping first",
+				filename, existingURL, url)
+			continue
+		}
+
+		result[filename] = url
+	}
+
+	return result, nil
+}
+
+// extractImagesWithAPI uses API-based extraction
+func extractImagesWithAPI(ctx context.Context, chapterURL string, site SitePlugin, method *ImageExtractionMethod) ([]string, error) {
+	if method.APIFunc == nil {
+		return nil, fmt.Errorf("API function not provided")
+	}
+
+	// Create API client
+	client, err := NewAPIClient(site.GetDomain(), site.NeedsCFBypass())
+	if err != nil {
+		return nil, fmt.Errorf("failed to create API client: %w", err)
+	}
+
+	// For API-based extraction, the chapterURL might actually be chapter metadata encoded as a string
+	// We need to parse it back to get the chapter data
+	// The site plugin should handle this in their APIFunc
+	chapterData := map[string]string{
+		"url": chapterURL,
+	}
+
+	// Call the site's API function
+	imageURLs, err := method.APIFunc(chapterURL, chapterData, client)
+	if err != nil {
+		return nil, err
+	}
+
+	return imageURLs, nil
 }

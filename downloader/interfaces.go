@@ -7,7 +7,7 @@ import (
 
 // ChapterExtractionMethod defines how to extract chapters from a page
 type ChapterExtractionMethod struct {
-	// Type: "javascript", "html_selector", or "custom"
+	// Type: "javascript", "html_selector", "custom", or "api"
 	Type string
 
 	// For Type="javascript": JavaScript code to execute
@@ -22,11 +22,15 @@ type ChapterExtractionMethod struct {
 	// CustomParser: optional function for custom parsing logic
 	// Receives HTML, returns map[filename]url
 	CustomParser func(html string) (map[string]string, error)
+
+	// For Type="api": Custom API extraction function
+	// Receives base URL and API client, returns raw chapter data
+	APIFunc func(baseURL string, client *APIClient) ([]map[string]string, error)
 }
 
 // ImageExtractionMethod defines how to extract images from a chapter page
 type ImageExtractionMethod struct {
-	// Type: "javascript", "html_selector", or "custom"
+	// Type: "javascript", "html_selector", "custom", or "api"
 	Type string
 
 	// For Type="javascript": JavaScript code to execute
@@ -42,6 +46,10 @@ type ImageExtractionMethod struct {
 	// CustomParser: optional function for custom parsing logic
 	// Receives HTML, returns []imageURL
 	CustomParser func(html string) ([]string, error)
+
+	// For Type="api": Custom API extraction function
+	// Receives chapter URL, chapter data, and API client, returns image URLs
+	APIFunc func(chapterURL string, chapterData map[string]string, client *APIClient) ([]string, error)
 }
 
 // SitePlugin defines the interface that all manga sites must implement.
