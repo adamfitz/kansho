@@ -13,8 +13,10 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/driver/desktop"
-	"fyne.io/fyne/v2/theme"
+	//"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+
+	"image/color"
 )
 
 // hoverLabel is a custom label that shows a tooltip on hover
@@ -77,28 +79,36 @@ func (h *hoverLabel) showTooltip(pos fyne.Position) {
 		return
 	}
 
-	h.tooltipLabel = canvas.NewText(h.tooltipText, theme.ForegroundColor())
-	h.tooltipLabel.TextSize = 12
+	h.tooltipLabel = canvas.NewText(h.tooltipText, color.White)
+	h.tooltipLabel.TextSize = 14
+	h.tooltipLabel.TextStyle = fyne.TextStyle{Bold: true}
 
-	h.tooltipBg = canvas.NewRectangle(theme.BackgroundColor())
+	h.tooltipBg = canvas.NewRectangle(color.Black)
+	h.tooltipBg.CornerRadius = 6 // optional: makes it look way nicer
 
-	textSize := fyne.MeasureText(h.tooltipText, 12, fyne.TextStyle{})
 	padding := float32(8)
-	tooltipWidth := textSize.Width + padding*2
-	tooltipHeight := textSize.Height + padding*2
 
-	h.tooltipBg.Resize(fyne.NewSize(tooltipWidth, tooltipHeight))
-	h.tooltipLabel.Resize(fyne.NewSize(textSize.Width, textSize.Height))
+	// Let Fyne calculate the real text size
+	textSize := h.tooltipLabel.MinSize()
+
+	tooltipSize := fyne.NewSize(
+		textSize.Width+padding*2,
+		textSize.Height+padding*2,
+	)
+
+	h.tooltipBg.Resize(tooltipSize)
+	h.tooltipLabel.Resize(textSize)
 
 	tooltipX := pos.X + 15
 	tooltipY := pos.Y + 15
 
 	canvasSize := h.window.Canvas().Size()
-	if tooltipX+tooltipWidth > canvasSize.Width {
-		tooltipX = pos.X - tooltipWidth - 5
+
+	if tooltipX+tooltipSize.Width > canvasSize.Width {
+		tooltipX = pos.X - tooltipSize.Width - 5
 	}
-	if tooltipY+tooltipHeight > canvasSize.Height {
-		tooltipY = pos.Y - tooltipHeight - 5
+	if tooltipY+tooltipSize.Height > canvasSize.Height {
+		tooltipY = pos.Y - tooltipSize.Height - 5
 	}
 
 	h.tooltipContainer = container.NewWithoutLayout(h.tooltipBg, h.tooltipLabel)
@@ -218,7 +228,7 @@ func NewMangaListView(state *KanshoAppState) *MangaListView {
 			hoverLabel := item.(*hoverLabel)
 			manga := view.state.MangaData.Manga[id]
 			hoverLabel.SetText(manga.Title)
-			hoverLabel.tooltipText = fmt.Sprintf("Site: %s", manga.Site)
+			hoverLabel.tooltipText = fmt.Sprintf("%s", manga.Site)
 		},
 	)
 
