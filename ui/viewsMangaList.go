@@ -2,7 +2,10 @@ package ui
 
 import (
 	"fmt"
+	"os/exec"
+	"runtime"
 	"sort"
+	"strings"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
@@ -27,6 +30,15 @@ type MangaListView struct {
 	List         *widget.List
 	deleteButton *widget.Button // Button to delete the selected manga
 	editButton   *widget.Button // Button to edit the selected manga
+	dirButton    *widget.Button // Button to open manga directory
+
+	// Search components
+	searchEntry       *widget.Entry
+	searchButton      *widget.Button
+	clearSearchButton *widget.Button
+	searchResults     []int  // Indices of manga that match search
+	currentSearchIdx  int    // Current position in search results
+	lastSearchTerm    string // Last search term to detect changes
 
 	// Track the currently selected manga index
 	selectedIndex int
@@ -54,8 +66,11 @@ type MangaListView struct {
 // - Refresh the list when manga are deleted
 func NewMangaListView(state *KanshoAppState) *MangaListView {
 	view := &MangaListView{
-		state:         state,
-		selectedIndex: -1, // No selection initially
+		state:            state,
+		selectedIndex:    -1, // No selection initially
+		searchResults:    []int{},
+		currentSearchIdx: -1,
+		lastSearchTerm:   "",
 	}
 
 	// Create the Delete Manga button
@@ -69,6 +84,27 @@ func NewMangaListView(state *KanshoAppState) *MangaListView {
 		view.onEditButtonClicked()
 	})
 	view.editButton.Disable()
+
+	// Create the Manga Dir button
+	view.dirButton = widget.NewButton("Manga Dir", func() {
+		view.onDirButtonClicked()
+	})
+	view.dirButton.Disable()
+
+	// Create search components
+	view.searchEntry = widget.NewEntry()
+	view.searchEntry.SetPlaceHolder("Search manga titles...")
+	view.searchEntry.OnSubmitted = func(text string) {
+		view.performSearch()
+	}
+
+	view.searchButton = widget.NewButton("Search", func() {
+		view.performSearch()
+	})
+
+	view.clearSearchButton = widget.NewButton("Clear Search", func() {
+		view.clearSearch()
+	})
 
 	// Sort manga alphabetically by title for consistent display
 	sort.Slice(view.state.MangaData.Manga, func(i, j int) bool {
@@ -98,28 +134,38 @@ func NewMangaListView(state *KanshoAppState) *MangaListView {
 	view.List.OnSelected = func(id widget.ListItemID) {
 		view.selectedIndex = int(id)
 
-		// Enable both buttons since something is now selected
+		// Enable all buttons since something is now selected
 		view.deleteButton.Enable()
 		view.editButton.Enable()
+		view.dirButton.Enable()
 
 		// Notify the app state that selection changed
 		view.state.SelectManga(int(id))
 	}
 
-	// Build the card content with header, list, and buttons
+	// Build the card content with search box on same line as header
 	cardContent := container.NewBorder(
-		// Top: Card title and separator
+		// Top: Card title on left, search box on right, separator below
 		container.NewVBox(
-			NewBoldLabel("Manga List"),
+			container.NewBorder(
+				nil,
+				nil,
+				NewBoldLabel("Manga List"),
+				nil,
+				view.searchEntry, // Search box fills remaining space on right
+			),
 			NewSeparator(),
 		),
-		// Bottom: Buttons centered
+		// Bottom: All buttons in one row
 		container.NewVBox(
 			NewSeparator(),
 			container.NewCenter(
 				container.NewHBox(
+					view.searchButton,
+					view.clearSearchButton,
 					view.deleteButton,
 					view.editButton,
+					view.dirButton,
 				),
 			),
 		),
@@ -164,6 +210,11 @@ func (v *MangaListView) refresh() {
 	v.List.UnselectAll()
 	v.deleteButton.Disable()
 	v.editButton.Disable()
+	v.dirButton.Disable()
+
+	// Clear search results since indices have changed
+	v.searchResults = []int{}
+	v.currentSearchIdx = -1
 
 	// Tell the list widget to refresh its display
 	v.List.Refresh()
@@ -221,4 +272,121 @@ func (v *MangaListView) onEditButtonClicked() {
 
 	// Load the selected manga into the edit form
 	v.editMangaView.LoadMangaForEditing(v.selectedIndex)
+}
+
+// onDirButtonClicked is called when the user clicks the Manga Dir button.
+// It opens the manga's directory in the system file manager.
+func (v *MangaListView) onDirButtonClicked() {
+	// Validate that something is selected
+	if v.selectedIndex < 0 || v.selectedIndex >= len(v.state.MangaData.Manga) {
+		dialog.ShowInformation(
+			"Open Manga Directory",
+			"Please select a manga to open its directory.",
+			v.state.Window,
+		)
+		return
+	}
+
+	// Get the manga location (directory path)
+	mangaLocation := v.state.MangaData.Manga[v.selectedIndex].Location
+
+	// Open the directory using OS-specific command
+	var err error
+	switch runtime.GOOS {
+	case "linux":
+		err = exec.Command("xdg-open", mangaLocation).Start()
+	case "darwin": // macOS
+		err = exec.Command("open", mangaLocation).Start()
+	case "windows":
+		err = exec.Command("explorer", mangaLocation).Start()
+	default:
+		dialog.ShowError(
+			fmt.Errorf("unsupported operating system: %s", runtime.GOOS),
+			v.state.Window,
+		)
+		return
+	}
+
+	if err != nil {
+		dialog.ShowError(
+			fmt.Errorf("failed to open directory: %v", err),
+			v.state.Window,
+		)
+	}
+}
+
+// performSearch searches for manga titles matching the search term
+// If the search term hasn't changed, it cycles through existing results
+// If the search term is new, it finds all matching manga
+func (v *MangaListView) performSearch() {
+	searchTerm := strings.TrimSpace(v.searchEntry.Text)
+
+	// If search term is empty, do nothing
+	if searchTerm == "" {
+		dialog.ShowInformation(
+			"Search",
+			"Please enter a search term.",
+			v.state.Window,
+		)
+		return
+	}
+
+	// Convert to lowercase for case-insensitive search
+	searchTermLower := strings.ToLower(searchTerm)
+
+	// Check if this is a new search or cycling through existing results
+	if searchTerm != v.lastSearchTerm {
+		// New search - find all matching manga
+		v.searchResults = []int{}
+		for i, manga := range v.state.MangaData.Manga {
+			if strings.Contains(strings.ToLower(manga.Title), searchTermLower) {
+				v.searchResults = append(v.searchResults, i)
+			}
+		}
+
+		v.lastSearchTerm = searchTerm
+		v.currentSearchIdx = -1
+
+		// If no results found
+		if len(v.searchResults) == 0 {
+			dialog.ShowInformation(
+				"Search",
+				fmt.Sprintf("No manga found matching \"%s\".", searchTerm),
+				v.state.Window,
+			)
+			return
+		}
+	}
+
+	// Cycle to next result
+	v.currentSearchIdx++
+	if v.currentSearchIdx >= len(v.searchResults) {
+		v.currentSearchIdx = 0 // Loop back to first result
+	}
+
+	// Select and scroll to the result
+	resultIndex := v.searchResults[v.currentSearchIdx]
+	v.List.Select(widget.ListItemID(resultIndex))
+	v.List.ScrollTo(widget.ListItemID(resultIndex))
+
+	// Update status if multiple results
+	if len(v.searchResults) > 1 {
+		// Could show a status message, but for now just select the next one
+		// The user can see which one is selected in the list
+	}
+}
+
+// clearSearch clears the search term and resets search state
+func (v *MangaListView) clearSearch() {
+	v.searchEntry.SetText("")
+	v.searchResults = []int{}
+	v.currentSearchIdx = -1
+	v.lastSearchTerm = ""
+
+	// Unselect current item
+	v.List.UnselectAll()
+	v.selectedIndex = -1
+	v.deleteButton.Disable()
+	v.editButton.Disable()
+	v.dirButton.Disable()
 }
