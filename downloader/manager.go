@@ -110,7 +110,7 @@ func (m *Manager) Download(ctx context.Context) error {
 			)
 		}
 
-		log.Printf("[Downloader:%s] Starting chapter %d/%d: %s", manga.Title, currentDownload, newChaptersToDownload, cbzName)
+		log.Printf("[Downloader:%s] Starting chapter download: %d/%d", manga.Title, actualChapterNum, totalChaptersFound)
 
 		// Download this chapter with retry
 		err := m.downloadChapterWithRetry(ctx, chapterURL, cbzName, actualChapterNum, currentDownload, totalChaptersFound, newChaptersToDownload, progress)
@@ -194,6 +194,7 @@ func (m *Manager) downloadChapter(ctx context.Context, chapterURL, cbzName strin
 	defer rateLimiter.Stop()
 
 	for imgIdx, imgURL := range imageURLs {
+		log.Printf("[Downloader:%s] Downloading image %d/%d", cbzName, imgIdx+1, len(imageURLs))
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
