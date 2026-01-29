@@ -50,8 +50,8 @@ const (
 	CardMinHeight = 100
 
 	// DefaultWindowWidth is the initial width of the application window
-	DefaultWindowWidth = 1200
+	DefaultWindowWidth = 1250
 
 	// DefaultWindowHeight is the initial height of the application window
-	DefaultWindowHeight = 800
+	DefaultWindowHeight = 850
 )
