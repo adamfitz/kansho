@@ -16,22 +16,19 @@ import (
 
 // FetchChapterURLs fetches chapter URLs using site's extraction method
 func FetchChapterURLs(ctx context.Context, mangaURL string, site SitePlugin) (map[string]string, error) {
-	// Try to extract chapters
 	chapterMap, err := extractChapters(ctx, mangaURL, site)
 	if err == nil {
 		return chapterMap, nil
 	}
 
-	// Check for CF challenge (including wrapped errors) - return immediately to let queue handle it
 	var cfErr *cf.CfChallengeError
 	if errors.As(err, &cfErr) {
 		log.Printf("[Downloader] ⚠️ CF challenge detected - returning error to queue")
 		return nil, cfErr
 	}
 
-	// For non-CF errors, retry with backoff
 	maxRetries := 3
-	var lastErr error = err
+	lastErr := err
 
 	for attempt := 1; attempt < maxRetries; attempt++ {
 		backoff := time.Duration(math.Pow(2, float64(attempt))) * time.Second
@@ -44,7 +41,6 @@ func FetchChapterURLs(ctx context.Context, mangaURL string, site SitePlugin) (ma
 			return chapterMap, nil
 		}
 
-		// Check for CF challenge on retry (including wrapped errors) - return immediately
 		if errors.As(err, &cfErr) {
 			log.Printf("[Downloader] ⚠️ CF challenge detected - returning error to queue")
 			return nil, cfErr
@@ -59,22 +55,19 @@ func FetchChapterURLs(ctx context.Context, mangaURL string, site SitePlugin) (ma
 
 // FetchChapterImages fetches image URLs using site's extraction method
 func FetchChapterImages(ctx context.Context, chapterURL string, site SitePlugin) ([]string, error) {
-	// Try to extract images
 	imageURLs, err := extractImages(ctx, chapterURL, site)
 	if err == nil {
 		return imageURLs, nil
 	}
 
-	// Check for CF challenge (including wrapped errors) - return immediately to let queue handle it
 	var cfErr *cf.CfChallengeError
 	if errors.As(err, &cfErr) {
 		log.Printf("[Downloader] ⚠️ CF challenge detected - returning error to queue")
 		return nil, cfErr
 	}
 
-	// For non-CF errors, retry with backoff
 	maxRetries := 3
-	var lastErr error = err
+	lastErr := err
 
 	for attempt := 1; attempt < maxRetries; attempt++ {
 		backoff := time.Duration(math.Pow(2, float64(attempt))) * time.Second
@@ -87,7 +80,6 @@ func FetchChapterImages(ctx context.Context, chapterURL string, site SitePlugin)
 			return imageURLs, nil
 		}
 
-		// Check for CF challenge on retry (including wrapped errors) - return immediately
 		if errors.As(err, &cfErr) {
 			log.Printf("[Downloader] ⚠️ CF challenge detected - returning error to queue")
 			return nil, cfErr
@@ -137,24 +129,23 @@ func extractImages(ctx context.Context, chapterURL string, site SitePlugin) ([]s
 }
 
 // extractChaptersWithJS uses JavaScript evaluation
-// CRITICAL: Uses NavigateAndEvaluate to batch all operations in a single chromedp.Run()
-// This matches the working CLI version and prevents context cancellation issues
+// Uses NavigateAndEvaluate to batch all operations in a single chromedp.Run()
 func extractChaptersWithJS(ctx context.Context, mangaURL string, site SitePlugin, method *ChapterExtractionMethod) (map[string]string, error) {
+	jsCtx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+
 	var rawData []map[string]string
 
-	session, err := NewBrowserSession(ctx, site.GetDomain(), site.NeedsCFBypass())
+	session, err := NewBrowserSession(jsCtx, site.GetDomain(), site.NeedsCFBypass())
 	if err != nil {
 		return nil, err
 	}
 	defer session.Close()
 
-	// Use NavigateAndEvaluate to batch all operations in a single chromedp.Run()
-	// This matches the working CLI version and prevents context cancellation issues
 	if err := session.NavigateAndEvaluate(mangaURL, method.WaitSelector, method.JavaScript, &rawData); err != nil {
 		return nil, fmt.Errorf("navigation and JavaScript evaluation failed: %w", err)
 	}
 
-	// Convert raw data to chapter map using site's normalization
 	result := make(map[string]string)
 	for _, data := range rawData {
 		filename := site.NormalizeChapterFilename(data)
@@ -167,7 +158,10 @@ func extractChaptersWithJS(ctx context.Context, mangaURL string, site SitePlugin
 
 // extractChaptersWithSelector uses HTML parsing
 func extractChaptersWithSelector(ctx context.Context, mangaURL string, site SitePlugin, method *ChapterExtractionMethod) (map[string]string, error) {
-	html, err := FetchHTML(ctx, mangaURL, site.GetDomain(), site.NeedsCFBypass(), method.WaitSelector)
+	fetchCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	html, err := FetchHTML(fetchCtx, mangaURL, site.GetDomain(), site.NeedsCFBypass(), method.WaitSelector)
 	if err != nil {
 		return nil, err
 	}
@@ -204,26 +198,37 @@ func extractChaptersCustom(ctx context.Context, mangaURL string, site SitePlugin
 		return nil, fmt.Errorf("custom parser not provided")
 	}
 
-	html, err := FetchHTML(ctx, mangaURL, site.GetDomain(), site.NeedsCFBypass(), method.WaitSelector)
+	// Use RequestExecutor (HTTP first, browser fallback) instead of chromedp-only FetchHTML
+	exec, err := NewRequestExecutor(mangaURL, site.NeedsCFBypass())
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create request executor: %w", err)
+	}
+
+	fetchCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	html, err := exec.FetchHTML(fetchCtx, mangaURL, method.WaitSelector)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get HTML via executor: %w", err)
 	}
 
 	return method.CustomParser(html)
 }
 
 // extractImagesWithJS uses JavaScript evaluation
-// CRITICAL: Uses NavigateAndEvaluate to batch all operations in a single chromedp.Run()
+// Uses NavigateAndEvaluate to batch all operations in a single chromedp.Run()
 func extractImagesWithJS(ctx context.Context, chapterURL string, site SitePlugin, method *ImageExtractionMethod) ([]string, error) {
+	jsCtx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+
 	var imageURLs []string
 
-	session, err := NewBrowserSession(ctx, site.GetDomain(), site.NeedsCFBypass())
+	session, err := NewBrowserSession(jsCtx, site.GetDomain(), site.NeedsCFBypass())
 	if err != nil {
 		return nil, err
 	}
 	defer session.Close()
 
-	// Use NavigateAndEvaluate to batch all operations in a single chromedp.Run()
 	if err := session.NavigateAndEvaluate(chapterURL, method.WaitSelector, method.JavaScript, &imageURLs); err != nil {
 		return nil, fmt.Errorf("navigation and JavaScript evaluation failed: %w", err)
 	}
@@ -233,7 +238,10 @@ func extractImagesWithJS(ctx context.Context, chapterURL string, site SitePlugin
 
 // extractImagesWithSelector uses HTML parsing
 func extractImagesWithSelector(ctx context.Context, chapterURL string, site SitePlugin, method *ImageExtractionMethod) ([]string, error) {
-	html, err := FetchHTML(ctx, chapterURL, site.GetDomain(), site.NeedsCFBypass(), method.WaitSelector)
+	fetchCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	html, err := FetchHTML(fetchCtx, chapterURL, site.GetDomain(), site.NeedsCFBypass(), method.WaitSelector)
 	if err != nil {
 		return nil, err
 	}
@@ -260,9 +268,20 @@ func extractImagesCustom(ctx context.Context, chapterURL string, site SitePlugin
 		return nil, fmt.Errorf("custom parser not provided")
 	}
 
-	html, err := FetchHTML(ctx, chapterURL, site.GetDomain(), site.NeedsCFBypass(), method.WaitSelector)
+	// CRITICAL: use RequestExecutor instead of chromedp-only FetchHTML
+	// This gives you HTTP + browser fallback, better logging, and avoids the
+	// fragile chromedp context path for sites like RavenScans.
+	exec, err := NewRequestExecutor(chapterURL, site.NeedsCFBypass())
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create request executor: %w", err)
+	}
+
+	fetchCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	html, err := exec.FetchHTML(fetchCtx, chapterURL, method.WaitSelector)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get HTML via executor: %w", err)
 	}
 
 	return method.CustomParser(html)
@@ -274,25 +293,21 @@ func extractChaptersWithAPI(ctx context.Context, mangaURL string, site SitePlugi
 		return nil, fmt.Errorf("API function not provided")
 	}
 
-	// Create API client
 	client, err := NewAPIClient(site.GetDomain(), site.NeedsCFBypass())
 	if err != nil {
 		return nil, fmt.Errorf("failed to create API client: %w", err)
 	}
 
-	// Call the site's API function
 	rawData, err := method.APIFunc(mangaURL, client)
 	if err != nil {
 		return nil, err
 	}
 
-	// Convert raw data to chapter map using site's normalization
 	result := make(map[string]string)
 	for _, data := range rawData {
 		filename := site.NormalizeChapterFilename(data)
 		url := site.NormalizeChapterURL(data["url"], mangaURL)
 
-		// Check for duplicates - keep the first one
 		if existingURL, exists := result[filename]; exists {
 			log.Printf("[Downloader:API] WARNING: Duplicate chapter %s found (existing: %s, new: %s) - keeping first",
 				filename, existingURL, url)
@@ -311,20 +326,15 @@ func extractImagesWithAPI(ctx context.Context, chapterURL string, site SitePlugi
 		return nil, fmt.Errorf("API function not provided")
 	}
 
-	// Create API client
 	client, err := NewAPIClient(site.GetDomain(), site.NeedsCFBypass())
 	if err != nil {
 		return nil, fmt.Errorf("failed to create API client: %w", err)
 	}
 
-	// For API-based extraction, the chapterURL might actually be chapter metadata encoded as a string
-	// We need to parse it back to get the chapter data
-	// The site plugin should handle this in their APIFunc
 	chapterData := map[string]string{
 		"url": chapterURL,
 	}
 
-	// Call the site's API function
 	imageURLs, err := method.APIFunc(chapterURL, chapterData, client)
 	if err != nil {
 		return nil, err

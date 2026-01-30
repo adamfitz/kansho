@@ -7,8 +7,8 @@ const SUPPORTED_DOMAINS = [
   "*://challenges.cloudflare.com/*",
   // "*://*.xbato.com/*", // removed xbato from supported domains, due to site uptime issues
   // "*://xbato.com/*", // removed xbato from supported domains, due to site uptime issues
-  "*://rizzfables.com/*",
-  "*://*.rizzfables.com/*",
+  //"*://rizzfables.com/*",
+  //"*://*.rizzfables.com/*", removed rizzfables from supported domains, sie is basically dead
   "*://manhuaus.com/*",
   "*://*.manhuaus.com/*",
   "*://manhuaus.org/*",
