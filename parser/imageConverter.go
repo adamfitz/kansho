@@ -3,6 +3,7 @@ package parser
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"image"
 	"image/gif"
 	"image/png"
@@ -12,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"kansho/cf"
 
@@ -242,10 +244,14 @@ func DownloadConvertToJPGRenameCf(filename, imageURL, targetDir, domain string) 
 
 // downloadConvertToJPGRenameCf is the internal function without retry logic
 func downloadConvertToJPGRenameCf(filename, imageURL, targetDir, domain string) error {
-	// Create a new Colly collector for this download
+	// Create a new Colly collector for this download with extended timeout for large images
 	c := colly.NewCollector(
 		colly.UserAgent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"),
+		colly.MaxBodySize(0), // CRITICAL: Remove body size limit (default is 10MB which truncates large images)
 	)
+
+	// Set longer timeout for large image downloads (60 seconds to handle slow connections)
+	c.SetRequestTimeout(60 * time.Second)
 
 	// Load CF bypass data for the provided domain
 	bypassData, err := cf.LoadFromFile(domain)
@@ -296,6 +302,25 @@ func downloadConvertToJPGRenameCf(filename, imageURL, targetDir, domain string) 
 			log.Printf("Image download error: status=%d, url=%s", r.StatusCode, imageURL)
 			return
 		}
+
+		// Validate we got the full response by checking Content-Length if available
+		contentLength := r.Headers.Get("Content-Length")
+		if contentLength != "" {
+			expectedLen := int64(0)
+			fmt.Sscanf(contentLength, "%d", &expectedLen)
+			actualLen := int64(len(r.Body))
+
+			if expectedLen > 0 && actualLen < expectedLen {
+				downloadErr = errors.New(fmt.Sprintf("incomplete download: got %d bytes, expected %d bytes", actualLen, expectedLen))
+				log.Printf("Image download incomplete: got %d/%d bytes, url=%s", actualLen, expectedLen, imageURL)
+				return
+			}
+
+			log.Printf("Downloaded %d bytes (Content-Length: %d) for: %s", actualLen, expectedLen, imageURL)
+		} else {
+			log.Printf("Downloaded %d bytes (no Content-Length header) for: %s", len(r.Body), imageURL)
+		}
+
 		imgBytes = r.Body
 	})
 

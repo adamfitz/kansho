@@ -55,7 +55,13 @@ func (s *CubariSite) GetChapterExtractionMethod() *downloader.ChapterExtractionM
 	return &downloader.ChapterExtractionMethod{
 		Type:         "custom",
 		WaitSelector: "",
-		CustomParser: parseCubariChapters,
+		CustomParser: func(html string) (map[string]string, error) {
+			var dbg *downloader.Debugger
+			if d, ok := any(s).(downloader.DebugSite); ok {
+				dbg = d.Debugger()
+			}
+			return parseCubariChapters(html, dbg)
+		},
 	}
 }
 
@@ -64,6 +70,14 @@ func (s *CubariSite) GetImageExtractionMethod() *downloader.ImageExtractionMetho
 		Type:         "custom",
 		WaitSelector: "",
 		CustomParser: parseCubariImages,
+	}
+}
+
+// enable debugging to save HTML files for Cubari
+func (s *CubariSite) Debugger() *downloader.Debugger {
+	return &downloader.Debugger{
+		SaveHTML: true,
+		HTMLPath: "cubari_debug.html",
 	}
 }
 
@@ -88,7 +102,7 @@ func CubariDownloadChapters(ctx context.Context, manga *config.Bookmarks, progre
 // Chapter extraction
 // -------------------------
 
-func parseCubariChapters(html string) (map[string]string, error) {
+func parseCubariChapters(html string, dbg *downloader.Debugger) (map[string]string, error) {
 	// Try normal Cubari series first
 	jsonText, err := extractNextDataJSON(html)
 	if err == nil {
@@ -103,7 +117,8 @@ func parseCubariChapters(html string) (map[string]string, error) {
 		return nil, fmt.Errorf("Cubari: unable to extract gist raw JSON URL: %w", err)
 	}
 
-	exec, err := downloader.NewRequestExecutor(gistURL, false)
+	// Use RequestExecutor (HTTP first, browser fallback)
+	exec, err := downloader.NewRequestExecutor(gistURL, false, dbg)
 	if err != nil {
 		return nil, fmt.Errorf("Cubari: failed to create executor: %w", err)
 	}
@@ -377,9 +392,4 @@ func dig(m map[string]interface{}, keys ...string) interface{} {
 		cur = mm[k]
 	}
 	return cur
-}
-
-func atoiSafe(s string) int {
-	n, _ := strconv.Atoi(strings.TrimSpace(s))
-	return n
 }

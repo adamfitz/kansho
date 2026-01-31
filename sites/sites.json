@@ -139,6 +139,16 @@
         "title": true,
         "location": true
       }
+    },
+    {
+      "name": "flamecomics",
+      "display_name": "flamecomics",
+      "required_fields": {
+        "url": true,
+        "shortname": false,
+        "title": true,
+        "location": true
+      }
     }
   ]
 }

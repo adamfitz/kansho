@@ -18,7 +18,7 @@ type RequestExecutor struct {
 }
 
 // NewRequestExecutor creates a new request executor
-func NewRequestExecutor(targetURL string, needsCF bool) (*RequestExecutor, error) {
+func NewRequestExecutor(targetURL string, needsCF bool, dbg *Debugger) (*RequestExecutor, error) {
 	parsedURL, err := url.Parse(targetURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse URL: %w", err)
@@ -26,10 +26,15 @@ func NewRequestExecutor(targetURL string, needsCF bool) (*RequestExecutor, error
 
 	domain := parsedURL.Hostname()
 
-	// Create HTTP client
 	httpClient, err := NewHTTPClient(domain, needsCF)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create HTTP client: %w", err)
+	}
+
+	// Apply debugging if provided
+	if dbg != nil && dbg.SaveHTML {
+		httpClient.DebugSaveHTML = true
+		httpClient.DebugSaveHTMLPath = dbg.HTMLPath
 	}
 
 	return &RequestExecutor{

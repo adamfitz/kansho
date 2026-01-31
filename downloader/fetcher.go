@@ -199,7 +199,13 @@ func extractChaptersCustom(ctx context.Context, mangaURL string, site SitePlugin
 	}
 
 	// Use RequestExecutor (HTTP first, browser fallback) instead of chromedp-only FetchHTML
-	exec, err := NewRequestExecutor(mangaURL, site.NeedsCFBypass())
+	var dbg *Debugger
+	if d, ok := site.(DebugSite); ok {
+		dbg = d.Debugger()
+	}
+
+	exec, err := NewRequestExecutor(mangaURL, site.NeedsCFBypass(), dbg)
+
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request executor: %w", err)
 	}
@@ -271,7 +277,12 @@ func extractImagesCustom(ctx context.Context, chapterURL string, site SitePlugin
 	// CRITICAL: use RequestExecutor instead of chromedp-only FetchHTML
 	// This gives you HTTP + browser fallback, better logging, and avoids the
 	// fragile chromedp context path for sites like RavenScans.
-	exec, err := NewRequestExecutor(chapterURL, site.NeedsCFBypass())
+	var dbg *Debugger
+	if d, ok := site.(DebugSite); ok {
+		dbg = d.Debugger()
+	}
+
+	exec, err := NewRequestExecutor(chapterURL, site.NeedsCFBypass(), dbg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request executor: %w", err)
 	}

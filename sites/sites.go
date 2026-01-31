@@ -4,8 +4,7 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
-	//"io"
-	//"os"
+	"strconv"
 	"strings"
 
 	"kansho/models"
@@ -64,4 +63,9 @@ func extractChapterNumber(filename string) int {
 	var chapterNum int
 	fmt.Sscanf(parts[0], "%d", &chapterNum)
 	return chapterNum
+}
+
+func atoiSafe(s string) int {
+	n, _ := strconv.Atoi(strings.TrimSpace(s))
+	return n
 }

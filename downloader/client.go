@@ -8,7 +8,7 @@ import (
 	"log"
 	"math"
 	"net/http"
-	//"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -25,6 +25,10 @@ type HTTPClient struct {
 	httpClient  *http.Client
 	maxRetries  int
 	baseTimeout time.Duration
+
+	// DEBUG FLAGS
+	DebugSaveHTML     bool
+	DebugSaveHTMLPath string
 }
 
 // NewHTTPClient creates a new unified HTTP client for a specific domain
@@ -41,8 +45,8 @@ func NewHTTPClient(domain string, needsCF bool) (*HTTPClient, error) {
 	if needsCF {
 		data, err := cf.LoadFromFile(domain)
 		if err != nil {
-			log.Printf("[HTTPClient] No CF bypass data for %s: %v", domain, err)
 			// Don't return error - we'll try without bypass and handle CF challenges
+			log.Printf("[HTTPClient] No CF bypass data for %s: %v", domain, err)
 		} else {
 			// Validate bypass data
 			if err := cf.ValidateCookieData(data); err != nil {
@@ -77,6 +81,15 @@ func (c *HTTPClient) FetchHTML(ctx context.Context, targetURL string) (string, e
 		html, err := c.fetchHTMLAttempt(reqCtx, targetURL)
 
 		// Success!
+		if html != "" {
+			preview := html
+			if len(preview) > 1024 {
+				preview = preview[:1024]
+			}
+			log.Printf("[HTTPClient][DEBUG] HTML preview (%d bytes):\n%s\n---END PREVIEW---",
+				len(preview), preview)
+		}
+
 		if err == nil {
 			if attempt > 0 {
 				log.Printf("[HTTPClient] ✓ Success after %d retries", attempt+1)
@@ -155,7 +168,24 @@ func (c *HTTPClient) fetchHTMLAttempt(ctx context.Context, targetURL string) (st
 		bodyBytes = decompressed
 	}
 
-	// Reconstruct response for CF detection
+	// DEBUG: Decompressed preview only
+	decPreview := bodyBytes
+	if len(decPreview) > 1024 {
+		decPreview = decPreview[:1024]
+	}
+	log.Printf("\n[HTTPClient][DEBUG] DECOMPRESSED RESPONSE (%d bytes):\n%s\n--- END DECOMPRESSED PREVIEW ---\n",
+		len(decPreview), string(decPreview))
+
+	// OPTIONAL: Save full HTML to file
+	if c.DebugSaveHTML && c.DebugSaveHTMLPath != "" {
+		err := os.WriteFile(c.DebugSaveHTMLPath, bodyBytes, 0644)
+		if err != nil {
+			log.Printf("[HTTPClient][DEBUG] Failed to save HTML: %v", err)
+		} else {
+			log.Printf("[HTTPClient][DEBUG] Saved full HTML to %s", c.DebugSaveHTMLPath)
+		}
+	}
+
 	resp.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 
 	// Check for CF challenge
@@ -198,7 +228,7 @@ func (c *HTTPClient) applyCFBypass(req *http.Request, targetURL string) {
 	// Set User-Agent
 	req.Header.Set("User-Agent", c.bypassData.Entropy.UserAgent)
 
-	// Add cf_clearance cookie
+	// Add cf_clearance cookie if available
 	if c.bypassData.CfClearanceStruct != nil {
 		cookie := &http.Cookie{
 			Name:     c.bypassData.CfClearanceStruct.Name,
