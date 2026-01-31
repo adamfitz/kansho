@@ -1,16 +1,6 @@
 {
   "sites": [
     {
-      "name": "rizzfables",
-      "display_name": "rizzfables",
-      "required_fields": {
-        "url": true,
-        "shortname": false,
-        "title": true,
-        "location": true
-      }
-    },
-    {
       "name": "asurascans",
       "display_name": "asurascans",
       "required_fields": {
