@@ -129,6 +129,16 @@
         "title": true,
         "location": true
       }
+    },
+    {
+      "name": "cubari",
+      "display_name": "cubari",
+      "required_fields": {
+        "url": true,
+        "shortname": false,
+        "title": true,
+        "location": true
+      }
     }
   ]
 }
