@@ -90,3 +90,26 @@ type DownloadConfig struct {
 	Site             SitePlugin
 	ProgressCallback ProgressCallback
 }
+
+// DebuggableSite is implemented by sites that provide optional debugging support.
+// Sites that do not implement this interface simply do not expose debugging features.
+type DebugSite interface {
+	// Debugger returns the debugging configuration for this site.
+	// Returning nil means no debugging is enabled.
+	Debugger() *Debugger
+}
+
+// Debugger defines optional debugging behavior for a site
+// Sites may return nil if no debugging is required
+type Debugger struct {
+	// SaveHTML indicates whether the full HTML should be saved for debugging
+	SaveHTML bool
+	// HTMLPath is the file path where HTML should be written
+	HTMLPath string
+
+	// not used yet
+	SaveRaw     bool
+	RawPath     string
+	SaveHeaders bool
+	HeadersPath string
+}
