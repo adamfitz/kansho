@@ -111,24 +111,65 @@ func Detectcf(resp *http.Response) (bool, *CfInfo, error) {
 	// ---------------------------
 	// Body content checks
 	// ---------------------------
-	checks := map[string]string{
+	// NOTE: /cdn-cgi/challenge-platform/ alone is NOT sufficient to declare a challenge.
+	// Asura (and some other Next.js sites behind CF) embed CF's JSD script on EVERY page
+	// for bot-scoring purposes — it appears in normal successful responses too.
+	// We only treat it as a challenge indicator when combined with other strong signals
+	// (403/503 status, challenge-form, just a moment, etc.).
+	// The map below is split into "strong" indicators (each alone = challenge) and
+	// "weak" indicators (only count when a strong indicator is also present).
+	strongChecks := map[string]string{
 		"cloudflare-browser-verification": "JS browser verification challenge",
 		"challenge-form":                  "Cloudflare challenge form",
-		"/cdn-cgi/challenge-platform/":    "Cloudflare challenge JS",
 		"cf-chl-":                         "Cloudflare challenge token",
 		"attention required":              "Cloudflare BIC",
-		"just a moment":                   "Cloudflare challenge page",
 		"checking your browser":           "Cloudflare browser check",
 		"verify you are human":            "Cloudflare human verification",
 	}
+	weakChecks := map[string]string{
+		// Present on normal Asura pages — only a challenge when combined with something strong
+		"/cdn-cgi/challenge-platform/": "Cloudflare challenge JS",
+	}
 
-	for substr, reason := range checks {
+	strongMatch := false
+	for substr, reason := range strongChecks {
 		if strings.Contains(body, substr) {
 			info.Indicators = append(info.Indicators, reason)
 			match = true
-			logCF("  Indicator: Found '%s' (%s)", substr, reason)
+			strongMatch = true
+			logCF("  Indicator (strong): Found '%s' (%s)", substr, reason)
+			if idx := strings.Index(body, substr); idx >= 0 {
+				start := max(0, idx-100)
+				end := min(len(body), idx+200)
+				logCF("    Context: %s", body[start:end])
+			}
+		}
+	}
 
-			// Log context around the indicator
+	// "just a moment" must ONLY match inside <title> — Asura chapter pages contain
+	// user comments with this phrase (e.g. "i was at 19 just a moment ago") which
+	// caused false positives when matching anywhere in the body.
+	// Real CF challenge pages always have: <title>Just a moment...</title>
+	justAMomentRe := regexp.MustCompile(`(?i)<title[^>]*>[^<]*just a moment[^<]*</title>`)
+	if justAMomentRe.MatchString(body) {
+		info.Indicators = append(info.Indicators, "Cloudflare challenge page")
+		match = true
+		strongMatch = true
+		logCF("  Indicator (strong): Found 'just a moment' in <title> (Cloudflare challenge page)")
+	} else if strings.Contains(body, "just a moment") {
+		logCF("  Skipping 'just a moment' — present in body but NOT in <title> (user comment, not a CF challenge)")
+	}
+
+	for substr, reason := range weakChecks {
+		if strings.Contains(body, substr) {
+			if strongMatch {
+				// Only flag as a challenge when there's already a strong indicator
+				info.Indicators = append(info.Indicators, reason)
+				match = true
+				logCF("  Indicator (weak, confirmed by strong signal): Found '%s' (%s)", substr, reason)
+			} else {
+				logCF("  Skipping weak indicator '%s' — no strong challenge signals present (normal CF-proxied page)", substr)
+			}
 			if idx := strings.Index(body, substr); idx >= 0 {
 				start := max(0, idx-100)
 				end := min(len(body), idx+200)
