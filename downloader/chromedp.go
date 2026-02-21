@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -27,14 +28,12 @@ type BrowserSession struct {
 
 // NewBrowserSession creates a new browser session with optional CF bypass
 func NewBrowserSession(ctx context.Context, domain string, needsCF bool) (*BrowserSession, error) {
-	// Start with default options
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.Flag("headless", true),
 		chromedp.Flag("disable-blink-features", "AutomationControlled"),
 		chromedp.Flag("disable-gpu", true),
 	)
 
-	// We’ll load bypass data *before* creating the context if CF is needed
 	var bypassData *cf.BypassData
 	if needsCF {
 		data, err := cf.LoadFromFile(domain)
@@ -44,7 +43,6 @@ func NewBrowserSession(ctx context.Context, domain string, needsCF bool) (*Brows
 			bypassData = data
 			log.Printf("[Browser:%s] ✓ Loaded CF bypass data", domain)
 
-			// CRITICAL: use the same User-Agent that earned the cookie
 			if ua := strings.TrimSpace(data.Entropy.UserAgent); ua != "" {
 				opts = append(opts, chromedp.UserAgent(ua))
 				log.Printf("[Browser:%s] Using captured User-Agent: %s", domain, ua)
@@ -56,7 +54,6 @@ func NewBrowserSession(ctx context.Context, domain string, needsCF bool) (*Brows
 			}
 		}
 	} else {
-		// No CF, just use a sane default UA
 		opts = append(opts,
 			chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"),
 		)
@@ -96,7 +93,6 @@ func (bs *BrowserSession) injectCookies(tasks *[]chromedp.Action) int {
 	injected := 0
 	var cookies []*network.CookieParam
 
-	// Inject cf_clearance first
 	if bs.bypassData.CfClearanceStruct != nil {
 		domain := normalizeDomain(bs.bypassData.CfClearanceStruct.Domain)
 		path := bs.bypassData.CfClearanceStruct.Path
@@ -117,7 +113,6 @@ func (bs *BrowserSession) injectCookies(tasks *[]chromedp.Action) int {
 		injected++
 	}
 
-	// Inject all other cookies
 	for _, ck := range bs.bypassData.AllCookies {
 		if ck.Name == "" {
 			continue
@@ -141,10 +136,8 @@ func (bs *BrowserSession) injectCookies(tasks *[]chromedp.Action) int {
 		injected++
 	}
 
-	// Log injection
 	cf.LogCFBrowserAction("InjectCookies", bs.domain, len(cookies), true, nil)
 
-	// Inject into browser
 	*tasks = append(*tasks, chromedp.ActionFunc(func(ctx context.Context) error {
 		return network.SetCookies(cookies).Do(ctx)
 	}))
@@ -186,24 +179,19 @@ func (bs *BrowserSession) NavigateAndEvaluate(url, waitSelector, javascript stri
 
 	var tasks []chromedp.Action
 
-	// Inject cookies
 	injected := bs.injectCookies(&tasks)
 
-	// Navigate
 	tasks = append(tasks, chromedp.Navigate(url))
 	tasks = append(tasks, chromedp.WaitReady("body"))
 
-	// Execute navigation
 	err := chromedp.Run(ctx, tasks...)
 	if err != nil {
 		cf.LogCFError("NavigateAndEvaluate-Navigation", bs.domain, err)
 		return fmt.Errorf("navigation failed: %w", err)
 	}
 
-	// Dump cookies after navigation
 	dumpBrowserCookies(ctx, bs.domain)
 
-	// CF detection
 	html, htmlErr := bs.GetHTML()
 	if htmlErr == nil {
 		fakeResp := &http.Response{
@@ -236,7 +224,6 @@ func (bs *BrowserSession) NavigateAndEvaluate(url, waitSelector, javascript stri
 		}
 	}
 
-	// Evaluate JS
 	var evalTasks []chromedp.Action
 	if waitSelector != "" {
 		evalTasks = append(evalTasks, chromedp.WaitVisible(waitSelector, chromedp.ByQuery))
@@ -260,10 +247,8 @@ func (bs *BrowserSession) Navigate(url string, waitSelector string) error {
 
 	var tasks []chromedp.Action
 
-	// Inject cookies
 	injected := bs.injectCookies(&tasks)
 
-	// Navigate
 	tasks = append(tasks, chromedp.Navigate(url))
 
 	if waitSelector != "" {
@@ -278,10 +263,8 @@ func (bs *BrowserSession) Navigate(url string, waitSelector string) error {
 		return fmt.Errorf("navigation failed: %w", err)
 	}
 
-	// Dump cookies after navigation
 	dumpBrowserCookies(ctx, bs.domain)
 
-	// CF detection
 	html, htmlErr := bs.GetHTML()
 	if htmlErr != nil {
 		cf.LogCFError("Navigate-GetHTML", bs.domain, htmlErr)
@@ -369,6 +352,69 @@ func FetchHTML(ctx context.Context, url, domain string, needsCF bool, waitSelect
 	html, err := session.GetHTML()
 	if err != nil {
 		return "", fmt.Errorf("failed to get HTML: %w", err)
+	}
+
+	return html, nil
+}
+
+// FetchHTMLBatched fetches a URL using chromedp and returns the full rendered HTML.
+// Unlike FetchHTML, it batches navigate + WaitReady + OuterHTML into a single
+// chromedp.Run call with one generous timeout. This avoids the sequential context
+// cancellation issue where Navigate exhausts the parent context before GetHTML runs.
+// Use this for JS-rendered pages (e.g. Next.js/React) where HTTP gives a shell page.
+//
+// Pass the site's Debugger to enable HTML saving for inspection. In your site code:
+//
+//	func (a *MySite) Debugger() *downloader.Debugger {
+//	    return &downloader.Debugger{
+//	        SaveHTML: true,               // flip to true to enable
+//	        HTMLPath: "/tmp/debug.html",  // path to write the rendered HTML
+//	    }
+//	}
+func FetchHTMLBatched(ctx context.Context, url, domain string, needsCF bool, dbg *Debugger) (string, error) {
+	log.Printf("[Browser:%s] FetchHTMLBatched starting for: %s", domain, url)
+
+	session, err := NewBrowserSession(ctx, domain, needsCF)
+	if err != nil {
+		return "", fmt.Errorf("failed to create browser session: %w", err)
+	}
+	defer session.Close()
+
+	// Single generous timeout covering cold Chrome start + navigation + HTML extraction
+	timeout := 60 * time.Second
+	runCtx, cancel := context.WithTimeout(session.ctx, timeout)
+	defer cancel()
+
+	var tasks []chromedp.Action
+
+	// Inject CF cookies if available
+	session.injectCookies(&tasks)
+
+	// Batch: navigate → wait for body → extract HTML — all in one Run call
+	var html string
+	tasks = append(tasks,
+		chromedp.Navigate(url),
+		chromedp.WaitReady("body"),
+		chromedp.OuterHTML("html", &html),
+	)
+
+	if err := chromedp.Run(runCtx, tasks...); err != nil {
+		return "", fmt.Errorf("browser fetch failed: %w", err)
+	}
+
+	if html == "" {
+		return "", fmt.Errorf("browser returned empty HTML for: %s", url)
+	}
+
+	log.Printf("[Browser:%s] FetchHTMLBatched complete, HTML length: %d", domain, len(html))
+
+	// Save rendered HTML to disk if the site has debugging enabled
+	if dbg != nil && dbg.SaveHTML && dbg.HTMLPath != "" {
+		if err := os.WriteFile(dbg.HTMLPath, []byte(html), 0644); err != nil {
+			log.Printf("[Browser:%s] Failed to save debug HTML to %s: %v", domain, dbg.HTMLPath, err)
+		} else {
+			log.Printf("[Browser:%s] Saved debug HTML (%d bytes) to: %s", domain, len(html), dbg.HTMLPath)
+		}
 	}
 
 	return html, nil

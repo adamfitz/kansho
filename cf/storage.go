@@ -50,32 +50,42 @@ func ParseCfClearanceCookie(raw string) (*CfClearanceCookie, error) {
 			continue
 		}
 
+		partLower := strings.ToLower(part)
 		switch {
-		case strings.EqualFold(part, "HttpOnly"):
+		case partLower == "httponly":
 			cookie.HttpOnly = true
 			logCF("ParseCfClearanceCookie: HttpOnly=true")
-		case strings.EqualFold(part, "Secure"):
+		case partLower == "secure":
 			cookie.Secure = true
 			logCF("ParseCfClearanceCookie: Secure=true")
-		case strings.EqualFold(part, "Partitioned"):
+		case partLower == "partitioned":
 			logCF("ParseCfClearanceCookie: Partitioned attribute detected")
-		case strings.HasPrefix(strings.ToLower(part), "path="):
-			cookie.Path = strings.TrimPrefix(part, "Path=")
+		case strings.HasPrefix(partLower, "path="):
+			// Use the lowercased version to strip the key, preserving value casing
+			cookie.Path = part[len("path="):]
 			logCF("ParseCfClearanceCookie: Path=%s", cookie.Path)
-		case strings.HasPrefix(strings.ToLower(part), "domain="):
-			cookie.Domain = strings.TrimPrefix(part, "Domain=")
+		case strings.HasPrefix(partLower, "domain="):
+			cookie.Domain = part[len("domain="):]
 			logCF("ParseCfClearanceCookie: Domain=%s", cookie.Domain)
-		case strings.HasPrefix(strings.ToLower(part), "expires="):
-			expiresStr := strings.TrimPrefix(part, "Expires=")
-			t, err := time.Parse(time.RFC1123, expiresStr)
+		case strings.HasPrefix(partLower, "expires="):
+			expiresStr := part[len("expires="):]
+			// Try multiple date formats Cloudflare uses
+			var t time.Time
+			var err error
+			for _, layout := range []string{time.RFC1123, "Mon, 02-Jan-2006 15:04:05 MST", time.RFC850} {
+				t, err = time.Parse(layout, expiresStr)
+				if err == nil {
+					break
+				}
+			}
 			if err != nil {
-				logCF("ParseCfClearanceCookie: Failed to parse Expires: %v", err)
+				logCF("ParseCfClearanceCookie: Failed to parse Expires %q: %v", expiresStr, err)
 			} else {
 				cookie.Expires = &t
 				logCF("ParseCfClearanceCookie: Expires=%s", t.Format(time.RFC3339))
 			}
-		case strings.HasPrefix(strings.ToLower(part), "samesite="):
-			cookie.SameSite = strings.TrimPrefix(part, "SameSite=")
+		case strings.HasPrefix(partLower, "samesite="):
+			cookie.SameSite = part[len("samesite="):]
 			logCF("ParseCfClearanceCookie: SameSite=%s", cookie.SameSite)
 		default:
 			logCF("ParseCfClearanceCookie: Unrecognized attribute: %q", part)
@@ -240,8 +250,10 @@ func LoadFromFile(domain string) (*BypassData, error) {
 	return &data, nil
 }
 
-// ValidateCookieData checks if stored cookie data is still usable
-func ValidateCookieData(data *BypassData) error {
+// ValidateCookieData checks if stored cookie data is still usable.
+// targetDomain is the domain you intend to use the bypass for (e.g. "asuracomic.net").
+// Pass an empty string to skip the domain match check (backwards-compatible).
+func ValidateCookieData(data *BypassData, targetDomain ...string) error {
 	logCF("ValidateCookieData: Starting validation")
 
 	validationErrors := []string{}
@@ -298,12 +310,33 @@ func ValidateCookieData(data *BypassData) error {
 			return fmt.Errorf("%s", errMsg)
 		}
 
-		// Check domain matches
+		// Check domain is present
 		if data.CfClearanceStruct.Domain == "" {
 			errMsg := "cf_clearance domain is empty"
 			validationErrors = append(validationErrors, errMsg)
 			LogCFValidation(data.Domain, false, validationErrors)
 			return fmt.Errorf("%s", errMsg)
+		}
+
+		// Check the cf_clearance cookie domain actually matches the target domain.
+		// Cloudflare issues domain-specific clearance tokens; a token for manhuaus.com
+		// will be cryptographically rejected by asuracomic.net, causing an infinite loop.
+		if len(targetDomain) > 0 && targetDomain[0] != "" {
+			target := targetDomain[0]
+			cookieDomain := strings.TrimPrefix(data.CfClearanceStruct.Domain, ".")
+			targetClean := strings.TrimPrefix(target, ".")
+			if cookieDomain != targetClean {
+				errMsg := fmt.Sprintf(
+					"cf_clearance domain mismatch: cookie is for %q but target is %q — "+
+						"you must solve the CF challenge on %s, not on another tab",
+					cookieDomain, targetClean, targetClean,
+				)
+				logCF("ValidateCookieData: ⚠️  %s", errMsg)
+				validationErrors = append(validationErrors, errMsg)
+				LogCFValidation(data.Domain, false, validationErrors)
+				return fmt.Errorf("%s", errMsg)
+			}
+			logCF("ValidateCookieData: cf_clearance domain matches target (%s): OK", targetClean)
 		}
 
 		logCF("ValidateCookieData: cf_clearance cookie structure: OK")

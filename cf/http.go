@@ -13,7 +13,6 @@ import (
 
 // ApplyToCollector applies stored bypass data to a Colly collector
 // Automatically detects and applies the appropriate bypass method
-// ApplyToCollector applies stored bypass data to a Colly collector
 func ApplyToCollector(c *colly.Collector, targetURL string) error {
 	parsedURL, err := url.Parse(targetURL)
 	if err != nil {
@@ -28,17 +27,15 @@ func ApplyToCollector(c *colly.Collector, targetURL string) error {
 		return nil
 	}
 
-	// Check if cf_clearance cookie is expired (if it exists)
+	// Check if cf_clearance cookie is expired or from the wrong domain (if it exists)
 	if data.Type == ProtectionCookie && data.CfClearanceStruct != nil {
+		if err := ValidateCookieData(data, domain); err != nil {
+			log.Printf("⚠️ CF bypass data for %s failed validation: %v", domain, err)
+			return fmt.Errorf("cf bypass validation failed: %w", err)
+		}
 		if data.CfClearanceStruct.Expires != nil {
-			if time.Now().After(*data.CfClearanceStruct.Expires) {
-				log.Printf("⚠️ cf_clearance cookie for %s has EXPIRED (expired at: %s)",
-					domain, data.CfClearanceStruct.Expires.Format(time.RFC3339))
-				return fmt.Errorf("cf_clearance cookie expired")
-			} else {
-				expiresIn := time.Until(*data.CfClearanceStruct.Expires)
-				log.Printf("✓ Using cf_clearance for %s (valid for: %s)", domain, expiresIn.Round(time.Hour))
-			}
+			expiresIn := time.Until(*data.CfClearanceStruct.Expires)
+			log.Printf("✓ Using cf_clearance for %s (valid for: %s)", domain, expiresIn.Round(time.Hour))
 		}
 	} else {
 		// For non-cookie methods or if no expiry info, just log age

@@ -129,7 +129,6 @@ func extractImages(ctx context.Context, chapterURL string, site SitePlugin) ([]s
 }
 
 // extractChaptersWithJS uses JavaScript evaluation
-// Uses NavigateAndEvaluate to batch all operations in a single chromedp.Run()
 func extractChaptersWithJS(ctx context.Context, mangaURL string, site SitePlugin, method *ChapterExtractionMethod) (map[string]string, error) {
 	jsCtx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
@@ -198,14 +197,12 @@ func extractChaptersCustom(ctx context.Context, mangaURL string, site SitePlugin
 		return nil, fmt.Errorf("custom parser not provided")
 	}
 
-	// Use RequestExecutor (HTTP first, browser fallback) instead of chromedp-only FetchHTML
 	var dbg *Debugger
 	if d, ok := site.(DebugSite); ok {
 		dbg = d.Debugger()
 	}
 
 	exec, err := NewRequestExecutor(mangaURL, site.NeedsCFBypass(), dbg)
-
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request executor: %w", err)
 	}
@@ -222,7 +219,6 @@ func extractChaptersCustom(ctx context.Context, mangaURL string, site SitePlugin
 }
 
 // extractImagesWithJS uses JavaScript evaluation
-// Uses NavigateAndEvaluate to batch all operations in a single chromedp.Run()
 func extractImagesWithJS(ctx context.Context, chapterURL string, site SitePlugin, method *ImageExtractionMethod) ([]string, error) {
 	jsCtx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
@@ -268,31 +264,54 @@ func extractImagesWithSelector(ctx context.Context, chapterURL string, site Site
 	return imageURLs, nil
 }
 
-// extractImagesCustom uses site's custom parser
+// extractImagesCustom uses site's custom parser.
+// If WaitSelector is set, it forces browser rendering via FetchHTMLBatched (chromedp),
+// which batches navigate + WaitReady + OuterHTML into a single chromedp.Run call.
+// This avoids the sequential context cancellation issue in FetchHTML where Navigate
+// exhausts the parent context before GetHTML can run.
+// If WaitSelector is empty, it uses RequestExecutor (HTTP first, browser fallback)
+// for efficiency on sites that serve images in SSR HTML.
 func extractImagesCustom(ctx context.Context, chapterURL string, site SitePlugin, method *ImageExtractionMethod) ([]string, error) {
 	if method.CustomParser == nil {
 		return nil, fmt.Errorf("custom parser not provided")
 	}
 
-	// CRITICAL: use RequestExecutor instead of chromedp-only FetchHTML
-	// This gives you HTTP + browser fallback, better logging, and avoids the
-	// fragile chromedp context path for sites like RavenScans.
-	var dbg *Debugger
-	if d, ok := site.(DebugSite); ok {
-		dbg = d.Debugger()
-	}
+	var html string
+	var err error
 
-	exec, err := NewRequestExecutor(chapterURL, site.NeedsCFBypass(), dbg)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request executor: %w", err)
-	}
+	if method.WaitSelector != "" {
+		// WaitSelector set: force browser rendering so React/Next.js content is present.
+		// FetchHTMLBatched runs navigate+wait+getHTML in one chromedp.Run call, avoiding
+		// context cancellation between sequential Navigate and GetHTML calls.
+		// The site's Debugger is passed through so HTML can be saved to disk when
+		// SaveHTML is enabled in the site's Debugger() method.
+		var dbg *Debugger
+		if d, ok := site.(DebugSite); ok {
+			dbg = d.Debugger()
+		}
+		html, err = FetchHTMLBatched(ctx, chapterURL, site.GetDomain(), site.NeedsCFBypass(), dbg)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get rendered HTML via browser: %w", err)
+		}
+	} else {
+		// No WaitSelector: use RequestExecutor (HTTP first, browser fallback)
+		var dbg *Debugger
+		if d, ok := site.(DebugSite); ok {
+			dbg = d.Debugger()
+		}
 
-	fetchCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+		exec, err := NewRequestExecutor(chapterURL, site.NeedsCFBypass(), dbg)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create request executor: %w", err)
+		}
 
-	html, err := exec.FetchHTML(fetchCtx, chapterURL, method.WaitSelector)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get HTML via executor: %w", err)
+		fetchCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		html, err = exec.FetchHTML(fetchCtx, chapterURL, "")
+		if err != nil {
+			return nil, fmt.Errorf("failed to get HTML via executor: %w", err)
+		}
 	}
 
 	return method.CustomParser(html)
