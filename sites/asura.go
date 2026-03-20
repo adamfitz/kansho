@@ -1,18 +1,14 @@
 package sites
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"log"
 	"regexp"
-	"sort"
 	"strings"
 
 	"kansho/config"
 	"kansho/downloader"
-
-	"github.com/PuerkitoBio/goquery"
 )
 
 type AsuraSite struct{}
@@ -20,7 +16,7 @@ type AsuraSite struct{}
 var _ downloader.SitePlugin = (*AsuraSite)(nil)
 
 func (a *AsuraSite) GetSiteName() string { return "asurascans" }
-func (a *AsuraSite) GetDomain() string   { return "asuracomic.net" }
+func (a *AsuraSite) GetDomain() string   { return "asurascans.com" }
 func (a *AsuraSite) NeedsCFBypass() bool { return true }
 
 func (a *AsuraSite) NormalizeChapterURL(rawURL, _ string) string {
@@ -28,17 +24,17 @@ func (a *AsuraSite) NormalizeChapterURL(rawURL, _ string) string {
 	if rawURL == "" {
 		return ""
 	}
-	if !strings.HasPrefix(rawURL, "http") {
-		rawURL = "https://asuracomic.net/series/" + strings.TrimPrefix(rawURL, "/")
+	if strings.HasPrefix(rawURL, "/") {
+		rawURL = "https://asurascans.com" + rawURL
 	}
-	if !strings.HasSuffix(rawURL, "/") {
-		rawURL += "/"
+	if !strings.HasPrefix(rawURL, "http") {
+		rawURL = "https://asurascans.com/" + strings.TrimPrefix(rawURL, "/")
 	}
 	return rawURL
 }
 
 func (a *AsuraSite) NormalizeChapterFilename(data map[string]string) string {
-	return asuraChapterFilename(data["url"])
+	return asuraChapterFilename(data["number"])
 }
 
 func (a *AsuraSite) GetChapterExtractionMethod() *downloader.ChapterExtractionMethod {
@@ -50,10 +46,8 @@ func (a *AsuraSite) GetChapterExtractionMethod() *downloader.ChapterExtractionMe
 
 func (a *AsuraSite) GetImageExtractionMethod() *downloader.ImageExtractionMethod {
 	return &downloader.ImageExtractionMethod{
-		// No WaitSelector → HTTP path, no browser needed.
-		// Image URLs are embedded in <script> tags in the raw HTTP response.
-		// parseAsuraImages finds the script tag whose URLs all share the most
-		// consecutive media IDs — that script contains only the chapter images.
+		// No WaitSelector → HTTP path (plain Astro SSR, no JS needed).
+		// Image URLs are embedded as JSON in astro-island props in the SSR HTML.
 		Type:         "custom",
 		WaitSelector: "",
 		CustomParser: parseAsuraImages,
@@ -62,11 +56,8 @@ func (a *AsuraSite) GetImageExtractionMethod() *downloader.ImageExtractionMethod
 
 func (a *AsuraSite) Debugger() *downloader.Debugger {
 	return &downloader.Debugger{
-		// Set SaveHTML: true to save the raw HTTP response for inspection.
-		// Useful when the image URL regex stops matching — inspect the saved
-		// file and update asuraImageRe accordingly.
 		SaveHTML: false,
-		HTMLPath: "/tmp/asura_debug.html",
+		HTMLPath: "/tmp/asura_chapter_debug.html",
 	}
 }
 
@@ -80,41 +71,87 @@ func AsuraDownloadChapters(ctx context.Context, manga *config.Bookmarks, progres
 }
 
 // ---------------- CHAPTER PARSER ----------------
+//
+// The chapter list page (e.g. https://asurascans.com/comics/some-title-slug)
+// is an Astro SSR page. The chapter list is serialised as JSON in the
+// astro-island props attribute of the <ChapterListReact> component.
+//
+// The props blob contains a "chapters" key whose value is an Astro-encoded
+// array of chapter objects. Each chapter object has at minimum:
+//
+//	"number"      – integer chapter number (e.g. 93)
+//	"series_slug" – the series slug (e.g. "absolute-regression")
+//
+// Chapter URL pattern:
+//
+//	https://asurascans.com/comics/{series_slug}/chapter/{number}
+//
+// We parse the series_slug from the page URL or from the first chapter's
+// series_slug field, then build URLs from number + series_slug.
+//
+// The Astro serialisation wraps every value as [type, value]:
+//
+//	[0, <scalar>]   → scalar
+//	[1, [<items>]]  → array
+//
+// Rather than importing a full JSON decoder and fighting the nested format,
+// we use targeted regexes to pull out the fields we need.
+
+var (
+	// Matches the ChapterListReact astro-island component-url attribute and captures its props.
+	// Attribute order in HTML: component-url="...ChapterListReact..." ... props="..."
+	// (?s) makes . match newlines in case the tag spans multiple lines.
+	asuraChapterListPropsRe = regexp.MustCompile(`(?s)component-url="[^"]*ChapterListReact[^"]*"[^>]*props="([^"]+)"`)
+
+	// Extracts each chapter number from the chapters array.
+	// Format: &quot;number&quot;:[0,93]
+	asuraChapterNumInPropRe = regexp.MustCompile(`&quot;number&quot;:\[0,(\d+)\]`)
+)
 
 func parseAsuraChapters(html string) (map[string]string, error) {
-	doc, err := goquery.NewDocumentFromReader(bytes.NewReader([]byte(html)))
-	if err != nil {
-		return nil, fmt.Errorf("asura: failed to parse HTML: %w", err)
+	// Find the ChapterListReact props blob
+	m := asuraChapterListPropsRe.FindStringSubmatch(html)
+	if len(m) < 2 {
+		return nil, fmt.Errorf("asura: ChapterListReact props not found in HTML")
+	}
+	props := m[1]
+
+	// Extract the full series slug from publicUrl (e.g. "absolute-regression-7f873ca6").
+	// This includes the hash suffix required by the chapter reader URLs.
+	// "seriesSlug" in the props is the bare slug without the hash and must NOT be used
+	// for chapter URLs — only publicUrl contains the correct full slug.
+	pubRe := regexp.MustCompile(`&quot;publicUrl&quot;:\[0,&quot;/comics/([^&]+)&quot;\]`)
+	pm := pubRe.FindStringSubmatch(props)
+	if len(pm) < 2 {
+		return nil, fmt.Errorf("asura: could not extract publicUrl (full series slug) from props")
+	}
+	seriesSlug := pm[1]
+	log.Printf("[Asura] Series slug: %s", seriesSlug)
+
+	// Extract all chapter numbers
+	numMatches := asuraChapterNumInPropRe.FindAllStringSubmatch(props, -1)
+	if len(numMatches) == 0 {
+		return nil, fmt.Errorf("asura: no chapter numbers found in props")
 	}
 
-	seen := make(map[string]struct{})
 	result := make(map[string]string)
+	seen := make(map[string]bool)
 
-	doc.Find("a").Each(func(i int, s *goquery.Selection) {
-		href, exists := s.Attr("href")
-		if !exists || href == "" {
-			return
-		}
-		href = strings.TrimSpace(href)
-		if !strings.Contains(href, "/chapter/") {
-			return
-		}
-		if !strings.HasPrefix(href, "http") {
-			href = "https://asuracomic.net/series/" + strings.TrimPrefix(href, "/")
-		}
-		if _, already := seen[href]; already {
-			return
-		}
-		seen[href] = struct{}{}
-
-		filename := asuraChapterFilename(href)
+	for _, nm := range numMatches {
+		numStr := nm[1]
+		filename := asuraChapterFilenameFromInt(numStr)
 		if filename == "unknown.cbz" {
-			log.Printf("[Asura] Could not extract chapter number from: %s", href)
-			return
+			continue
 		}
-		log.Printf("[Asura] Found chapter: %s -> %s", filename, href)
-		result[filename] = href
-	})
+		if seen[filename] {
+			continue
+		}
+		seen[filename] = true
+
+		url := fmt.Sprintf("https://asurascans.com/comics/%s/chapter/%s", seriesSlug, numStr)
+		log.Printf("[Asura] Found chapter: %s -> %s", filename, url)
+		result[filename] = url
+	}
 
 	if len(result) == 0 {
 		return nil, fmt.Errorf("asura: no chapters found")
@@ -124,118 +161,88 @@ func parseAsuraChapters(html string) (map[string]string, error) {
 }
 
 // ---------------- IMAGE PARSER ----------------
-// Asura's Next.js page embeds image URLs in <script> tags in the raw HTTP response.
-// Multiple script tags contain image URLs: some are chapter pages, others are
-// thumbnails/ads for other series. We find the script whose URLs form the most
-// consecutive block of media IDs — that is the chapter content script.
 //
-// URL format (ULID filenames since early 2025):
-//   https://gg.asuracomic.net/storage/media/419492/conversions/01KHXWQ1WJE4VCYD23HSM4BHBV-optimized.webp
-//   ↑ CDN host                              ↑ media ID (numeric, sequential per chapter)
+// The chapter reader page (e.g. https://asurascans.com/comics/{series}/chapter/{n})
+// is also Astro SSR. The page list is in the astro-island props for the reader
+// component. It contains a "pages" key – an array of page objects each with a
+// "url" field:
 //
-// If this stops working, set Debugger.SaveHTML = true, run once, inspect
-// /tmp/asura_debug.html and update asuraImageRe to match the new URL pattern.
+//	"pages":[1,[[0,{"url":[0,"https://cdn.asurascans.com/asura-images/chapters/38d433f0/92/001.webp"],...}],...]]
+//
+// We extract every cdn.asurascans.com chapter image URL from the props blob.
+// The HTML-entity-encoded props use &quot; for quotes.
 
 var (
-	// Matches any optimized image URL regardless of filename format (ULID, UUID, numeric)
-	asuraImageRe = regexp.MustCompile(`https://gg\.asuracomic\.net/storage/media/([0-9]+)/conversions/[0-9A-Za-z-]+-optimized\.(?:webp|jpg|png)`)
+	// Captures the full props blob of the ChapterReader astro-island.
+	// Attribute order: component-url="...ChapterReader..." ... props="..."
+	// (?s) makes . match newlines in case the tag spans multiple lines.
+	asuraReaderPropsRe = regexp.MustCompile(`(?s)component-url="[^"]*ChapterReader[^"]*"[^>]*props="([^"]+)"`)
 
-	// Extracts all <script> tag contents
-	asuraScriptRe = regexp.MustCompile(`(?s)<script[^>]*>(.*?)</script>`)
+	// Extracts cdn chapter image URLs.
+	// Path format changed from hash-based to slug-based:
+	//   old: /asura-images/chapters/38d433f0/92/001.webp
+	//   new: /asura-images/chapters/absolute-regression/89/001.webp
+	// Accept any non-slash path segment in place of the hash.
+	asuraCDNImageRe = regexp.MustCompile(`https://cdn\.asurascans\.com/asura-images/chapters/[^/&"]+/\d+/\d+\.\w+`)
 )
 
 func parseAsuraImages(html string) ([]string, error) {
-	scripts := asuraScriptRe.FindAllStringSubmatch(html, -1)
-	log.Printf("[Asura] Found %d script tags", len(scripts))
-
-	type scriptResult struct {
-		urls     []string // deduplicated, order-preserved
-		mediaIDs []int    // sorted numeric media IDs
-		maxGap   int      // largest gap between consecutive sorted media IDs
+	// Find the ChapterReader props blob
+	pm := asuraReaderPropsRe.FindStringSubmatch(html)
+	if len(pm) < 2 {
+		return nil, fmt.Errorf("asura: ChapterReader props not found in HTML")
 	}
 
-	var best *scriptResult
+	// Unescape HTML entities so the URL regex can match
+	props := strings.ReplaceAll(pm[1], "&quot;", `"`)
+	props = strings.ReplaceAll(props, "&#34;", `"`)
 
-	for i, m := range scripts {
-		script := m[1]
-		matches := asuraImageRe.FindAllStringSubmatch(script, -1)
+	matches := asuraCDNImageRe.FindAllString(props, -1)
+	if len(matches) == 0 {
+		// Fallback: scan the full HTML
+		log.Printf("[Asura] ChapterReader props gave no image URLs, falling back to full-page scan")
+		unescaped := strings.ReplaceAll(html, "&quot;", `"`)
+		matches = asuraCDNImageRe.FindAllString(unescaped, -1)
 		if len(matches) == 0 {
+			return nil, fmt.Errorf("asura: no chapter images found in HTML")
+		}
+	}
+
+	// Deduplicate preserving order
+	seen := make(map[string]bool)
+	var urls []string
+	for _, u := range matches {
+		if seen[u] {
 			continue
 		}
-
-		// Deduplicate preserving order, collect media IDs
-		seen := make(map[string]bool)
-		var urls []string
-		var ids []int
-		idSeen := make(map[int]bool)
-
-		for _, match := range matches {
-			url := match[0]
-			if seen[url] {
-				continue
-			}
-			seen[url] = true
-			urls = append(urls, url)
-
-			// Parse the numeric media ID
-			var id int
-			fmt.Sscanf(match[1], "%d", &id)
-			if !idSeen[id] {
-				idSeen[id] = true
-				ids = append(ids, id)
-			}
-		}
-
-		sort.Ints(ids)
-
-		// Calculate the largest gap between consecutive media IDs
-		maxGap := 0
-		for j := 1; j < len(ids); j++ {
-			gap := ids[j] - ids[j-1]
-			if gap > maxGap {
-				maxGap = gap
-			}
-		}
-
-		log.Printf("[Asura] Script %d: %d unique URLs, media ID range %d-%d, max gap %d",
-			i, len(urls), ids[0], ids[len(ids)-1], maxGap)
-
-		// Pick the script with the smallest max gap (most consecutive IDs).
-		// Ties broken by most URLs.
-		if best == nil ||
-			maxGap < best.maxGap ||
-			(maxGap == best.maxGap && len(urls) > len(best.urls)) {
-			best = &scriptResult{urls: urls, mediaIDs: ids, maxGap: maxGap}
-		}
+		seen[u] = true
+		urls = append(urls, u)
 	}
 
-	if best == nil || len(best.urls) == 0 {
-		return nil, fmt.Errorf("asura: no images found in HTML (CDN pattern not matched)")
-	}
-
-	log.Printf("[Asura] Selected script with %d images (max consecutive gap: %d)", len(best.urls), best.maxGap)
-	return best.urls, nil
+	log.Printf("[Asura] Found %d images", len(urls))
+	return urls, nil
 }
 
 // ---------------- HELPERS ----------------
 
-var asuraChapterNumRe = regexp.MustCompile(`chapter/([\d]+(?:[.-]\d+)?)`)
-
-func asuraChapterFilename(url string) string {
-	m := asuraChapterNumRe.FindStringSubmatch(url)
-	if len(m) < 2 {
+// asuraChapterFilename converts a chapter number string (e.g. "92", "92.5") to
+// a zero-padded CBZ filename (e.g. "ch092.cbz", "ch092.5.cbz").
+func asuraChapterFilename(numStr string) string {
+	if numStr == "" {
 		return "unknown.cbz"
 	}
-	chNum := m[1]
-	main, part := chNum, ""
-	if strings.ContainsAny(chNum, ".-") {
-		if strings.Contains(chNum, ".") {
-			p := strings.SplitN(chNum, ".", 2)
-			main, part = p[0], "."+p[1]
-		} else {
-			p := strings.SplitN(chNum, "-", 2)
-			main, part = p[0], "."+p[1]
-		}
+	return asuraChapterFilenameFromInt(numStr)
+}
+
+func asuraChapterFilenameFromInt(numStr string) string {
+	if numStr == "" {
+		return "unknown.cbz"
+	}
+	// Handle decimal chapter numbers like "92.5"
+	main, part := numStr, ""
+	if idx := strings.IndexByte(numStr, '.'); idx >= 0 {
+		main = numStr[:idx]
+		part = numStr[idx:]
 	}
 	return fmt.Sprintf("ch%03s%s.cbz", main, part)
 }
