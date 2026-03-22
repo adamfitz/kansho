@@ -22,7 +22,9 @@ const SUPPORTED_DOMAINS = [
   "*://mangadex.org/*",
   "*://*.mangadex.org/*",
   "*://flamecomics.xyz/*",
-  "*://*.flamecomics.xyz/*"
+  "*://*.flamecomics.xyz/*",
+  "*://weebcentral.com/*",
+  "*://*.weebcentral.com/*"
 ];
 
 // URL_PATTERNS is just the SUPPORTED_DOMAINS since they're already properly formatted
