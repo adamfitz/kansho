@@ -29,7 +29,7 @@ func (m *MangakatanaSite) GetDomain() string {
 
 // NeedsCFBypass returns whether this site needs Cloudflare bypass
 func (m *MangakatanaSite) NeedsCFBypass() bool {
-	return false //not currntly using cf bypass
+	return false
 }
 
 // GetChapterExtractionMethod returns HOW to extract chapters
@@ -48,69 +48,68 @@ func (m *MangakatanaSite) GetChapterExtractionMethod() *downloader.ChapterExtrac
 	}
 }
 
-// GetImageExtractionMethod returns HOW to extract images
-// Uses JavaScript as images are in a JavaScript variable (var thzq)
+// GetImageExtractionMethod returns HOW to extract images.
+// thzq is present in the static HTML — no browser needed.
+// Uses custom HTTP fetch + regex to extract image URLs directly.
 func (m *MangakatanaSite) GetImageExtractionMethod() *downloader.ImageExtractionMethod {
 	return &downloader.ImageExtractionMethod{
-		Type:         "javascript",
-		WaitSelector: "img.img", // Wait for images to load
-		JavaScript: `
-			// Extract image URLs from the thzq JavaScript variable
-			(function() {
-				// Find the script tag containing var thzq
-				const scripts = document.querySelectorAll('script');
-				for (let script of scripts) {
-					const text = script.textContent;
-					if (text.includes('var thzq')) {
-						// Extract the array: var thzq=['url1','url2',...];
-						const match = text.match(/var\s+thzq\s*=\s*\[(.*?)\];/);
-						if (match && match[1]) {
-							// Extract URLs from quotes
-							const urls = match[1].match(/'([^']+)'/g);
-							if (urls) {
-								return urls.map(u => u.replace(/'/g, ''));
-							}
-						}
-					}
-				}
-				return [];
-			})()
-		`,
+		Type:         "custom",
+		WaitSelector: "",
+		CustomParser: parseMangakatanaImages,
 	}
+}
+
+// parseMangakatanaImages extracts image URLs from the thzq JS variable in static HTML
+func parseMangakatanaImages(html string) ([]string, error) {
+	re := regexp.MustCompile(`var\s+thzq\s*=\s*\[([^\]]+)\]`)
+	match := re.FindStringSubmatch(html)
+	if len(match) < 2 {
+		return nil, fmt.Errorf("[MangaKatana] var thzq not found in page HTML")
+	}
+
+	urlRe := regexp.MustCompile(`'([^']+)'`)
+	urlMatches := urlRe.FindAllStringSubmatch(match[1], -1)
+	if len(urlMatches) == 0 {
+		return nil, fmt.Errorf("[MangaKatana] thzq found but no URLs extracted")
+	}
+
+	var urls []string
+	for _, u := range urlMatches {
+		if u[1] != "" {
+			urls = append(urls, u[1])
+		}
+	}
+
+	log.Printf("[MangaKatana] Found %d images", len(urls))
+	return urls, nil
 }
 
 // NormalizeChapterURL converts raw URL to absolute URL
 // PARSING LOGIC ONLY - returns a string
 func (m *MangakatanaSite) NormalizeChapterURL(rawURL, baseURL string) string {
-	// URLs from mangakatana are already absolute
 	return rawURL
 }
 
 // NormalizeChapterFilename converts chapter data to filename
 // PARSING LOGIC ONLY - returns a string
 func (m *MangakatanaSite) NormalizeChapterFilename(data map[string]string) string {
-	// Extract chapter number from text like "Chapter 1: Title" or "Chapter 1.5: Title"
 	text := data["text"]
 
-	// Regex to extract chapter numbers from text like "Chapter 1:", "Chapter 1.5:", "Chapter 123:"
 	re := regexp.MustCompile(`Chapter\s+(\d+)(?:\.(\d+))?`)
-
 	matches := re.FindStringSubmatch(text)
 	if len(matches) == 0 {
-		// Fallback: use the text as-is
 		sanitized := strings.ReplaceAll(text, " ", "-")
 		sanitized = strings.ToLower(sanitized)
 		log.Printf("[MangaKatana] WARNING: Could not parse chapter number from text: %s", text)
 		return fmt.Sprintf("%s.cbz", sanitized)
 	}
 
-	mainNum := matches[1] // Main chapter number (e.g., "1", "10", "123")
+	mainNum := matches[1]
 	partNum := ""
 	if len(matches) > 2 && matches[2] != "" {
-		partNum = matches[2] // Decimal part (e.g., "5" from "1.5")
+		partNum = matches[2]
 	}
 
-	// Build final filename: pad main number to 3 digits
 	filename := fmt.Sprintf("ch%03s", mainNum)
 	if partNum != "" {
 		filename += "." + partNum
