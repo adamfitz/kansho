@@ -12,6 +12,7 @@ require (
 	github.com/gocolly/colly v1.2.0
 	golang.design/x/clipboard v0.7.1
 	golang.org/x/image v0.28.0
+	gopkg.in/lumberjack.v3 v3.0.0-20201005055756-ca5a24b664f0
 )
 
 require (
