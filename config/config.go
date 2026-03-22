@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"gopkg.in/lumberjack.v3"
+
 	"kansho/cf"
 	"kansho/parser"
 )
@@ -142,25 +144,27 @@ func verifyConfigFiles() (string, error) {
 
 // logging configuration
 func logging() error {
-	// local config dir
 	configDir, configDirErr := verifyConfigDirectory()
 	if configDirErr != nil {
 		return configDirErr
 	}
 
-	// open log file or create it if it does not exist
 	logFilePath := fmt.Sprintf("%s/kansho.log", configDir)
-	logFile, logFileErr := os.OpenFile(logFilePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if logFileErr != nil {
-		log.Fatalf("Failed to open log file: %v", logFileErr)
+	logWriter, err := lumberjack.New(
+		lumberjack.WithFileName(logFilePath),
+		lumberjack.WithMaxBytes(10*lumberjack.MB),
+		lumberjack.WithMaxBackups(2), // Keep last 2 log files plus the current one == 3 log files total
+		lumberjack.WithCompress(),    // compress the old logfiles
+	)
+	if err != nil {
+		return fmt.Errorf("failed to initialise log rotation: %w", err)
 	}
 
-	log.SetOutput(logFile)
+	log.SetOutput(logWriter)
 
 	// Initialize CloudFlare debug logger
 	if err := cf.InitCFLogger(configDir); err != nil {
 		log.Printf("Failed to initialize CF debug logger: %v", err)
-		// Don't fail the app if CF logger fails, just log the error
 	}
 
 	return nil
