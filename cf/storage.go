@@ -313,11 +313,26 @@ func ValidateCookieData(data *BypassData, targetDomain ...string) error {
 
 		// Domain mismatch check — a token for site A will be cryptographically
 		// rejected by site B, so this is a hard structural error, not a staleness check.
+		//
+		// We accept two valid cases:
+		//   1. Exact match:   cookie domain "example.com"  for target "example.com"
+		//   2. Parent domain: cookie domain "example.com"  for target "www.example.com"
+		//      (standard browser cookie scoping — a cookie issued for the apex domain
+		//       is sent by the browser for all subdomains including www)
+		//
+		// We reject:
+		//   - cookie domain "other.com" for target "example.com"  (completely different site)
+		//   - cookie domain "sub.example.com" for target "example.com" (subdomain can't cover apex)
 		if len(targetDomain) > 0 && targetDomain[0] != "" {
 			target := targetDomain[0]
 			cookieDomain := strings.TrimPrefix(data.CfClearanceStruct.Domain, ".")
 			targetClean := strings.TrimPrefix(target, ".")
-			if cookieDomain != targetClean {
+
+			exactMatch := cookieDomain == targetClean
+			// Parent domain match: cookie is for "example.com", target is "sub.example.com"
+			parentMatch := strings.HasSuffix(targetClean, "."+cookieDomain)
+
+			if !exactMatch && !parentMatch {
 				errMsg := fmt.Sprintf(
 					"cf_clearance domain mismatch: cookie is for %q but target is %q — "+
 						"you must solve the CF challenge on %s, not on another tab",
@@ -328,7 +343,11 @@ func ValidateCookieData(data *BypassData, targetDomain ...string) error {
 				LogCFValidation(data.Domain, false, validationErrors)
 				return fmt.Errorf("%s", errMsg)
 			}
-			logCF("ValidateCookieData: cf_clearance domain matches target (%s): OK", targetClean)
+			if parentMatch {
+				logCF("ValidateCookieData: cf_clearance parent domain %q covers target %q: OK", cookieDomain, targetClean)
+			} else {
+				logCF("ValidateCookieData: cf_clearance domain matches target (%s): OK", targetClean)
+			}
 		}
 
 		logCF("ValidateCookieData: ✓ cf_clearance structure OK")
