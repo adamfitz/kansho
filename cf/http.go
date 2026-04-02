@@ -27,18 +27,25 @@ func ApplyToCollector(c *colly.Collector, targetURL string) error {
 		return nil
 	}
 
-	// Check if cf_clearance cookie is expired or from the wrong domain (if it exists)
+	// Log info about the bypass data we're about to use.
+	// We do NOT validate expiry or staleness here — the request result determines
+	// whether the data is still good. Pre-flight time-based rejections cause false
+	// positives when clock-derived expiry values are inaccurate.
 	if data.Type == ProtectionCookie && data.CfClearanceStruct != nil {
+		// Structural check only — domain mismatch is a hard error (wrong site token)
 		if err := ValidateCookieData(data, domain); err != nil {
-			log.Printf("⚠️ CF bypass data for %s failed validation: %v", domain, err)
-			return fmt.Errorf("cf bypass validation failed: %w", err)
+			log.Printf("⚠️ CF bypass data for %s is structurally invalid: %v", domain, err)
+			return fmt.Errorf("cf bypass structurally invalid: %w", err)
 		}
 		if data.CfClearanceStruct.Expires != nil {
 			expiresIn := time.Until(*data.CfClearanceStruct.Expires)
-			log.Printf("✓ Using cf_clearance for %s (valid for: %s)", domain, expiresIn.Round(time.Hour))
+			if expiresIn < 0 {
+				log.Printf("ℹ️ cf_clearance for %s has a past expiry timestamp (attempting anyway)", domain)
+			} else {
+				log.Printf("✓ Using cf_clearance for %s (expiry timestamp: %s remaining)", domain, expiresIn.Round(time.Hour))
+			}
 		}
 	} else {
-		// For non-cookie methods or if no expiry info, just log age
 		capturedTime, _ := time.Parse(time.RFC3339, data.CapturedAt)
 		age := time.Since(capturedTime)
 		log.Printf("ℹ️ Using bypass data for %s (captured: %s ago)", domain, age.Round(time.Minute))
