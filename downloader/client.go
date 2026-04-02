@@ -41,21 +41,18 @@ func NewHTTPClient(domain string, needsCF bool) (*HTTPClient, error) {
 		baseTimeout: 10 * time.Second,
 	}
 
-	// Load CF bypass data if needed
+	// Load CF bypass data if needed.
+	// We do NOT validate expiry or staleness here — that is determined empirically
+	// by whether the actual request succeeds or returns a CF challenge.
+	// Pre-flight time-based checks cause false rejections when clock-derived
+	// expiry values are inaccurate.
 	if needsCF {
 		data, err := cf.LoadFromFile(domain)
 		if err != nil {
-			// Don't return error - we'll try without bypass and handle CF challenges
 			log.Printf("[HTTPClient] No CF bypass data for %s: %v", domain, err)
 		} else {
-			// Validate bypass data
-			if err := cf.ValidateCookieData(data); err != nil {
-				log.Printf("[HTTPClient] CF bypass data invalid: %v", err)
-				cf.MarkCookieAsFailed(domain)
-			} else {
-				client.bypassData = data
-				log.Printf("[HTTPClient] ✓ Loaded CF bypass for %s", domain)
-			}
+			client.bypassData = data
+			log.Printf("[HTTPClient] ✓ Loaded CF bypass for %s (will verify empirically on first request)", domain)
 		}
 	}
 
