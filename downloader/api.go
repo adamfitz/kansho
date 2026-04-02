@@ -45,17 +45,19 @@ func NewAPIClient(domain string, needsCF bool) (*APIClient, error) {
 	return client, nil
 }
 
-// applyCFBypass applies CF bypass data to the collector
+// applyCFBypass applies CF bypass data to the collector.
+// We do NOT validate expiry or staleness here — the request result determines
+// whether the data is still good. Pre-flight time-based checks cause false
+// rejections when clock-derived expiry values are inaccurate.
 func (c *APIClient) applyCFBypass() error {
 	bypassData, err := cf.LoadFromFile(c.domain)
 	if err != nil {
 		return fmt.Errorf("no CF bypass data: %w", err)
 	}
 
-	// Validate bypass data
-	if err := cf.ValidateCookieData(bypassData); err != nil {
-		cf.MarkCookieAsFailed(c.domain)
-		return fmt.Errorf("CF bypass data invalid: %w", err)
+	// Structural check only (non-empty value, domain present, domain match)
+	if err := cf.ValidateCookieData(bypassData, c.domain); err != nil {
+		return fmt.Errorf("CF bypass data structurally invalid: %w", err)
 	}
 
 	// Apply to collector
