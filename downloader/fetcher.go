@@ -7,12 +7,25 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"net/url"
 	"time"
 
 	"kansho/cf"
 
 	"github.com/PuerkitoBio/goquery"
 )
+
+// DomainFromURL extracts the hostname from a URL, falling back to the provided
+// hint if parsing fails. Using the actual request URL as the domain source means
+// CF bypass data is always looked up under the domain the browser extension used
+// (e.g. "www.mgeko.cc"), regardless of what GetDomain() returns.
+func DomainFromURL(rawURL, hint string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Hostname() == "" {
+		return hint
+	}
+	return parsed.Hostname()
+}
 
 // FetchChapterURLs fetches chapter URLs using site's extraction method
 func FetchChapterURLs(ctx context.Context, mangaURL string, site SitePlugin) (map[string]string, error) {
@@ -135,7 +148,7 @@ func extractChaptersWithJS(ctx context.Context, mangaURL string, site SitePlugin
 
 	var rawData []map[string]string
 
-	session, err := NewBrowserSession(jsCtx, site.GetDomain(), site.NeedsCFBypass())
+	session, err := NewBrowserSession(jsCtx, DomainFromURL(mangaURL, site.GetDomain()), site.NeedsCFBypass())
 	if err != nil {
 		return nil, err
 	}
@@ -160,7 +173,7 @@ func extractChaptersWithSelector(ctx context.Context, mangaURL string, site Site
 	fetchCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	html, err := FetchHTML(fetchCtx, mangaURL, site.GetDomain(), site.NeedsCFBypass(), method.WaitSelector)
+	html, err := FetchHTML(fetchCtx, mangaURL, DomainFromURL(mangaURL, site.GetDomain()), site.NeedsCFBypass(), method.WaitSelector)
 	if err != nil {
 		return nil, err
 	}
@@ -225,7 +238,7 @@ func extractImagesWithJS(ctx context.Context, chapterURL string, site SitePlugin
 
 	var imageURLs []string
 
-	session, err := NewBrowserSession(jsCtx, site.GetDomain(), site.NeedsCFBypass())
+	session, err := NewBrowserSession(jsCtx, DomainFromURL(chapterURL, site.GetDomain()), site.NeedsCFBypass())
 	if err != nil {
 		return nil, err
 	}
@@ -243,7 +256,7 @@ func extractImagesWithSelector(ctx context.Context, chapterURL string, site Site
 	fetchCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	html, err := FetchHTML(fetchCtx, chapterURL, site.GetDomain(), site.NeedsCFBypass(), method.WaitSelector)
+	html, err := FetchHTML(fetchCtx, chapterURL, DomainFromURL(chapterURL, site.GetDomain()), site.NeedsCFBypass(), method.WaitSelector)
 	if err != nil {
 		return nil, err
 	}
@@ -289,7 +302,7 @@ func extractImagesCustom(ctx context.Context, chapterURL string, site SitePlugin
 		if d, ok := site.(DebugSite); ok {
 			dbg = d.Debugger()
 		}
-		html, err = FetchHTMLBatched(ctx, chapterURL, site.GetDomain(), site.NeedsCFBypass(), dbg)
+		html, err = FetchHTMLBatched(ctx, chapterURL, DomainFromURL(chapterURL, site.GetDomain()), site.NeedsCFBypass(), dbg)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get rendered HTML via browser: %w", err)
 		}
@@ -323,7 +336,7 @@ func extractChaptersWithAPI(ctx context.Context, mangaURL string, site SitePlugi
 		return nil, fmt.Errorf("API function not provided")
 	}
 
-	client, err := NewAPIClient(site.GetDomain(), site.NeedsCFBypass())
+	client, err := NewAPIClient(DomainFromURL(mangaURL, site.GetDomain()), site.NeedsCFBypass())
 	if err != nil {
 		return nil, fmt.Errorf("failed to create API client: %w", err)
 	}
@@ -356,7 +369,7 @@ func extractImagesWithAPI(ctx context.Context, chapterURL string, site SitePlugi
 		return nil, fmt.Errorf("API function not provided")
 	}
 
-	client, err := NewAPIClient(site.GetDomain(), site.NeedsCFBypass())
+	client, err := NewAPIClient(DomainFromURL(chapterURL, site.GetDomain()), site.NeedsCFBypass())
 	if err != nil {
 		return nil, fmt.Errorf("failed to create API client: %w", err)
 	}

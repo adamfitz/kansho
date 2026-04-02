@@ -250,11 +250,19 @@ func LoadFromFile(domain string) (*BypassData, error) {
 	return &data, nil
 }
 
-// ValidateCookieData checks if stored cookie data is still usable.
+// ValidateCookieData performs structural validation only — it checks that the
+// bypass data is present and structurally correct, but does NOT reject data
+// based on timestamps, expiry dates, or previous failures.
+//
+// Expiry/staleness is determined empirically: the data is used in the actual
+// request, and only marked as failed if the request itself triggers a CF
+// challenge. This avoids false-positive rejections caused by inaccurate
+// clock-based expiry values.
+//
 // targetDomain is the domain you intend to use the bypass for (e.g. "asuracomic.net").
 // Pass an empty string to skip the domain match check (backwards-compatible).
 func ValidateCookieData(data *BypassData, targetDomain ...string) error {
-	logCF("ValidateCookieData: Starting validation")
+	logCF("ValidateCookieData: Starting structural validation")
 
 	validationErrors := []string{}
 
@@ -265,44 +273,29 @@ func ValidateCookieData(data *BypassData, targetDomain ...string) error {
 		return fmt.Errorf("%s", err)
 	}
 
-	// Check if data is too old (24 hours max age)
+	// Log age for informational purposes only — not used to reject data.
 	if data.CapturedAt != "" {
-		capturedTime, err := time.Parse(time.RFC3339, data.CapturedAt)
-		if err == nil {
-			age := time.Since(capturedTime)
-			if age > 24*time.Hour {
-				errMsg := fmt.Sprintf("bypass data is too old: %v (max: 24h)", age.Round(time.Minute))
-				validationErrors = append(validationErrors, errMsg)
-				LogCFValidation(data.Domain, false, validationErrors)
-				return fmt.Errorf("%s", errMsg)
-			}
-			logCF("ValidateCookieData: Bypass data age: %v (OK)", age.Round(time.Minute))
+		if capturedTime, err := time.Parse(time.RFC3339, data.CapturedAt); err == nil {
+			logCF("ValidateCookieData: Bypass data age: %v (informational only — not used for rejection)",
+				time.Since(capturedTime).Round(time.Minute))
 		}
 	}
 
-	// Validate cf_clearance cookie specifically
+	// Validate cf_clearance structure
 	if data.CfClearanceStruct != nil {
-		// Check expiry
+		// Log expiry for informational purposes only — not used to reject data.
 		if data.CfClearanceStruct.Expires != nil {
-			now := time.Now()
-			if now.After(*data.CfClearanceStruct.Expires) {
-				errMsg := fmt.Sprintf("cf_clearance cookie has expired at %v",
-					data.CfClearanceStruct.Expires.Format(time.RFC3339))
-				validationErrors = append(validationErrors, errMsg)
-				LogCFValidation(data.Domain, false, validationErrors)
-				return fmt.Errorf("%s", errMsg)
-			}
-
-			// Warn if expiring soon (within 1 hour)
 			timeLeft := time.Until(*data.CfClearanceStruct.Expires)
-			if timeLeft < time.Hour {
-				logCF("ValidateCookieData: ⚠️  cf_clearance expires soon: %v", timeLeft.Round(time.Minute))
+			if timeLeft < 0 {
+				logCF("ValidateCookieData: cf_clearance expiry timestamp is in the past (%v ago) — attempting anyway",
+					(-timeLeft).Round(time.Minute))
 			} else {
-				logCF("ValidateCookieData: cf_clearance valid for: %v", timeLeft.Round(time.Hour))
+				logCF("ValidateCookieData: cf_clearance expiry: %v remaining (informational only)",
+					timeLeft.Round(time.Hour))
 			}
 		}
 
-		// Validate cookie value format
+		// Structural check: value must not be empty
 		if data.CfClearanceStruct.Value == "" {
 			errMsg := "cf_clearance value is empty"
 			validationErrors = append(validationErrors, errMsg)
@@ -310,7 +303,7 @@ func ValidateCookieData(data *BypassData, targetDomain ...string) error {
 			return fmt.Errorf("%s", errMsg)
 		}
 
-		// Check domain is present
+		// Structural check: domain must be present
 		if data.CfClearanceStruct.Domain == "" {
 			errMsg := "cf_clearance domain is empty"
 			validationErrors = append(validationErrors, errMsg)
@@ -318,14 +311,28 @@ func ValidateCookieData(data *BypassData, targetDomain ...string) error {
 			return fmt.Errorf("%s", errMsg)
 		}
 
-		// Check the cf_clearance cookie domain actually matches the target domain.
-		// Cloudflare issues domain-specific clearance tokens; a token for manhuaus.com
-		// will be cryptographically rejected by asuracomic.net, causing an infinite loop.
+		// Domain mismatch check — a token for site A will be cryptographically
+		// rejected by site B, so this is a hard structural error, not a staleness check.
+		//
+		// We accept two valid cases:
+		//   1. Exact match:   cookie domain "example.com"  for target "example.com"
+		//   2. Parent domain: cookie domain "example.com"  for target "www.example.com"
+		//      (standard browser cookie scoping — a cookie issued for the apex domain
+		//       is sent by the browser for all subdomains including www)
+		//
+		// We reject:
+		//   - cookie domain "other.com" for target "example.com"  (completely different site)
+		//   - cookie domain "sub.example.com" for target "example.com" (subdomain can't cover apex)
 		if len(targetDomain) > 0 && targetDomain[0] != "" {
 			target := targetDomain[0]
 			cookieDomain := strings.TrimPrefix(data.CfClearanceStruct.Domain, ".")
 			targetClean := strings.TrimPrefix(target, ".")
-			if cookieDomain != targetClean {
+
+			exactMatch := cookieDomain == targetClean
+			// Parent domain match: cookie is for "example.com", target is "sub.example.com"
+			parentMatch := strings.HasSuffix(targetClean, "."+cookieDomain)
+
+			if !exactMatch && !parentMatch {
 				errMsg := fmt.Sprintf(
 					"cf_clearance domain mismatch: cookie is for %q but target is %q — "+
 						"you must solve the CF challenge on %s, not on another tab",
@@ -336,10 +343,14 @@ func ValidateCookieData(data *BypassData, targetDomain ...string) error {
 				LogCFValidation(data.Domain, false, validationErrors)
 				return fmt.Errorf("%s", errMsg)
 			}
-			logCF("ValidateCookieData: cf_clearance domain matches target (%s): OK", targetClean)
+			if parentMatch {
+				logCF("ValidateCookieData: cf_clearance parent domain %q covers target %q: OK", cookieDomain, targetClean)
+			} else {
+				logCF("ValidateCookieData: cf_clearance domain matches target (%s): OK", targetClean)
+			}
 		}
 
-		logCF("ValidateCookieData: cf_clearance cookie structure: OK")
+		logCF("ValidateCookieData: ✓ cf_clearance structure OK")
 	} else {
 		errMsg := "no cf_clearance cookie structure found"
 		validationErrors = append(validationErrors, errMsg)
@@ -347,24 +358,17 @@ func ValidateCookieData(data *BypassData, targetDomain ...string) error {
 		return fmt.Errorf("%s", errMsg)
 	}
 
-	// Check if cookie recently failed (within last 5 minutes)
+	// Log previous failure marker for informational purposes — not used to reject data.
+	// The caller already cleared this by writing fresh data to disk; if the old marker
+	// is still present it simply means the previous attempt failed, which we already know.
 	if failedAt, ok := data.Headers["_failed_at"]; ok {
-		failTime, err := time.Parse(time.RFC3339, failedAt)
-		if err == nil {
-			timeSinceFail := time.Since(failTime)
-			if timeSinceFail < 5*time.Minute {
-				errMsg := fmt.Sprintf("cookie failed recently (%v ago), needs manual re-capture",
-					timeSinceFail.Round(time.Second))
-				validationErrors = append(validationErrors, errMsg)
-				LogCFValidation(data.Domain, false, validationErrors)
-				return fmt.Errorf("%s", errMsg)
-			}
-			logCF("ValidateCookieData: Previous failure was %v ago (OK to retry)",
-				timeSinceFail.Round(time.Minute))
+		if failTime, err := time.Parse(time.RFC3339, failedAt); err == nil {
+			logCF("ValidateCookieData: Previous failure recorded %v ago (informational — attempting anyway)",
+				time.Since(failTime).Round(time.Minute))
 		}
 	}
 
-	logCF("ValidateCookieData: ✓ All validation checks passed")
+	logCF("ValidateCookieData: ✓ All structural checks passed")
 	LogCFValidation(data.Domain, true, nil)
 	return nil
 }

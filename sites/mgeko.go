@@ -22,7 +22,10 @@ func (m *MgekoSite) GetSiteName() string {
 	return "mgeko"
 }
 
-// GetDomain returns the site domain
+// GetDomain returns a domain hint used as a fallback only.
+// The actual CF bypass domain is always derived from the request URL at runtime
+// via DomainFromURL, so this value does not need to match the exact www/non-www
+// form the browser extension captures.
 func (m *MgekoSite) GetDomain() string {
 	return "mgeko.cc"
 }
