@@ -101,10 +101,11 @@ func (w *WeebcentralSite) NormalizeChapterFilename(data map[string]string) strin
 		partNum = matches[2]
 	}
 
+	// Use "ch" for both chapters and episodes to keep filenames consistent
 	prefix := "ch"
-	if strings.Contains(strings.ToLower(text), "episode") {
-		prefix = "ep"
-	}
+	// if strings.Contains(strings.ToLower(text), "episode") {
+	// 	prefix = "ep"
+	// }
 
 	filename := fmt.Sprintf("%s%03s", prefix, mainNum)
 	if partNum != "" {
