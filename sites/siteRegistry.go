@@ -19,6 +19,7 @@ func init() {
 	config.RegisterSite("cubari", CubariDownloadChapters)           // Implements downloader interface
 	config.RegisterSite("flamecomics", FlameComicsDownloadChapters) // Implements downloader interface
 	config.RegisterSite("weebcentral", WeebcentralDownloadChapters) // Implements downloader interface
+	config.RegisterSite("philiascans", PhiliaScansDownloadChapters)
 
 	// Add new sites here in the future:
 	// config.RegisterSite("newsite", NewsiteDownloadChapters)
