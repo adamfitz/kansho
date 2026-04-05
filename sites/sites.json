@@ -149,11 +149,20 @@
         "title": true,
         "location": true
       }
-    }
-    ,
+    },
     {
       "name": "weebcentral",
       "display_name": "weebcentral",
+      "required_fields": {
+        "url": true,
+        "shortname": false,
+        "title": true,
+        "location": true
+      }
+    },
+    {
+      "name": "philiascans",
+      "display_name": "philiascans",
       "required_fields": {
         "url": true,
         "shortname": false,
