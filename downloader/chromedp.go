@@ -34,6 +34,14 @@ func NewBrowserSession(ctx context.Context, domain string, needsCF bool) (*Brows
 		chromedp.Flag("disable-gpu", true),
 	)
 
+	// Use the bundled headless-shell if available, otherwise fall back to
+	// a system Chrome install. findChromePath() returns "" on Linux when
+	// no bundled binary is found, in which case chromedp searches PATH as
+	// normal — so this does not change the Linux dev-machine behaviour.
+	if chromePath := findChromePath(); chromePath != "" {
+		opts = append(opts, chromedp.ExecPath(chromePath))
+	}
+
 	var bypassData *cf.BypassData
 	if needsCF {
 		data, err := cf.LoadFromFile(domain)
