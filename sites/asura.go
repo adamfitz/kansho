@@ -179,11 +179,14 @@ var (
 	asuraReaderPropsRe = regexp.MustCompile(`(?s)component-url="[^"]*ChapterReader[^"]*"[^>]*props="([^"]+)"`)
 
 	// Extracts cdn chapter image URLs.
-	// Path format changed from hash-based to slug-based:
-	//   old: /asura-images/chapters/38d433f0/92/001.webp
-	//   new: /asura-images/chapters/absolute-regression/89/001.webp
-	// Accept any non-slash path segment in place of the hash.
-	asuraCDNImageRe = regexp.MustCompile(`https://cdn\.asurascans\.com/asura-images/chapters/[^/&"]+/\d+/\d+\.\w+`)
+	// Path formats observed over time:
+	//   hash-dir + numeric file:  /asura-images/chapters/38d433f0/92/001.webp
+	//   slug-dir + numeric file:  /asura-images/chapters/absolute-regression/89/001.webp
+	//   slug-dir + hex file:      /asura-images/chapters/absolute-regression/96/9ea848.webp
+	//   slug-dir + large-int file:/asura-images/chapters/absolute-regression/97/273284.webp
+	// The final filename component can be any mix of hex digits or decimal digits,
+	// so we match any non-slash, non-quote, non-ampersand sequence before the extension.
+	asuraCDNImageRe = regexp.MustCompile(`https://cdn\.asurascans\.com/asura-images/chapters/[^/&"]+/[^/&"]+/[^/&"]+\.\w+`)
 )
 
 func parseAsuraImages(html string) ([]string, error) {
