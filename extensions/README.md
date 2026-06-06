@@ -2,6 +2,8 @@
 
 Browser extensions to capture cf cookies and entropy data for use with the Kansho manga downloader.
 
+Supports Chromium-based browsers (Chrome, Brave, Edge) and Firefox.
+
 ## Why is this needed?
 
 Some manga sites use cf protection. When Kansho detects this, it will:
@@ -39,25 +41,32 @@ Some manga sites use cf protection. When Kansho detects this, it will:
 
 ### Firefox
 
-1. Open Firefox and navigate to:
-   ```
-   about:debugging#/runtime/this-firefox
-   ```
+The extension can be installed permanently (survives restarts) using **Firefox Developer Edition**, which allows installing unsigned extensions.
 
-2. Click **"Load Temporary Add-on..."**
+1. Install **Firefox Developer Edition** from [mozilla.org](https://www.mozilla.org/en-US/firefox/developer/)
 
-3. Navigate to the Kansho project folder and select:
+2. Open Firefox Developer Edition and go to:
    ```
-   kansho/extensions/firefox/manifest.json
+   about:config
    ```
 
-4. The extension is now loaded
+3. Search for `xpinstall.signatures.required` and set it to **false**
 
-⚠️ **Note for Firefox**: Temporary add-ons are removed when Firefox restarts. You'll need to reload it each time you restart the browser.
+4. Package the extension:
+   ```bash
+   cd extensions/firefox
+   zip -r ../kansho-cf-helper.xpi * -x "*.gitkeep"
+   ```
 
-**Alternative for Firefox** (persistent installation):
-- Package the extension as an XPI file and install it permanently (requires additional steps)
-- Or use Firefox Developer Edition which allows unsigned extensions
+5. Open `about:addons`, click the gear icon ⚙️ → **Install Add-on From File**, and select the `.xpi` file
+
+6. The extension is now installed permanently — it will survive browser restarts
+
+**Note**: Temporary loading (for quick testing) also works:
+- Navigate to `about:debugging#/runtime/this-firefox`
+- Click **"Load Temporary Add-on..."**
+- Select `kansho/extensions/firefox/manifest.json`
+- ⚠️ Temporary add-ons are removed when Firefox restarts
 
 ## How to Use
 
