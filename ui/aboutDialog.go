@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"net/url"
+
 	"kansho/config"
 
 	"fyne.io/fyne/v2"
@@ -36,6 +38,16 @@ func ShowAboutDialog(kanshoApp fyne.App) {
 	)
 	features.Wrapping = fyne.TextWrapWord
 
+	rlvLabel := widget.NewLabel(
+		"Bundled external package:\nrlv (Rust Log Viewer) " + config.RLVVersion,
+	)
+	rlvLabel.Wrapping = fyne.TextWrapWord
+
+	rlvLink, _ := url.Parse("https://github.com/adamfitz/rlv")
+	rlvHyperlink := widget.NewHyperlink("github.com/adamfitz/rlv", rlvLink)
+
+	rlvInfo := container.NewVBox(rlvLabel, rlvHyperlink)
+
 	// Centered bold title
 	centeredTitle := container.NewCenter(title)
 
@@ -56,6 +68,8 @@ func ShowAboutDialog(kanshoApp fyne.App) {
 		description,
 		widget.NewSeparator(),
 		features,
+		widget.NewSeparator(),
+		rlvInfo,
 	)
 
 	scroll := container.NewScroll(mainContent)
@@ -72,7 +86,7 @@ func ShowAboutDialog(kanshoApp fyne.App) {
 	// Create and show window
 	aboutWin = kanshoApp.NewWindow("About Kansho")
 	aboutWin.SetContent(content)
-	aboutWin.Resize(fyne.NewSize(400, 400))
+	aboutWin.Resize(fyne.NewSize(420, 480))
 	aboutWin.SetFixedSize(true)
 	aboutWin.Show()
 }

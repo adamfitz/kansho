@@ -14,7 +14,21 @@ ICON_DIR := $(ROOTFS)/usr/share/icons/hicolor/256x256/apps
 
 all: deb
 
-deb: clean prepare build install_files package
+deb: clean download-rlv prepare build install_files package
+
+download-rlv:
+	@echo "==> Resolving latest rlv version"
+	RLV_VERSION=$$(curl -sL https://api.github.com/repos/adamfitz/rlv/releases/latest | grep '"tag_name"' | cut -d'"' -f4) && \
+	echo "$$RLV_VERSION" > .rlv-version && \
+	RLV_DEB="rlv_$${RLV_VERSION#v}_amd64.deb" && \
+	echo "==> Downloading rlv $$RLV_VERSION" && \
+	curl -sL "https://github.com/adamfitz/rlv/releases/download/$$RLV_VERSION/$$RLV_DEB" -o "/tmp/$$RLV_DEB" && \
+	echo "==> Extracting rlv binary" && \
+	mkdir -p /tmp/rlv-extract && \
+	dpkg-deb --extract "/tmp/$$RLV_DEB" /tmp/rlv-extract && \
+	cp /tmp/rlv-extract/usr/bin/rlv . && \
+	chmod 755 rlv && \
+	rm -rf "/tmp/$$RLV_DEB" /tmp/rlv-extract
 
 prepare:
 	@echo "==> Preparing rootfs directories"
@@ -29,12 +43,19 @@ prepare:
 
 build:
 	@echo "==> Building Go binary"
+	RLV_VERSION=$$(cat .rlv-version 2>/dev/null || echo "unknown") && \
 	GOOS=$(GOOS) GOARCH=$(GOARCH) CGO_ENABLED=1 \
-	go build -tags release -ldflags "-X github.com/backyard/kansho/config.GitCommit=$(git rev-parse --short HEAD)" -o $(BIN_DIR)/$(BINARY) .
+	go build -tags release \
+		-ldflags "-X github.com/backyard/kansho/config.GitCommit=$(git rev-parse --short HEAD) \
+			-X kansho/config.RLVVersion=$$RLV_VERSION" \
+		-o $(BIN_DIR)/$(BINARY) .
 
 install_files:
+	@echo "==> Installing rlv binary"
+	cp rlv $(BIN_DIR)/rlv
 	@echo "==> Setting permissions"
 	chmod 755 $(BIN_DIR)/$(BINARY)
+	chmod 755 $(BIN_DIR)/rlv
 	chmod 644 $(DESKTOP_DIR)/$(APP_NAME).desktop
 	chmod 644 $(ICON_DIR)/$(APP_NAME).png
 	chmod 755 $(DEBIAN_DIR)
@@ -48,3 +69,4 @@ clean:
 	@echo "==> Cleaning up"
 	rm -rf $(ROOTFS)
 	rm -f $(APP_NAME)_*.deb
+	rm -f rlv .rlv-version

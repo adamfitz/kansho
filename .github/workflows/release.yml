@@ -47,6 +47,21 @@ jobs:
             libxi-dev \
             libxxf86vm-dev
 
+      - name: Download rlv binary
+        id: rlv
+        run: |
+          RLV_VERSION=$(curl -sL https://api.github.com/repos/adamfitz/rlv/releases/latest | grep '"tag_name"' | cut -d'"' -f4)
+          echo "version=${RLV_VERSION}" >> $GITHUB_OUTPUT
+          CLEAN_VERSION="${RLV_VERSION#v}"
+          RLV_DEB="rlv_${CLEAN_VERSION}_amd64.deb"
+          echo "Downloading rlv ${RLV_VERSION}..."
+          curl -sL "https://github.com/adamfitz/rlv/releases/download/${RLV_VERSION}/${RLV_DEB}" -O
+          mkdir -p /tmp/rlv-extract
+          dpkg-deb --extract "${RLV_DEB}" /tmp/rlv-extract
+          cp /tmp/rlv-extract/usr/bin/rlv rlv
+          chmod 755 rlv
+          rm -rf "${RLV_DEB}" /tmp/rlv-extract
+
       - name: Clean rootfs
         run: rm -rf rootfs
 
@@ -77,13 +92,16 @@ jobs:
             -ldflags "\
               -X kansho/config.Version=${{ steps.version.outputs.version }} \
               -X kansho/config.GitCommit=${COMMIT} \
-              -X kansho/config.BuildTime=${BUILD_TIME}" \
+              -X kansho/config.BuildTime=${BUILD_TIME} \
+              -X kansho/config.RLVVersion=${{ steps.rlv.outputs.version }}" \
             -o rootfs/usr/bin/${APP_NAME} \
             .
 
-      - name: Fix permissions
+      - name: Install rlv and fix permissions
         run: |
+          cp rlv rootfs/usr/bin/rlv
           chmod 755 rootfs/usr/bin/${APP_NAME}
+          chmod 755 rootfs/usr/bin/rlv
           chmod 644 rootfs/usr/share/applications/${APP_NAME}.desktop
           chmod 644 rootfs/usr/share/icons/hicolor/256x256/apps/${APP_NAME}.png
           chmod 755 rootfs/DEBIAN

@@ -4,9 +4,10 @@ import "time"
 
 // These are injected at build time via -ldflags
 var (
-	Version   string
-	GitCommit string
-	BuildTime string
+	Version    string
+	GitCommit  string
+	BuildTime  string
+	RLVVersion string
 )
 
 func init() {
@@ -19,5 +20,8 @@ func init() {
 	}
 	if BuildTime == "" {
 		BuildTime = time.Now().Format("2006-01-02 15:04:05")
+	}
+	if RLVVersion == "" {
+		RLVVersion = "unknown"
 	}
 }
