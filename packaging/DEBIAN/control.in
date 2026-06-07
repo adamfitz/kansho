@@ -5,5 +5,8 @@ Priority: optional
 Architecture: amd64
 Maintainer: Adam adam@networknoob.net
 Depends: libc6
+Provides: rlv
+Conflicts: rlv
+Replaces: rlv
 Description: Manga and Manhwa offline downloader GUI
  Kansho manga downloader
