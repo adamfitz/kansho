@@ -91,6 +91,10 @@ func (m *Manager) Download(ctx context.Context) error {
 	for idx, cbzName := range sortedChapters {
 		select {
 		case <-ctx.Done():
+			log.Printf("[Downloader:%s] Cancelled - stopping download", manga.Title)
+			if callback != nil {
+				callback("Cancelling...", 0, 0, idx, totalChaptersFound)
+			}
 			return ctx.Err()
 		default:
 		}
@@ -144,8 +148,16 @@ func (m *Manager) downloadChapterWithRetry(ctx context.Context, chapterURL, cbzN
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		if attempt > 0 {
 			backoff := time.Duration(math.Pow(2, float64(attempt))) * time.Second
+
+			if cb := m.config.ProgressCallback; cb != nil {
+				cb(fmt.Sprintf("Retrying chapter %d in %v (attempt %d/%d)...", actualChapterNum, backoff, attempt+1, maxRetries), progress, actualChapterNum, currentDownload, totalChaptersFound)
+			}
+
 			log.Printf("[Downloader:%s] Retry %d/%d after %v", cbzName, attempt+1, maxRetries, backoff)
-			time.Sleep(backoff)
+			if !parser.SleepCtx(ctx, backoff) {
+				log.Printf("[Downloader:%s] Retry cancelled during backoff", cbzName)
+				return ctx.Err()
+			}
 		}
 
 		err := m.downloadChapter(ctx, chapterURL, cbzName, actualChapterNum, currentDownload, totalChaptersFound, newChaptersToDownload, progress)
@@ -197,11 +209,15 @@ func (m *Manager) downloadChapter(ctx context.Context, chapterURL, cbzName strin
 		log.Printf("[Downloader:%s] Downloading image %d/%d", cbzName, imgIdx+1, len(imageURLs))
 		select {
 		case <-ctx.Done():
+			log.Printf("[Downloader:%s] Cancelled during image download", cbzName)
 			return ctx.Err()
 		default:
 		}
 
-		rateLimiter.Wait()
+		if !rateLimiter.WaitCtx(ctx) {
+			log.Printf("[Downloader:%s] Cancelled during rate limit wait", cbzName)
+			return ctx.Err()
+		}
 
 		if callback != nil {
 			imgProgress := progress + (float64(imgIdx) / float64(len(imageURLs)) / float64(newChaptersToDownload))
@@ -216,7 +232,7 @@ func (m *Manager) downloadChapter(ctx context.Context, chapterURL, cbzName strin
 
 		// Download image with retry
 		filename := fmt.Sprintf("%03d", imgIdx+1)
-		err := m.downloadImageWithRetry(imgURL, chapterDir, filename)
+		err := m.downloadImageWithRetry(ctx, imgURL, chapterDir, filename)
 		if err != nil {
 			log.Printf("[Downloader:%s] Failed to download image %d: %v", cbzName, imgIdx+1, err)
 		} else {
@@ -231,6 +247,13 @@ func (m *Manager) downloadChapter(ctx context.Context, chapterURL, cbzName strin
 	}
 
 	// Create CBZ
+	select {
+	case <-ctx.Done():
+		log.Printf("[Downloader:%s] Cancelled before CBZ creation", cbzName)
+		return ctx.Err()
+	default:
+	}
+
 	if callback != nil {
 		callback(
 			fmt.Sprintf("Chapter %d/%d: Creating CBZ file...", actualChapterNum, totalChaptersFound),
@@ -251,25 +274,28 @@ func (m *Manager) downloadChapter(ctx context.Context, chapterURL, cbzName strin
 }
 
 // downloadImageWithRetry downloads a single image with retry logic
-func (m *Manager) downloadImageWithRetry(imageURL, targetDir, filename string) error {
+func (m *Manager) downloadImageWithRetry(ctx context.Context, imageURL, targetDir, filename string) error {
 	maxRetries := 3
 	var lastErr error
 
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		if attempt > 0 {
 			backoff := time.Duration(math.Pow(2, float64(attempt))) * time.Second
-			time.Sleep(backoff)
+			if !parser.SleepCtx(ctx, backoff) {
+				log.Printf("[Downloader] Image retry cancelled for: %s", filename)
+				return ctx.Err()
+			}
 		}
 
 		// Use parser's download function with CF support if needed
 		if m.config.Site.NeedsCFBypass() {
-			err := parser.DownloadConvertToJPGRenameCf(filename, imageURL, targetDir, m.domain)
+			err := parser.DownloadConvertToJPGRenameCf(ctx, filename, imageURL, targetDir, m.domain)
 			if err == nil {
 				return nil
 			}
 			lastErr = err
 		} else {
-			err := parser.DownloadConvertToJPGRename(filename, imageURL, targetDir)
+			err := parser.DownloadConvertToJPGRename(ctx, filename, imageURL, targetDir)
 			if err == nil {
 				return nil
 			}

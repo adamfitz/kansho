@@ -1,0 +1,6 @@
+{
+  "version": "1.0",
+  "specsPath": "openspec/specs",
+  "changesPath": "openspec/changes",
+  "name": "kansho"
+}

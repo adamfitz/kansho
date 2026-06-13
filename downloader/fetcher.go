@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"kansho/cf"
+	"kansho/parser"
 
 	"github.com/PuerkitoBio/goquery"
 )
@@ -46,7 +47,11 @@ func FetchChapterURLs(ctx context.Context, mangaURL string, site SitePlugin) (ma
 	for attempt := 1; attempt < maxRetries; attempt++ {
 		backoff := time.Duration(math.Pow(2, float64(attempt))) * time.Second
 		log.Printf("[Downloader] Retry %d/%d for chapter list after %v", attempt+1, maxRetries, backoff)
-		time.Sleep(backoff)
+
+		if !parser.SleepCtx(ctx, backoff) {
+			log.Printf("[Downloader] Chapter fetch cancelled during retry backoff")
+			return nil, ctx.Err()
+		}
 
 		chapterMap, err := extractChapters(ctx, mangaURL, site)
 		if err == nil {
@@ -85,7 +90,11 @@ func FetchChapterImages(ctx context.Context, chapterURL string, site SitePlugin)
 	for attempt := 1; attempt < maxRetries; attempt++ {
 		backoff := time.Duration(math.Pow(2, float64(attempt))) * time.Second
 		log.Printf("[Downloader] Retry %d/%d for chapter images after %v", attempt+1, maxRetries, backoff)
-		time.Sleep(backoff)
+
+		if !parser.SleepCtx(ctx, backoff) {
+			log.Printf("[Downloader] Chapter images fetch cancelled during retry backoff")
+			return nil, ctx.Err()
+		}
 
 		imageURLs, err := extractImages(ctx, chapterURL, site)
 		if err == nil {
@@ -143,7 +152,7 @@ func extractImages(ctx context.Context, chapterURL string, site SitePlugin) ([]s
 
 // extractChaptersWithJS uses JavaScript evaluation
 func extractChaptersWithJS(ctx context.Context, mangaURL string, site SitePlugin, method *ChapterExtractionMethod) (map[string]string, error) {
-	jsCtx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	jsCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
 
 	var rawData []map[string]string
@@ -170,7 +179,7 @@ func extractChaptersWithJS(ctx context.Context, mangaURL string, site SitePlugin
 
 // extractChaptersWithSelector uses HTML parsing
 func extractChaptersWithSelector(ctx context.Context, mangaURL string, site SitePlugin, method *ChapterExtractionMethod) (map[string]string, error) {
-	fetchCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	fetchCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
 	html, err := FetchHTML(fetchCtx, mangaURL, DomainFromURL(mangaURL, site.GetDomain()), site.NeedsCFBypass(), method.WaitSelector)
@@ -220,7 +229,7 @@ func extractChaptersCustom(ctx context.Context, mangaURL string, site SitePlugin
 		return nil, fmt.Errorf("failed to create request executor: %w", err)
 	}
 
-	fetchCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	fetchCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
 	html, err := exec.FetchHTML(fetchCtx, mangaURL, method.WaitSelector)
@@ -233,7 +242,7 @@ func extractChaptersCustom(ctx context.Context, mangaURL string, site SitePlugin
 
 // extractImagesWithJS uses JavaScript evaluation
 func extractImagesWithJS(ctx context.Context, chapterURL string, site SitePlugin, method *ImageExtractionMethod) ([]string, error) {
-	jsCtx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	jsCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
 
 	var imageURLs []string
@@ -253,7 +262,7 @@ func extractImagesWithJS(ctx context.Context, chapterURL string, site SitePlugin
 
 // extractImagesWithSelector uses HTML parsing
 func extractImagesWithSelector(ctx context.Context, chapterURL string, site SitePlugin, method *ImageExtractionMethod) ([]string, error) {
-	fetchCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	fetchCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
 	html, err := FetchHTML(fetchCtx, chapterURL, DomainFromURL(chapterURL, site.GetDomain()), site.NeedsCFBypass(), method.WaitSelector)
@@ -318,7 +327,7 @@ func extractImagesCustom(ctx context.Context, chapterURL string, site SitePlugin
 			return nil, fmt.Errorf("failed to create request executor: %w", err)
 		}
 
-		fetchCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		fetchCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 
 		html, err = exec.FetchHTML(fetchCtx, chapterURL, "")
