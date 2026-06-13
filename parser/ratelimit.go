@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"time"
 )
 
@@ -42,6 +43,17 @@ func (rl *RateLimiter) Wait() {
 	<-rl.ticker.C
 }
 
+// WaitCtx blocks until the next tick occurs or the context is cancelled.
+// Returns true if the wait completed normally, false if the context was cancelled.
+func (rl *RateLimiter) WaitCtx(ctx context.Context) bool {
+	select {
+	case <-rl.ticker.C:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
 // Stop stops the rate limiter and releases resources.
 // Should be called when the rate limiter is no longer needed.
 // Typically used with defer: defer limiter.Stop()
@@ -52,4 +64,15 @@ func (rl *RateLimiter) Stop() {
 // GetInterval returns the configured interval for this rate limiter.
 func (rl *RateLimiter) GetInterval() time.Duration {
 	return rl.interval
+}
+
+// SleepCtx sleeps for the given duration or until the context is cancelled.
+// Returns true if the sleep completed normally, false if the context was cancelled.
+func SleepCtx(ctx context.Context, d time.Duration) bool {
+	select {
+	case <-time.After(d):
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }

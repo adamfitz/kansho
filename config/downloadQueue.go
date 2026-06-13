@@ -163,50 +163,62 @@ func (q *DownloadQueue) GetTask(id string) *DownloadTask {
 // CancelTask cancels a specific task (either downloading or queued)
 func (q *DownloadQueue) CancelTask(id string) error {
 	q.mu.Lock()
-	defer q.mu.Unlock()
 
 	for i, task := range q.tasks {
 		if task.ID == id {
 			if task.Status == "downloading" && task.CancelFunc != nil {
 				log.Printf("[Queue] Cancelling active download: %s", task.Manga.Title)
-				task.CancelFunc() // Stop the download
+				// Immediately show cancelling status to the user
 				task.Status = "cancelled"
-				task.StatusMessage = "Cancelled by user"
+				task.StatusMessage = "Cancelling..."
+
+				// Notify UI immediately before the slow context cancellation unwinds
+				if q.onTaskUpdated != nil {
+					q.onTaskUpdated(task)
+				}
+				q.mu.Unlock()
+
+				// Trigger cancellation - the download will notice and return quickly now
+				// thanks to context-aware retry sleeps and rate limiter waits
+				task.CancelFunc()
+
+				// The executeTask goroutine will set the final status when it returns
+				return nil
 			} else if task.Status == "queued" {
 				log.Printf("[Queue] Removing queued task: %s", task.Manga.Title)
 				// Remove from queue
 				q.tasks = append(q.tasks[:i], q.tasks[i+1:]...)
+
+				q.mu.Unlock()
 
 				if q.onTaskRemoved != nil {
 					q.onTaskRemoved(id)
 				}
 				return nil
 			} else {
+				q.mu.Unlock()
 				return fmt.Errorf("task is not active or queued (status: %s)", task.Status)
 			}
-
-			if q.onTaskUpdated != nil {
-				q.onTaskUpdated(task)
-			}
-			return nil
 		}
 	}
 
+	q.mu.Unlock()
 	return fmt.Errorf("task not found: %s", id)
 }
 
 // CancelAll cancels all tasks
 func (q *DownloadQueue) CancelAll() {
 	q.mu.Lock()
-	defer q.mu.Unlock()
 
 	log.Printf("[Queue] Cancelling all tasks (%d total)", len(q.tasks))
 
+	// Step 1: Immediately mark all tasks as cancelled and notify UI
+	var cancelFuncs []context.CancelFunc
 	for _, task := range q.tasks {
 		if task.Status == "downloading" && task.CancelFunc != nil {
-			task.CancelFunc()
 			task.Status = "cancelled"
-			task.StatusMessage = "Cancelled by user"
+			task.StatusMessage = "Cancelling..."
+			cancelFuncs = append(cancelFuncs, task.CancelFunc)
 		} else if task.Status == "queued" {
 			task.Status = "cancelled"
 			task.StatusMessage = "Cancelled by user"
@@ -215,6 +227,13 @@ func (q *DownloadQueue) CancelAll() {
 		if q.onTaskUpdated != nil {
 			q.onTaskUpdated(task)
 		}
+	}
+
+	q.mu.Unlock()
+
+	// Step 2: Trigger context cancellations (no lock held)
+	for _, cancel := range cancelFuncs {
+		cancel()
 	}
 }
 
@@ -334,7 +353,7 @@ func (q *DownloadQueue) executeTask(task *DownloadTask) {
 
 	q.mu.Lock()
 	if err != nil {
-		if err == context.Canceled {
+		if errors.Is(err, context.Canceled) {
 			task.Status = "cancelled"
 			task.StatusMessage = "Cancelled by user"
 		} else {

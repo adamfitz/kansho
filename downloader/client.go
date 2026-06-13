@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"kansho/cf"
+	"kansho/parser"
 
 	"github.com/gocolly/colly"
 )
@@ -118,7 +119,10 @@ func (c *HTTPClient) FetchHTML(ctx context.Context, targetURL string) (string, e
 		if attempt < c.maxRetries-1 {
 			backoff := time.Duration(math.Pow(2, float64(attempt))) * time.Second
 			log.Printf("[HTTPClient] Waiting %v before retry...", backoff)
-			time.Sleep(backoff)
+			if !parser.SleepCtx(ctx, backoff) {
+				log.Printf("[HTTPClient] Retry cancelled during backoff")
+				return "", ctx.Err()
+			}
 		}
 	}
 
