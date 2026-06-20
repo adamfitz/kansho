@@ -71,4 +71,4 @@ The system SHALL maintain a rotating log file.
 #### Scenario: Close loggers on exit
 - GIVEN the application is quitting
 - WHEN `CloseLoggers` is called
-- THEN the Cloudflare debug logger SHALL be closed
+- THEN the CF debug logger SHALL be closed

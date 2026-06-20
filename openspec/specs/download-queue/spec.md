@@ -29,14 +29,14 @@ The queue SHALL manage download tasks through defined states.
 - AND its StatusMessage SHALL provide a human-readable reason (e.g., "Cancelling..." while the cancel unwinds)
 - WHEN the download encounters an error
 - THEN its status SHALL be "failed"
-- WHEN a Cloudflare challenge is detected
+- WHEN a CF challenge is detected
 - THEN its status SHALL be "waiting_cf"
 
 #### Scenario: Add task to queue
 - GIVEN the queue is empty
 - WHEN a manga bookmark is added as a task
-- THEN a task with a unique ID SHALL be created
-- AND a deep copy of the manga data SHALL be stored to prevent external mutation
+- THEN a task with a unique ID SHALL be created using `fmt.Sprintf("%s-%d", manga.Shortname, len(q.tasks))`
+- AND a value copy of the manga data SHALL be stored (not a pointer) to prevent external mutation
 - AND a callback SHALL notify UI of the new task
 - AND queue processing SHALL start automatically in a goroutine
 
@@ -80,21 +80,47 @@ The queue SHALL support cancelling individual tasks or all tasks with immediate 
 - AND the UI callback SHALL be notified for all tasks BEFORE any cancel functions are invoked
 - THEN all cancel functions SHALL be called (after releasing the queue lock to prevent UI freezing)
 
-### Requirement: Cloudflare Challenge Handling
-The queue SHALL detect Cloudflare challenges and pause affected tasks for manual resolution.
+### Requirement: CF Challenge Handling
+The queue SHALL detect CF challenges and pause affected tasks for manual resolution.
 
-#### Scenario: Cloudflare challenge detected
-- GIVEN a task encounters a Cloudflare challenge during download
+#### Scenario: CF challenge detected
+- GIVEN a task encounters a CF challenge during download
 - WHEN the `cf.CfChallengeError` is returned
 - THEN the task status SHALL be set to "waiting_cf"
 - AND the browser SHALL be opened for manual challenge solving
 - AND the task SHALL remain in the queue for later retry
 
-#### Scenario: Retry Cloudflare task
+#### Scenario: Retry CF task
 - GIVEN a task is in "waiting_cf" or "failed" status
 - WHEN `RetryTask` is called
 - THEN the task status SHALL be reset to "queued"
 - AND queue processing SHALL restart
+
+### Requirement: Retry Failed Tasks
+The queue SHALL support retrying failed tasks.
+
+#### Scenario: Retry failed task
+- GIVEN a task is in "failed" status
+- WHEN `RetryTask` is called with the task ID
+- THEN the task status SHALL be reset to "queued"
+- AND the StatusMessage SHALL be set to "Retrying..."
+- AND the error SHALL be cleared
+- AND queue processing SHALL restart in a goroutine
+
+#### Scenario: Cannot retry active task
+- GIVEN a task is in "downloading" status
+- WHEN `RetryTask` is called
+- THEN an error SHALL be returned indicating the task cannot be retried in its current state
+
+### Requirement: Clean Up Completed Tasks
+The queue SHALL support removing all completed and cancelled tasks.
+
+#### Scenario: Remove non-active tasks
+- GIVEN the queue has completed, cancelled, queued, downloading, and waiting_cf tasks
+- WHEN `RemoveCompletedTasks` is called
+- THEN all tasks with status "completed" or "cancelled" or "failed" SHALL be removed
+- AND tasks with status "queued", "downloading", or "waiting_cf" SHALL be kept
+- AND removal callbacks SHALL be triggered for each removed task
 
 ### Requirement: UI Callbacks
 The queue SHALL notify the UI of state changes through registered callbacks.

@@ -79,6 +79,27 @@ The system SHALL normalize chapter data into standardized CBZ filenames.
 - WHEN `NormalizeChapterFilename` is called for a site that pads to 3 digits
 - THEN the filename SHALL be "ch001.5.cbz"
 
+### Requirement: API Client User Agent
+API-based extraction (Type="api") SHALL use a non-spoofed, identifiable User-Agent string rather than a generic browser User-Agent.
+
+#### Scenario: API client uses application User-Agent
+- GIVEN an `APIClient` is created for a domain
+- WHEN the client is constructed
+- THEN the Colly collector's User-Agent SHALL be set to `kansho/1.0` (or another identifiable application string)
+- AND it SHALL NOT use a generic browser User-Agent like `Mozilla/5.0 ...`
+- AND this SHALL satisfy API provider requirements for identifying the client application
+
+### Requirement: Debug Support
+The system SHALL support optional debugging per site plugin via the `DebugSite` interface.
+
+#### Scenario: Site implements debug interface
+- GIVEN a site plugin that implements `DebugSite`
+- WHEN `Debugger()` is called
+- THEN it SHALL return a `*Debugger` struct with `SaveHTML` and `HTMLPath` fields
+- AND the debugger MAY be nil if debugging is not enabled
+- WHEN `SaveHTML` is true and `HTMLPath` is set
+- THEN the downloader SHALL save fetched HTML to the specified path
+
 ### Requirement: Site Configuration
 The system SHALL embed a site configuration file that specifies which fields are required when adding manga from each source.
 

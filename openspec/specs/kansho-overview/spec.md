@@ -1,7 +1,7 @@
 # kansho-overview Specification
 
 ## Purpose
-Kansho is a cross-platform desktop manga download manager that allows users to track and download manga chapters from various online sources. It provides a graphical interface (Fyne) for managing manga bookmarks, browsing available chapters, and downloading them as CBZ archives. The application supports Cloudflare-protected sites via a manual cookie-based bypass system.
+Kansho is a cross-platform desktop manga download manager that allows users to track and download manga chapters from various online sources. It provides a graphical interface (Fyne) for managing manga bookmarks, browsing available chapters, and downloading them as CBZ archives.
 
 ## Requirements
 

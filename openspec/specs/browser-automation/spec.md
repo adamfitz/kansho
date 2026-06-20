@@ -28,7 +28,7 @@ The system SHALL support navigating to pages and executing JavaScript for conten
 - WHEN `NavigateAndEvaluate` is called
 - THEN the browser SHALL navigate to the URL
 - AND wait for the page body to load
-- AND check for Cloudflare challenge pages after navigation
+- AND check for CF challenge pages after navigation
 - AND if a CF challenge is detected, open the browser for manual solving and return a CfChallengeError
 - AND wait for the specified CSS selector (if provided)
 - AND evaluate the JavaScript code, storing results in the provided output variable
@@ -52,14 +52,21 @@ The system SHALL inject CF bypass cookies into the browser before navigation.
 - AND the number of injected cookies SHALL be logged
 
 ### Requirement: Batched HTML Fetching
-The system SHALL support batched browser operations to avoid context cancellation issues on JS-rendered pages.
+The system SHALL support fetching rendered HTML from JavaScript-heavy pages using a single batched chromedp operation.
 
-#### Scenario: Fetch HTML with batched chromedp commands
-- GIVEN a URL for a JavaScript-rendered page
+#### Scenario: FetchHTMLBatched navigation
+- GIVEN a URL for a JavaScript-rendered page (e.g., Next.js/React)
 - WHEN `FetchHTMLBatched` is called
-- THEN the browser SHALL navigate, wait for body, and extract outerHTML in a single chromedp.Run call
-- AND a single generous timeout (60s) SHALL cover the entire operation
-- AND if the site has debugging enabled, the rendered HTML SHALL be saved to disk
+- THEN a BrowserSession SHALL be created for the domain
+- AND CF cookies SHALL be injected if available
+- AND navigation, WaitReady("body"), and OuterHTML("html") SHALL be batched into a single chromedp.Run call
+- AND a single 60-second timeout SHALL cover the entire operation
+- AND the rendered HTML SHALL be returned
+
+#### Scenario: Debug HTML saving in batched fetch
+- GIVEN a `Debugger` with `SaveHTML = true` and a valid `HTMLPath`
+- WHEN `FetchHTMLBatched` completes
+- THEN the rendered HTML SHALL be written to the configured debug path
 
 ### Requirement: HTTP with Browser Fallback
 The system SHALL attempt HTTP fetching first, falling back to browser automation on failure.

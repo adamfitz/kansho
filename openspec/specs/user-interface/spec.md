@@ -33,6 +33,14 @@ The system SHALL use a centralized state object to coordinate UI components.
 - THEN the selected manga ID SHALL be updated
 - AND all registered OnMangaSelected callbacks SHALL be invoked
 
+#### Scenario: Delete manga
+- GIVEN a manga is selected in the list
+- WHEN the user clicks "Delete Manga"
+- THEN the manga SHALL be removed from the in-memory bookmarks
+- AND the updated bookmarks SHALL be persisted to disk immediately
+- AND if the deleted manga was selected, the selection SHALL be cleared
+- AND all registered OnMangaDeleted callbacks SHALL be invoked
+
 ### Requirement: Manga List View
 The system SHALL display all bookmarked manga in a scrollable list.
 

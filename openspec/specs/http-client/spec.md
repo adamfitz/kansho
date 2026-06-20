@@ -1,7 +1,7 @@
 # http-client Specification
 
 ## Purpose
-Provide a unified HTTP client with automatic retry, Cloudflare bypass, response decompression, and debugging support for all network requests.
+Provide a unified HTTP client with automatic retry, cookie handling, response decompression, and debugging support for all network requests.
 
 ## Requirements
 
@@ -13,24 +13,23 @@ The system SHALL provide a single HTTP client that handles CF bypass, retries, a
 - WHEN `NewHTTPClient` is called
 - THEN a client SHALL be created with a 30-second timeout and 5 max retries
 - AND if CF bypass is needed, bypass data SHALL be loaded from the stored file (if available)
-- AND cookie expiry SHALL NOT be validated upfront — validity SHALL be determined empirically by request outcome
 
 #### Scenario: Fetch HTML with retries
 - GIVEN a target URL
 - WHEN `FetchHTML` is called
 - THEN the client SHALL make a GET request with CF bypass headers if data is available
 - AND SHALL decompress the response if Content-Encoding indicates compression
-- AND SHALL detect Cloudflare challenges in the response
+- AND SHALL detect CF challenges in the response
 - AND SHALL retry on timeout errors up to 5 times with increasing timeouts (10s, 15s, 20s, 25s, 30s)
 - AND SHALL not retry on non-timeout errors (return immediately)
 
 ### Requirement: CF Challenge Detection on Responses
-The system SHALL inspect HTTP responses for Cloudflare challenge indicators.
+The system SHALL inspect HTTP responses for CF challenge indicators.
 
-#### Scenario: Detect CF from real response
+#### Scenario: Detect CF from response
 - GIVEN an HTTP response is received
 - WHEN `Detectcf` is called with the response
-- THEN it SHALL check for cf-browser-html, jschl_vc, or other CF indicators in the body
+- THEN it SHALL check for CF indicators in the body
 - AND SHALL return the detection result and challenge information
 
 #### Scenario: Handle CF challenge

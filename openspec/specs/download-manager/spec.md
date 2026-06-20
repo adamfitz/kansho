@@ -58,7 +58,7 @@ The system SHALL automatically retry failed downloads with exponential backoff.
 
 #### Scenario: Retry failed chapter download
 - GIVEN a chapter download fails
-- WHEN the error is not a Cloudflare challenge
+- WHEN the error is not a CF challenge
 - THEN the system SHALL retry up to 3 times
 - AND SHALL wait 2, 4, and 8 seconds between retries (exponential backoff)
 - AND SHALL use `SleepCtx(ctx, backoff)` so the wait is cancelled immediately if the context is cancelled
