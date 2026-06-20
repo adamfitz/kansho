@@ -174,8 +174,22 @@ func (m *MangadexSite) getAllChaptersAPI(client *downloader.APIClient) ([]MangaD
 
 	for {
 		// Build API URL with pagination and filters
-		apiURL := fmt.Sprintf("%s/manga/%s/feed?limit=%d&offset=%d&translatedLanguage[]=en&order[chapter]=asc&contentRating[]=safe&contentRating[]=suggestive&contentRating[]=erotica",
-			mangadexAPIBase, m.mangaID, limit, offset)
+		// Use url.Values so brackets in param names (e.g. contentRating[], order[chapter]) are
+		// percent-encoded — Go 1.24+ rejects raw brackets in URL query strings.
+		u, err := url.Parse(fmt.Sprintf("%s/manga/%s/feed", mangadexAPIBase, m.mangaID))
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse base URL: %w", err)
+		}
+		q := u.Query()
+		q.Set("limit", fmt.Sprintf("%d", limit))
+		q.Set("offset", fmt.Sprintf("%d", offset))
+		q.Set("translatedLanguage[]", "en")
+		q.Set("order[chapter]", "asc")
+		q.Set("contentRating[]", "safe")
+		q.Add("contentRating[]", "suggestive")
+		q.Add("contentRating[]", "erotica")
+		u.RawQuery = q.Encode()
+		apiURL := u.String()
 
 		log.Printf("<mangadex> Fetching chapters: offset=%d, limit=%d", offset, limit)
 
