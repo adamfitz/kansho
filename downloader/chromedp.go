@@ -171,6 +171,47 @@ func dumpBrowserCookies(ctx context.Context, domain string) {
 	}
 }
 
+// checkPageForCF checks the current browser page for CF challenges.
+// If a CF challenge is detected, it opens the URL in the user's real browser
+// and returns a CfChallengeError. Returns nil if no CF is detected.
+func (bs *BrowserSession) checkPageForCF(url string, injected int) error {
+	html, err := bs.GetHTML()
+	if err != nil {
+		return nil
+	}
+
+	fakeResp := &http.Response{
+		StatusCode: 200,
+		Body:       io.NopCloser(bytes.NewReader([]byte(html))),
+		Header:     make(http.Header),
+	}
+
+	isCF, cfInfo, cfErr := cf.Detectcf(fakeResp)
+	if cfErr != nil {
+		cf.LogCFError("DetectCF", bs.domain, cfErr)
+	}
+
+	if !isCF {
+		return nil
+	}
+
+	cf.LogCFBrowserAction("CFChallengeDetected", url, injected, false, nil)
+
+	if bs.bypassData != nil {
+		cf.MarkCookieAsFailed(bs.domain)
+		cf.DeleteDomain(bs.domain)
+	}
+
+	challengeURL := cf.GetChallengeURL(cfInfo, url)
+	cf.OpenInBrowser(challengeURL)
+
+	return &cf.CfChallengeError{
+		URL:        challengeURL,
+		StatusCode: cfInfo.StatusCode,
+		Indicators: cfInfo.Indicators,
+	}
+}
+
 // NavigateAndEvaluate performs navigation, waiting, and JS evaluation
 func (bs *BrowserSession) NavigateAndEvaluate(url, waitSelector, javascript string, result interface{}) error {
 	timeout := 60 * time.Second
@@ -187,41 +228,16 @@ func (bs *BrowserSession) NavigateAndEvaluate(url, waitSelector, javascript stri
 	err := chromedp.Run(ctx, tasks...)
 	if err != nil {
 		cf.LogCFError("NavigateAndEvaluate-Navigation", bs.domain, err)
+		if cfErr := bs.checkPageForCF(url, injected); cfErr != nil {
+			return cfErr
+		}
 		return fmt.Errorf("navigation failed: %w", err)
 	}
 
 	dumpBrowserCookies(ctx, bs.domain)
 
-	html, htmlErr := bs.GetHTML()
-	if htmlErr == nil {
-		fakeResp := &http.Response{
-			StatusCode: 200,
-			Body:       io.NopCloser(bytes.NewReader([]byte(html))),
-			Header:     make(http.Header),
-		}
-
-		isCF, cfInfo, cfErr := cf.Detectcf(fakeResp)
-		if cfErr != nil {
-			cf.LogCFError("DetectCF", bs.domain, cfErr)
-		}
-
-		if isCF {
-			cf.LogCFBrowserAction("CFChallengeDetected", url, injected, false, nil)
-
-			if bs.bypassData != nil {
-				cf.MarkCookieAsFailed(bs.domain)
-				cf.DeleteDomain(bs.domain)
-			}
-
-			challengeURL := cf.GetChallengeURL(cfInfo, url)
-			cf.OpenInBrowser(challengeURL)
-
-			return &cf.CfChallengeError{
-				URL:        challengeURL,
-				StatusCode: cfInfo.StatusCode,
-				Indicators: cfInfo.Indicators,
-			}
-		}
+	if cfErr := bs.checkPageForCF(url, injected); cfErr != nil {
+		return cfErr
 	}
 
 	var evalTasks []chromedp.Action
@@ -233,6 +249,9 @@ func (bs *BrowserSession) NavigateAndEvaluate(url, waitSelector, javascript stri
 	err = chromedp.Run(ctx, evalTasks...)
 	if err != nil {
 		cf.LogCFError("NavigateAndEvaluate-Eval", bs.domain, err)
+		if cfErr := bs.checkPageForCF(url, injected); cfErr != nil {
+			return cfErr
+		}
 		return fmt.Errorf("evaluation failed: %w", err)
 	}
 
@@ -260,44 +279,16 @@ func (bs *BrowserSession) Navigate(url string, waitSelector string) error {
 	err := chromedp.Run(ctx, tasks...)
 	if err != nil {
 		cf.LogCFError("Navigate-Navigation", bs.domain, err)
+		if cfErr := bs.checkPageForCF(url, injected); cfErr != nil {
+			return cfErr
+		}
 		return fmt.Errorf("navigation failed: %w", err)
 	}
 
 	dumpBrowserCookies(ctx, bs.domain)
 
-	html, htmlErr := bs.GetHTML()
-	if htmlErr != nil {
-		cf.LogCFError("Navigate-GetHTML", bs.domain, htmlErr)
-		return nil
-	}
-
-	fakeResp := &http.Response{
-		StatusCode: 200,
-		Body:       io.NopCloser(bytes.NewReader([]byte(html))),
-		Header:     make(http.Header),
-	}
-
-	isCF, cfInfo, cfErr := cf.Detectcf(fakeResp)
-	if cfErr != nil {
-		cf.LogCFError("Navigate-DetectCF", bs.domain, cfErr)
-	}
-
-	if isCF {
-		cf.LogCFBrowserAction("CFChallengeDetected", url, injected, false, nil)
-
-		if bs.bypassData != nil {
-			cf.MarkCookieAsFailed(bs.domain)
-			cf.DeleteDomain(bs.domain)
-		}
-
-		challengeURL := cf.GetChallengeURL(cfInfo, url)
-		cf.OpenInBrowser(challengeURL)
-
-		return &cf.CfChallengeError{
-			URL:        challengeURL,
-			StatusCode: cfInfo.StatusCode,
-			Indicators: cfInfo.Indicators,
-		}
+	if cfErr := bs.checkPageForCF(url, injected); cfErr != nil {
+		return cfErr
 	}
 
 	return nil
@@ -399,10 +390,19 @@ func FetchHTMLBatched(ctx context.Context, url, domain string, needsCF bool, dbg
 	)
 
 	if err := chromedp.Run(runCtx, tasks...); err != nil {
+		// Check if the page is a CF challenge — if so, return CfChallengeError
+		// instead of a generic failure so the user gets prompted to solve it.
+		if cfErr := session.checkPageForCF(url, 0); cfErr != nil {
+			return "", cfErr
+		}
 		return "", fmt.Errorf("browser fetch failed: %w", err)
 	}
 
 	if html == "" {
+		// Empty HTML after a successful Run might mean a CF challenge page
+		if cfErr := session.checkPageForCF(url, 0); cfErr != nil {
+			return "", cfErr
+		}
 		return "", fmt.Errorf("browser returned empty HTML for: %s", url)
 	}
 

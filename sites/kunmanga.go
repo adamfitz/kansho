@@ -24,7 +24,7 @@ func (k *KunmangaSite) GetSiteName() string {
 
 // GetDomain returns the site domain
 func (k *KunmangaSite) GetDomain() string {
-	return "kunmanga.com"
+	return "kunmanga.online"
 }
 
 // NeedsCFBypass returns whether this site needs Cloudflare bypass
