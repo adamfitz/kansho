@@ -22,7 +22,7 @@ type APIClient struct {
 // NewAPIClient creates a new API client for a specific domain
 func NewAPIClient(domain string, needsCF bool) (*APIClient, error) {
 	collector := colly.NewCollector(
-		// useragent must no be spoofed (using a browser agent)
+		// MangaDex API requires a non-spoofed User-Agent — see openspec/specs/mangadex/spec.md
 		// https://api.mangadex.org/docs/2-limitations/
 		colly.UserAgent("kansho/1.0"),
 		colly.AllowURLRevisit(),

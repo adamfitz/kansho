@@ -2,6 +2,7 @@ package parser
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"image"
@@ -145,9 +146,36 @@ func DownloadAndConvertToJPG(imageURL, targetDir string) error {
 	return downloadAndConvertToJPGWithRetry(imageURL, targetDir, 3)
 }
 
-// downloadConvertToJPGRename is the internal function without retry
-func downloadConvertToJPGRename(filename, imageURL, targetDir string) error {
-	resp, err := http.Get(imageURL)
+// DownloadConvertToJPGRename downloads an image, converts to JPEG, and saves it.
+// Uses the provided context for cancellation support.
+func DownloadConvertToJPGRename(ctx context.Context, filename, imageURL, targetDir string) error {
+	var lastErr error
+	maxRetries := 3
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			log.Printf("Retry attempt %d/%d for: %s", attempt, maxRetries, imageURL)
+		}
+
+		err := downloadConvertToJPGRenameCtx(ctx, filename, imageURL, targetDir)
+		if err == nil {
+			return nil
+		}
+
+		lastErr = err
+		log.Printf("Download/conversion failed (attempt %d/%d): %v", attempt+1, maxRetries+1, err)
+	}
+
+	return lastErr
+}
+
+// downloadConvertToJPGRenameCtx is the context-aware internal function without retry
+func downloadConvertToJPGRenameCtx(ctx context.Context, filename, imageURL, targetDir string) error {
+	req, err := http.NewRequestWithContext(ctx, "GET", imageURL, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -176,28 +204,6 @@ func downloadConvertToJPGRename(filename, imageURL, targetDir string) error {
 	return ConvertImageToJPEG(imgBytes, outputFile)
 }
 
-// DownloadConvertToJPGRename is the public wrapper with retry logic
-func DownloadConvertToJPGRename(filename, imageURL, targetDir string) error {
-	var lastErr error
-	maxRetries := 3
-
-	for attempt := 0; attempt <= maxRetries; attempt++ {
-		if attempt > 0 {
-			log.Printf("Retry attempt %d/%d for: %s", attempt, maxRetries, imageURL)
-		}
-
-		err := downloadConvertToJPGRename(filename, imageURL, targetDir)
-		if err == nil {
-			return nil
-		}
-
-		lastErr = err
-		log.Printf("Download/conversion failed (attempt %d/%d): %v", attempt+1, maxRetries+1, err)
-	}
-
-	return lastErr
-}
-
 // saveRawBytes saves bytes directly to file without conversion
 func saveRawBytes(data []byte, outputPath string) error {
 	return os.WriteFile(outputPath, data, 0644)
@@ -205,9 +211,11 @@ func saveRawBytes(data []byte, outputPath string) error {
 
 // DownloadConvertToJPGRenameCf downloads an image using Cloudflare bypass,
 // converts it to JPEG if needed, and saves it with the specified filename.
+// Uses the provided context for cancellation support.
 // This function uses Colly with CF bypass data for sites that require it.
 //
 // Parameters:
+//   - ctx: Context for cancellation support (checked before and after Colly Visit)
 //   - filename: Base filename without extension (e.g., "1", "2", "3")
 //   - imageURL: Full URL of the image to download
 //   - targetDir: Directory where the image should be saved
@@ -221,7 +229,7 @@ func saveRawBytes(data []byte, outputPath string) error {
 // 2. Download the image using the collector
 // 3. Convert to JPEG if needed (reuses ConvertImageToJPEG)
 // 4. Save with padded filename (reuses padFileName)
-func DownloadConvertToJPGRenameCf(filename, imageURL, targetDir, domain string) error {
+func DownloadConvertToJPGRenameCf(ctx context.Context, filename, imageURL, targetDir, domain string) error {
 	var lastErr error
 	maxRetries := 3
 
@@ -230,7 +238,7 @@ func DownloadConvertToJPGRenameCf(filename, imageURL, targetDir, domain string) 
 			log.Printf("Retry attempt %d/%d for: %s", attempt, maxRetries, imageURL)
 		}
 
-		err := downloadConvertToJPGRenameCf(filename, imageURL, targetDir, domain)
+		err := downloadConvertToJPGRenameCfCtx(ctx, filename, imageURL, targetDir, domain)
 		if err == nil {
 			return nil
 		}
@@ -242,8 +250,8 @@ func DownloadConvertToJPGRenameCf(filename, imageURL, targetDir, domain string) 
 	return lastErr
 }
 
-// downloadConvertToJPGRenameCf is the internal function without retry logic
-func downloadConvertToJPGRenameCf(filename, imageURL, targetDir, domain string) error {
+// downloadConvertToJPGRenameCfCtx is the context-aware internal function without retry logic
+func downloadConvertToJPGRenameCfCtx(ctx context.Context, filename, imageURL, targetDir, domain string) error {
 	// Create a new Colly collector for this download with extended timeout for large images
 	c := colly.NewCollector(
 		colly.UserAgent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"),
@@ -336,7 +344,16 @@ func downloadConvertToJPGRenameCf(filename, imageURL, targetDir, domain string) 
 		}
 	})
 
-	// Visit the image URL
+	// Check for cancellation before starting the Colly request
+	select {
+	case <-ctx.Done():
+		log.Printf("Image download cancelled before Visit: %s", imageURL)
+		return ctx.Err()
+	default:
+	}
+
+	// Visit the image URL (Colly doesn't natively support context propagation,
+	// but has a 60s request timeout set above as a safety net)
 	visitErr := c.Visit(imageURL)
 	if visitErr != nil {
 		log.Printf("Failed to visit image URL: %v, url=%s", visitErr, imageURL)
@@ -346,6 +363,14 @@ func downloadConvertToJPGRenameCf(filename, imageURL, targetDir, domain string) 
 	// Check for download errors
 	if downloadErr != nil {
 		return downloadErr
+	}
+
+	// Check for cancellation before converting/saving
+	select {
+	case <-ctx.Done():
+		log.Printf("Image cancelled after download: %s", imageURL)
+		return ctx.Err()
+	default:
 	}
 
 	// Check for empty response
