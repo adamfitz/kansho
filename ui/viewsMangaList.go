@@ -388,6 +388,9 @@ func (v *MangaListView) performSearch() {
 		}
 	}
 
+	if len(v.searchResults) == 0 {
+		return
+	}
 	v.currentSearchIdx++
 	if v.currentSearchIdx >= len(v.searchResults) {
 		v.currentSearchIdx = 0
