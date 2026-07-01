@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"kansho/cf"
@@ -29,9 +30,11 @@ type BrowserSession struct {
 // NewBrowserSession creates a new browser session with optional CF bypass
 func NewBrowserSession(ctx context.Context, domain string, needsCF bool) (*BrowserSession, error) {
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
-		chromedp.Flag("headless", true),
+		chromedp.Flag("headless", "new"),
 		chromedp.Flag("disable-blink-features", "AutomationControlled"),
 		chromedp.Flag("disable-gpu", true),
+		chromedp.Flag("no-sandbox", true),
+		chromedp.Flag("disable-dev-shm-usage", true),
 	)
 
 	var bypassData *cf.BypassData
@@ -418,4 +421,105 @@ func FetchHTMLBatched(ctx context.Context, url, domain string, needsCF bool, dbg
 	}
 
 	return html, nil
+}
+
+// ChapterImages holds the result of a browser-based image download.
+type ChapterImages struct {
+	// URLs is the ordered list of image URLs as returned by the JS evaluation.
+	URLs []string
+	// Data maps each URL to its downloaded bytes.
+	Data map[string][]byte
+}
+
+// DownloadChapterImages navigates to a chapter page in the browser, waits for
+// the images to fully load, captures them via the browser's network stack, and
+// returns a ChapterImages containing both the ordered URL list and the image
+// bytes. This bypasses Cloudflare's TLS fingerprint checks because requests
+// originate from a real Chrome browser.
+func (bs *BrowserSession) DownloadChapterImages(chapterURL, waitSelector, javascript, cdnPattern string) (*ChapterImages, error) {
+	log.Printf("[Browser:%s] DownloadChapterImages starting for: %s", bs.domain, chapterURL)
+
+	timeout := 90 * time.Second
+	ctx, cancel := context.WithTimeout(bs.ctx, timeout)
+	defer cancel()
+
+	// Collect image responses
+	var mu sync.Mutex
+	type imgResp struct {
+		reqID network.RequestID
+		url   string
+	}
+	var imageResponses []imgResp
+
+	chromedp.ListenTarget(ctx, func(ev interface{}) {
+		switch ev := ev.(type) {
+		case *network.EventResponseReceived:
+			url := ev.Response.URL
+			if ev.Response.Status == 200 && (cdnPattern == "" || strings.Contains(url, cdnPattern)) {
+				mu.Lock()
+				imageResponses = append(imageResponses, imgResp{ev.RequestID, url})
+				mu.Unlock()
+			}
+		}
+	})
+
+	// Batch: enable network → inject cookies → navigate → wait → evaluate JS
+	var imageURLs []string
+	tasks := []chromedp.Action{network.Enable()}
+	bs.injectCookies(&tasks)
+	tasks = append(tasks,
+		chromedp.Navigate(chapterURL),
+		chromedp.WaitReady("body"),
+	)
+	if waitSelector != "" {
+		tasks = append(tasks, chromedp.WaitVisible(waitSelector, chromedp.ByQuery))
+	}
+	tasks = append(tasks, chromedp.Evaluate(javascript, &imageURLs))
+
+	if err := chromedp.Run(ctx, tasks...); err != nil {
+		return nil, fmt.Errorf("navigation and JS evaluation failed: %w", err)
+	}
+
+	log.Printf("[Browser:%s] JS returned %d image URLs, network captured %d responses",
+		bs.domain, len(imageURLs), len(imageResponses))
+
+	// Lock and copy the collected responses
+	mu.Lock()
+	respCopy := make([]imgResp, len(imageResponses))
+	copy(respCopy, imageResponses)
+	mu.Unlock()
+
+	// Build a set of image URLs we care about (from JS evaluation)
+	want := make(map[string]bool, len(imageURLs))
+	for _, u := range imageURLs {
+		want[u] = true
+	}
+
+	// Fetch the response body for each matched image
+	result := &ChapterImages{
+		URLs: imageURLs,
+		Data: make(map[string][]byte, len(respCopy)),
+	}
+	for _, ir := range respCopy {
+		if !want[ir.url] {
+			continue
+		}
+
+		var body []byte
+		if err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+			var err error
+			body, err = network.GetResponseBody(ir.reqID).Do(ctx)
+			return err
+		})); err != nil {
+			log.Printf("[Browser:%s] Failed to get response body for %s: %v", bs.domain, ir.url, err)
+			continue
+		}
+
+		result.Data[ir.url] = body
+	}
+
+	log.Printf("[Browser:%s] DownloadChapterImages complete: %d/%d images downloaded",
+		bs.domain, len(result.Data), len(imageURLs))
+
+	return result, nil
 }

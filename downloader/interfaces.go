@@ -102,6 +102,16 @@ type DebugSite interface {
 	Debugger() *Debugger
 }
 
+// ManualCFPromptSite is implemented by sites that need to always open the
+// manga URL in the user's real browser before chapter extraction, regardless
+// of whether a Cloudflare challenge is detected on the page. This is useful
+// for sites where CF cookies must be captured for use during image downloads,
+// even though the main manga page itself may not trigger a CF challenge.
+// Sites that do not implement this interface behave as normal.
+type ManualCFPromptSite interface {
+	NeedsManualCFPrompt() bool
+}
+
 // Debugger defines optional debugging behavior for a site
 // Sites may return nil if no debugging is required
 type Debugger struct {
