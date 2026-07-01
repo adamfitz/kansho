@@ -105,12 +105,36 @@ func (m *MangakatanaSite) NormalizeChapterFilename(data map[string]string) strin
 	}
 
 	mainNum := matches[1]
-	partNum := ""
+	subNum := ""
 	if len(matches) > 2 && matches[2] != "" {
-		partNum = matches[2]
+		subNum = matches[2]
+	}
+
+	// Determine if "Part X" is a sub-chapter indicator.
+	// On mangakatana the format is "Chapter XX: Title Part Y".
+	// Part after a colon is a title element (e.g. "Working Adult Arc Part 1").
+	// Part before a colon (or with no colon) is a sub-chapter indicator.
+	partNum := ""
+	partRe := regexp.MustCompile(`(?i)Part\s+(\d+)`)
+	if partMatches := partRe.FindStringSubmatch(text); len(partMatches) > 1 {
+		if colonIdx := strings.Index(text, ":"); colonIdx >= 0 {
+			if strings.Contains(text[:colonIdx], partMatches[0]) {
+				partNum = partMatches[1]
+			}
+		} else {
+			partNum = partMatches[1]
+		}
+	}
+
+	// Skip Part if redundant with the decimal sub-number
+	if partNum != "" && partNum == subNum {
+		partNum = ""
 	}
 
 	filename := fmt.Sprintf("ch%03s", mainNum)
+	if subNum != "" {
+		filename += "." + subNum
+	}
 	if partNum != "" {
 		filename += "." + partNum
 	}
