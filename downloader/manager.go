@@ -181,62 +181,116 @@ func (m *Manager) downloadChapter(ctx context.Context, chapterURL, cbzName strin
 	site := m.config.Site
 	callback := m.config.ProgressCallback
 
-	// Get image URLs
-	imageURLs, err := FetchChapterImages(ctx, chapterURL, site)
-	if err != nil {
-		return fmt.Errorf("failed to get chapter images: %w", err)
-	}
-
-	if len(imageURLs) == 0 {
-		return fmt.Errorf("no images found")
-	}
-
-	log.Printf("[Downloader:%s] Found %d images", cbzName, len(imageURLs))
-
 	// Create temp directory
 	chapterDir := filepath.Join("/tmp", site.GetSiteName(), strings.TrimSuffix(cbzName, ".cbz"))
 	if err := os.MkdirAll(chapterDir, 0755); err != nil {
 		return fmt.Errorf("failed to create temp directory: %w", err)
 	}
-	defer os.RemoveAll(chapterDir) // Clean up temp dir
+	defer os.RemoveAll(chapterDir)
 
-	// Download images with rate limiting
+	var imageURLs []string
 	successCount := 0
-	rateLimiter := parser.NewRateLimiter(1500 * time.Millisecond)
-	defer rateLimiter.Stop()
 
-	for imgIdx, imgURL := range imageURLs {
-		log.Printf("[Downloader:%s] Downloading image %d/%d", cbzName, imgIdx+1, len(imageURLs))
-		select {
-		case <-ctx.Done():
-			log.Printf("[Downloader:%s] Cancelled during image download", cbzName)
-			return ctx.Err()
-		default:
-		}
+	// For kunmanga specifically, use the browser's network stack to download
+	// images directly — this bypasses Cloudflare's TLS fingerprint checks that
+	// block Go/curl HTTP clients. Other CF-bypass sites (mgeko, manhuaus) keep
+	// the original Colly-based download path.
+	if site.GetSiteName() == "kunmanga" {
+		imgMethod := site.GetImageExtractionMethod()
+		log.Printf("[Downloader:%s] Trying browser-based download for kunmanga", cbzName)
 
-		if !rateLimiter.WaitCtx(ctx) {
-			log.Printf("[Downloader:%s] Cancelled during rate limit wait", cbzName)
-			return ctx.Err()
-		}
+		browserCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
+		defer cancel()
 
-		if callback != nil {
-			imgProgress := progress + (float64(imgIdx) / float64(len(imageURLs)) / float64(newChaptersToDownload))
-			callback(
-				fmt.Sprintf("Chapter %d/%d: Downloading image %d/%d", actualChapterNum, totalChaptersFound, imgIdx+1, len(imageURLs)),
-				imgProgress,
-				actualChapterNum,
-				currentDownload,
-				totalChaptersFound,
-			)
-		}
-
-		// Download image with retry
-		filename := fmt.Sprintf("%03d", imgIdx+1)
-		err := m.downloadImageWithRetry(ctx, imgURL, chapterDir, filename)
+		session, err := NewBrowserSession(browserCtx, DomainFromURL(chapterURL, site.GetDomain()), true)
 		if err != nil {
-			log.Printf("[Downloader:%s] Failed to download image %d: %v", cbzName, imgIdx+1, err)
+			log.Printf("[Downloader:%s] Failed to create browser session, falling back to HTTP: %v", cbzName, err)
 		} else {
-			successCount++
+			chapterImages, dlErr := session.DownloadChapterImages(
+				chapterURL,
+				imgMethod.WaitSelector,
+				imgMethod.JavaScript,
+				"",
+			)
+			session.Close()
+
+			if dlErr != nil {
+				log.Printf("[Downloader:%s] Browser download failed, falling back to HTTP: %v", cbzName, dlErr)
+			} else if len(chapterImages.Data) == 0 {
+				log.Printf("[Downloader:%s] Browser returned 0 images, falling back to HTTP", cbzName)
+			} else {
+				log.Printf("[Downloader:%s] Browser downloaded %d images", cbzName, len(chapterImages.Data))
+
+				for id, imgURL := range chapterImages.URLs {
+					data, ok := chapterImages.Data[imgURL]
+					if !ok {
+						log.Printf("[Downloader:%s] Image URL not in browser results: %s", cbzName, imgURL)
+						continue
+					}
+					filename := fmt.Sprintf("%03d", id+1)
+					ext := guessExtension(data)
+					if err := os.WriteFile(filepath.Join(chapterDir, filename+"."+ext), data, 0644); err != nil {
+						log.Printf("[Downloader:%s] Failed to save image %s: %v", cbzName, filename, err)
+						continue
+					}
+					successCount++
+				}
+
+				imageURLs = chapterImages.URLs
+				log.Printf("[Downloader:%s] Downloaded %d/%d images from browser", cbzName, successCount, len(chapterImages.Data))
+			}
+		}
+	}
+
+	// Fallback to standard flow for non-CF sites or non-JS extraction methods
+	if successCount == 0 {
+		var err error
+		imageURLs, err = FetchChapterImages(ctx, chapterURL, site)
+		if err != nil {
+			return fmt.Errorf("failed to get chapter images: %w", err)
+		}
+
+		if len(imageURLs) == 0 {
+			return fmt.Errorf("no images found")
+		}
+
+		log.Printf("[Downloader:%s] Found %d images", cbzName, len(imageURLs))
+
+		rateLimiter := parser.NewRateLimiter(1500 * time.Millisecond)
+		defer rateLimiter.Stop()
+
+		for imgIdx, imgURL := range imageURLs {
+			log.Printf("[Downloader:%s] Downloading image %d/%d", cbzName, imgIdx+1, len(imageURLs))
+			select {
+			case <-ctx.Done():
+				log.Printf("[Downloader:%s] Cancelled during image download", cbzName)
+				return ctx.Err()
+			default:
+			}
+
+			if !rateLimiter.WaitCtx(ctx) {
+				log.Printf("[Downloader:%s] Cancelled during rate limit wait", cbzName)
+				return ctx.Err()
+			}
+
+			if callback != nil {
+				imgProgress := progress + (float64(imgIdx) / float64(len(imageURLs)) / float64(newChaptersToDownload))
+				callback(
+					fmt.Sprintf("Chapter %d/%d: Downloading image %d/%d", actualChapterNum, totalChaptersFound, imgIdx+1, len(imageURLs)),
+					imgProgress,
+					actualChapterNum,
+					currentDownload,
+					totalChaptersFound,
+				)
+			}
+
+			filename := fmt.Sprintf("%03d", imgIdx+1)
+			err := m.downloadImageWithRetry(ctx, imgURL, chapterDir, filename)
+			if err != nil {
+				log.Printf("[Downloader:%s] Failed to download image %d: %v", cbzName, imgIdx+1, err)
+			} else {
+				successCount++
+			}
 		}
 	}
 
@@ -271,6 +325,30 @@ func (m *Manager) downloadChapter(ctx context.Context, chapterURL, cbzName strin
 
 	log.Printf("[Downloader] ✓ Created CBZ: %s (%d images)", cbzName, successCount)
 	return nil
+}
+
+// guessExtension returns the file extension based on magic bytes
+func guessExtension(data []byte) string {
+	if len(data) < 4 {
+		return "bin"
+	}
+	// WebP: RIFF....WEBP
+	if data[0] == 0x52 && data[1] == 0x49 && data[2] == 0x46 && data[3] == 0x46 {
+		return "webp"
+	}
+	// JPEG
+	if data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF {
+		return "jpg"
+	}
+	// PNG
+	if data[0] == 0x89 && data[1] == 0x50 && data[2] == 0x4E && data[3] == 0x47 {
+		return "png"
+	}
+	// GIF
+	if data[0] == 0x47 && data[1] == 0x49 && data[2] == 0x46 {
+		return "gif"
+	}
+	return "bin"
 }
 
 // downloadImageWithRetry downloads a single image with retry logic

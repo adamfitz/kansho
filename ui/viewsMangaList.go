@@ -162,6 +162,7 @@ type MangaListView struct {
 	deleteButton *widget.Button
 	editButton   *widget.Button
 	dirButton    *widget.Button
+	siteButton   *widget.Button
 
 	searchEntry       *widget.Entry
 	searchButton      *widget.Button
@@ -194,10 +195,15 @@ func NewMangaListView(state *KanshoAppState) *MangaListView {
 	})
 	view.editButton.Disable()
 
-	view.dirButton = widget.NewButton("Manga Dir", func() {
+	view.dirButton = widget.NewButton("Directory", func() {
 		view.onDirButtonClicked()
 	})
 	view.dirButton.Disable()
+
+	view.siteButton = widget.NewButton("Website", func() {
+		view.onSiteButtonClicked()
+	})
+	view.siteButton.Disable()
 
 	view.searchEntry = widget.NewEntry()
 	view.searchEntry.SetPlaceHolder("Search manga titles...")
@@ -237,6 +243,7 @@ func NewMangaListView(state *KanshoAppState) *MangaListView {
 		view.deleteButton.Enable()
 		view.editButton.Enable()
 		view.dirButton.Enable()
+		view.siteButton.Enable()
 		view.state.SelectManga(int(id))
 	}
 
@@ -260,6 +267,7 @@ func NewMangaListView(state *KanshoAppState) *MangaListView {
 					view.deleteButton,
 					view.editButton,
 					view.dirButton,
+					view.siteButton,
 				),
 			),
 		),
@@ -295,6 +303,7 @@ func (v *MangaListView) refresh() {
 	v.deleteButton.Disable()
 	v.editButton.Disable()
 	v.dirButton.Disable()
+	v.siteButton.Disable()
 
 	v.searchResults = []int{}
 	v.currentSearchIdx = -1
@@ -388,6 +397,9 @@ func (v *MangaListView) performSearch() {
 		}
 	}
 
+	if len(v.searchResults) == 0 {
+		return
+	}
 	v.currentSearchIdx++
 	if v.currentSearchIdx >= len(v.searchResults) {
 		v.currentSearchIdx = 0
@@ -396,6 +408,31 @@ func (v *MangaListView) performSearch() {
 	resultIndex := v.searchResults[v.currentSearchIdx]
 	v.List.Select(widget.ListItemID(resultIndex))
 	v.List.ScrollTo(widget.ListItemID(resultIndex))
+}
+
+func (v *MangaListView) onSiteButtonClicked() {
+	if v.selectedIndex < 0 || v.selectedIndex >= len(v.state.MangaData.Manga) {
+		dialog.ShowInformation("Open Site", "Select a manga from the list to open the site.", v.state.Window)
+		return
+	}
+
+	mangaURL := v.state.MangaData.Manga[v.selectedIndex].Url
+	var err error
+	switch runtime.GOOS {
+	case "linux":
+		err = exec.Command("xdg-open", mangaURL).Start()
+	case "darwin":
+		err = exec.Command("open", mangaURL).Start()
+	case "windows":
+		err = exec.Command("rundll32", "url.dll,FileProtocolHandler", mangaURL).Start()
+	default:
+		dialog.ShowError(fmt.Errorf("unsupported operating system: %s", runtime.GOOS), v.state.Window)
+		return
+	}
+
+	if err != nil {
+		dialog.ShowError(fmt.Errorf("failed to open URL: %v", err), v.state.Window)
+	}
 }
 
 func (v *MangaListView) clearSearch() {
@@ -409,4 +446,5 @@ func (v *MangaListView) clearSearch() {
 	v.deleteButton.Disable()
 	v.editButton.Disable()
 	v.dirButton.Disable()
+	v.siteButton.Disable()
 }

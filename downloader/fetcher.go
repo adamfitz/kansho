@@ -152,6 +152,28 @@ func extractImages(ctx context.Context, chapterURL string, site SitePlugin) ([]s
 
 // extractChaptersWithJS uses JavaScript evaluation
 func extractChaptersWithJS(ctx context.Context, mangaURL string, site SitePlugin, method *ChapterExtractionMethod) (map[string]string, error) {
+	// Some sites need the manga URL opened in the user's real browser before
+	// extraction so their browser extension captures CF cookies, even when no
+	// CF challenge is detected on the page (e.g. the main manga page has no
+	// CF but image CDNs require cf_clearance). This forces a CfChallengeError
+	// to be returned, which triggers the CF dialog in the UI.
+	// Skip the prompt if CF data already exists on disk.
+	if manualSite, ok := site.(ManualCFPromptSite); ok && manualSite.NeedsManualCFPrompt() {
+		domain := DomainFromURL(mangaURL, site.GetDomain())
+		if _, err := cf.LoadFromFile(domain); err != nil {
+			log.Printf("[Downloader] No CF data on disk for %s — opening browser for manual capture", domain)
+			if err := cf.OpenInBrowser(mangaURL); err != nil {
+				return nil, fmt.Errorf("failed to open browser for manual CF prompt: %w", err)
+			}
+			return nil, &cf.CfChallengeError{
+				URL:        mangaURL,
+				StatusCode: 0,
+				Indicators: []string{"Manual CF prompt for domain: " + domain},
+			}
+		}
+		log.Printf("[Downloader] CF data already exists for %s — skipping manual prompt", domain)
+	}
+
 	jsCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
 
