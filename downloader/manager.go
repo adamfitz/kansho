@@ -191,54 +191,53 @@ func (m *Manager) downloadChapter(ctx context.Context, chapterURL, cbzName strin
 	var imageURLs []string
 	successCount := 0
 
-	// For sites that need CF bypass, use the browser's network stack to
-	// download images directly — this bypasses Cloudflare's TLS fingerprint
-	// checks that block Go/curl HTTP clients.
-	if site.NeedsCFBypass() {
+	// For kunmanga specifically, use the browser's network stack to download
+	// images directly — this bypasses Cloudflare's TLS fingerprint checks that
+	// block Go/curl HTTP clients. Other CF-bypass sites (mgeko, manhuaus) keep
+	// the original Colly-based download path.
+	if site.GetSiteName() == "kunmanga" {
 		imgMethod := site.GetImageExtractionMethod()
-		if imgMethod.Type == "javascript" {
-			log.Printf("[Downloader:%s] Trying browser-based download for CF-bypass site", cbzName)
+		log.Printf("[Downloader:%s] Trying browser-based download for kunmanga", cbzName)
 
-			browserCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
-			defer cancel()
+		browserCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
+		defer cancel()
 
-			session, err := NewBrowserSession(browserCtx, DomainFromURL(chapterURL, site.GetDomain()), true)
-			if err != nil {
-				log.Printf("[Downloader:%s] Failed to create browser session, falling back to HTTP: %v", cbzName, err)
+		session, err := NewBrowserSession(browserCtx, DomainFromURL(chapterURL, site.GetDomain()), true)
+		if err != nil {
+			log.Printf("[Downloader:%s] Failed to create browser session, falling back to HTTP: %v", cbzName, err)
+		} else {
+			chapterImages, dlErr := session.DownloadChapterImages(
+				chapterURL,
+				imgMethod.WaitSelector,
+				imgMethod.JavaScript,
+				"",
+			)
+			session.Close()
+
+			if dlErr != nil {
+				log.Printf("[Downloader:%s] Browser download failed, falling back to HTTP: %v", cbzName, dlErr)
+			} else if len(chapterImages.Data) == 0 {
+				log.Printf("[Downloader:%s] Browser returned 0 images, falling back to HTTP", cbzName)
 			} else {
-				chapterImages, dlErr := session.DownloadChapterImages(
-					chapterURL,
-					imgMethod.WaitSelector,
-					imgMethod.JavaScript,
-					"",
-				)
-				session.Close()
+				log.Printf("[Downloader:%s] Browser downloaded %d images", cbzName, len(chapterImages.Data))
 
-				if dlErr != nil {
-					log.Printf("[Downloader:%s] Browser download failed, falling back to HTTP: %v", cbzName, dlErr)
-				} else if len(chapterImages.Data) == 0 {
-					log.Printf("[Downloader:%s] Browser returned 0 images, falling back to HTTP", cbzName)
-				} else {
-					log.Printf("[Downloader:%s] Browser downloaded %d images", cbzName, len(chapterImages.Data))
-
-					for id, imgURL := range chapterImages.URLs {
-						data, ok := chapterImages.Data[imgURL]
-						if !ok {
-							log.Printf("[Downloader:%s] Image URL not in browser results: %s", cbzName, imgURL)
-							continue
-						}
-						filename := fmt.Sprintf("%03d", id+1)
-						ext := guessExtension(data)
-						if err := os.WriteFile(filepath.Join(chapterDir, filename+"."+ext), data, 0644); err != nil {
-							log.Printf("[Downloader:%s] Failed to save image %s: %v", cbzName, filename, err)
-							continue
-						}
-						successCount++
+				for id, imgURL := range chapterImages.URLs {
+					data, ok := chapterImages.Data[imgURL]
+					if !ok {
+						log.Printf("[Downloader:%s] Image URL not in browser results: %s", cbzName, imgURL)
+						continue
 					}
-
-					imageURLs = chapterImages.URLs
-					log.Printf("[Downloader:%s] Downloaded %d/%d images from browser", cbzName, successCount, len(chapterImages.Data))
+					filename := fmt.Sprintf("%03d", id+1)
+					ext := guessExtension(data)
+					if err := os.WriteFile(filepath.Join(chapterDir, filename+"."+ext), data, 0644); err != nil {
+						log.Printf("[Downloader:%s] Failed to save image %s: %v", cbzName, filename, err)
+						continue
+					}
+					successCount++
 				}
+
+				imageURLs = chapterImages.URLs
+				log.Printf("[Downloader:%s] Downloaded %d/%d images from browser", cbzName, successCount, len(chapterImages.Data))
 			}
 		}
 	}
