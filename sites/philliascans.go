@@ -2,6 +2,7 @@ package sites
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"regexp"
@@ -14,13 +15,13 @@ import (
 // PhiliaScansSite implements SitePlugin for philiascans.org.
 //
 // Site characteristics:
+//   - Next.js app with React Server Components (RSC) streaming payloads
 //   - Fully server-side rendered (no JS rendering needed)
 //   - No Cloudflare protection
-//   - Chapter list page contains two identical #free-list divs (desktop + mobile)
-//     so deduplication by chapter label is required
-//   - Premium chapters link to "#" — they are skipped automatically
-//   - Chapter image page uses <img data-src="..."> inside <div id="ch-images">
-//   - Images are hosted at /wp-content/uploads/WP-manga/data/...
+//   - Chapter data is embedded in <script>self.__next_f.push(...)</script> tags
+//     as langChapters arrays with coinPrice/isEarlyAccess metadata
+//   - Free chapters have coinPrice=0; premium chapters have coinPrice>0
+//   - Chapter image page uses <div id="ch-images"> with lazy-loaded images
 //   - Last image in every chapter is "9999.webp" (subscribe banner) — filtered out
 type PhiliaScansSite struct{}
 
@@ -52,14 +53,11 @@ func (p *PhiliaScansSite) Debugger() *downloader.Debugger {
 
 // GetChapterExtractionMethod uses "custom" extraction.
 //
-// The manga series page is fully SSR. Free chapters live inside:
-//
-//	<li class="item free-chap" data-chapter="Chapter N">
-//	    <a href="https://philiascans.org/series/.../chapter-N/">
-//
-// The page renders two identical #free-list blocks (desktop + mobile),
-// so the parser deduplicates by chapter label before returning.
-// Premium chapters have href="#" and are ignored.
+// The manga series page is a Next.js app with RSC streaming payloads.
+// Chapter data lives in langChapters arrays inside __next_f script tags.
+// Each chapter has coinPrice (0=free) and isEarlyAccess metadata.
+// The parser extracts free chapters (coinPrice=0) from the RSC data,
+// falling back to HTML parsing if RSC data is unavailable.
 func (p *PhiliaScansSite) GetChapterExtractionMethod() *downloader.ChapterExtractionMethod {
 	return &downloader.ChapterExtractionMethod{
 		Type:         "custom",
@@ -67,19 +65,21 @@ func (p *PhiliaScansSite) GetChapterExtractionMethod() *downloader.ChapterExtrac
 	}
 }
 
-// GetImageExtractionMethod uses "custom" extraction.
+// GetImageExtractionMethod uses "javascript" extraction.
 //
-// The chapter page is fully SSR. All manga images live inside:
-//
-//	<div id="ch-images">
-//	    <img class="preload-image ... lazyload" data-src="https://philiascans.org/wp-content/uploads/WP-manga/data/...">
-//
-// Images use lazy-loading via data-src (not src). The final image in
-// every chapter is "9999.webp" — a subscribe banner — and is filtered out.
+// The chapter page renders canvas elements with React fiber data containing
+// image URLs. The manager uses DownloadCanvasImages to extract URLs from the
+// fiber tree, fetch encrypted images via HTTP, and decrypt in Go.
 func (p *PhiliaScansSite) GetImageExtractionMethod() *downloader.ImageExtractionMethod {
 	return &downloader.ImageExtractionMethod{
-		Type:         "custom",
-		CustomParser: parsePhiliaScansImages,
+		Type:         "javascript",
+		WaitSelector: "#pages-container, .page-wrap",
+		JavaScript: `
+			(() => {
+				const canvases = document.querySelectorAll('.page-wrap canvas, #pages-container canvas');
+				return Array.from(canvases).map(c => c.toDataURL('image/webp'));
+			})()
+		`,
 	}
 }
 
@@ -94,6 +94,13 @@ func (p *PhiliaScansSite) NormalizeChapterURL(rawURL, baseURL string) string {
 		rawURL = "/" + rawURL
 	}
 	return "https://philiascans.org" + rawURL
+}
+
+// TransformImage decrypts and descrambles a PhiliaScans encrypted image.
+// The encrypted format uses AES-CTR with HMAC-derived keys and Fisher-Yates tile scrambling.
+func (p *PhiliaScansSite) TransformImage(chapterKey []byte, gridSize int, pageIndex int, rawURL string, encryptedData []byte) ([]byte, error) {
+	log.Printf("[PhiliaScans] TransformImage: pageIndex=%d, gridSize=%d, encrypted=%d bytes", pageIndex, gridSize, len(encryptedData))
+	return philliaDecryptAndDescramble(chapterKey, pageIndex, gridSize, encryptedData)
 }
 
 // NormalizeChapterFilename converts chapter data to a CBZ filename.
@@ -134,21 +141,187 @@ func (p *PhiliaScansSite) NormalizeChapterFilename(chapterData map[string]string
 
 // parsePhiliaScansChapters extracts free chapter links from the series page HTML.
 //
-// Pattern matched:
+// The site is a Next.js app with RSC streaming payloads. Chapter data lives in
+// langChapters arrays inside __next_f script tags, structured as:
 //
-//	<li class="item free-chap" data-chapter="Chapter N">
-//	    <a href="https://philiascans.org/series/.../chapter-N/">
+//	{"number":"38","slug":"chapter-38","lang":"en","coinPrice":0,...}
 //
-// Two identical lists are rendered (desktop + mobile), so we use a seen-map
-// to deduplicate by chapter label and keep the first occurrence.
-// Chapters with href="#" (premium/locked) are automatically excluded because
-// their href does not start with "https://".
+// Free chapters have coinPrice=0. Premium/paid chapters have coinPrice>0 and
+// are skipped. The parser also deduplicates chapters by number since multiple
+// RSC blocks may contain overlapping data.
+//
+// Falls back to HTML <a> tag parsing if RSC data extraction fails.
 func parsePhiliaScansChapters(html string) (map[string]string, error) {
-	// Match free chapter <li> blocks: capture data-chapter label and href.
-	// The [\s\S]*? between the li open tag and the <a> is non-greedy to avoid
-	// crossing into the next list item.
+	// Try RSC payload extraction first (preferred — has pricing metadata)
+	if result, err := parseRSCChapters(html); err == nil && len(result) > 0 {
+		return result, nil
+	}
+
+	// Fallback: parse chapter links from HTML
+	log.Printf("[PhiliaScans] RSC extraction failed, falling back to HTML parsing")
+	return parseHTMLChapters(html)
+}
+
+// parseRSCChapters extracts chapter data from React Server Components streaming
+// payloads embedded in __next_f script tags. Returns only free chapters (coinPrice=0).
+func parseRSCChapters(html string) (map[string]string, error) {
+	site := &PhiliaScansSite{}
+	result := make(map[string]string)
+	seen := make(map[string]bool)
+
+	// Extract manga slug from the page URL in the RSC data.
+	// The series page URL contains the manga slug: /series/{slug}
+	mangaSlug := extractMangaSlug(html)
+	if mangaSlug == "" {
+		return nil, fmt.Errorf("PhiliaScans: could not extract manga slug from page")
+	}
+
+	// Find all __next_f.push script tags
+	scriptRe := regexp.MustCompile(`<script>self\.__next_f\.push\(\[1,"(.+?)"\]\)</script>`)
+
+	for _, match := range scriptRe.FindAllStringSubmatch(html, -1) {
+		if len(match) < 2 {
+			continue
+		}
+
+		payload := match[1]
+
+		// Find the langChapters key and use bracket-counting to extract the full array.
+		// A simple regex like (.+?)] fails because the array contains nested structures.
+		// The payload is inside a JS string, so quotes are escaped: \"langChapters\":[
+		startMarker := `\"langChapters\":[`
+		idx := strings.Index(payload, startMarker)
+		if idx < 0 {
+			continue
+		}
+
+		// Start scanning after \"langChapters\":[
+		start := idx + len(startMarker)
+		depth := 1
+		pos := start
+		for pos < len(payload) && depth > 0 {
+			ch := payload[pos]
+			// Handle escape sequences (e.g. \" \\ \n) — skip the escaped char
+			if ch == '\\' && pos+1 < len(payload) {
+				pos += 2
+				continue
+			}
+			if ch == '[' {
+				depth++
+			} else if ch == ']' {
+				depth--
+			}
+			pos++
+		}
+
+		if depth != 0 {
+			log.Printf("[PhiliaScans] WARNING: unmatched brackets in langChapters, skipping payload")
+			continue
+		}
+
+		// payload[start:pos-1] contains the raw langChapters array content
+		// (the final ] was consumed by the loop, so pos-1 is past it)
+		rawArr := payload[start : pos-1]
+		jsonStr := "[" + rawArr + "]"
+
+		// Decode RSC string escapes: \" → ", \\ → \, \u0026 → &
+		jsonStr = strings.ReplaceAll(jsonStr, `\"`, `"`)
+		jsonStr = strings.ReplaceAll(jsonStr, `\\`, `\`)
+
+		var chapters []struct {
+			Number        string `json:"number"`
+			Slug          string `json:"slug"`
+			Lang          string `json:"lang"`
+			CoinPrice     int    `json:"coinPrice"`
+			IsEarlyAccess bool   `json:"isEarlyAccess"`
+		}
+
+		if err := json.Unmarshal([]byte(jsonStr), &chapters); err != nil {
+			log.Printf("[PhiliaScans] Failed to parse langChapters JSON: %v", err)
+			continue
+		}
+
+		for _, ch := range chapters {
+			if ch.Number == "" || ch.Slug == "" {
+				continue
+			}
+
+			// Skip paid/premium chapters
+			if ch.CoinPrice > 0 {
+				log.Printf("[PhiliaScans] Skipping paid chapter %s (price=%d coins)", ch.Number, ch.CoinPrice)
+				continue
+			}
+
+			num := ch.Number
+			if seen[num] {
+				continue
+			}
+			seen[num] = true
+
+			url := "https://philiascans.org/series/" + mangaSlug + "/" + ch.Slug + "?lang=" + ch.Lang
+			label := "Chapter " + ch.Number
+
+			data := map[string]string{
+				"url":  url,
+				"text": label,
+			}
+
+			filename := site.NormalizeChapterFilename(data)
+			normalizedURL := site.NormalizeChapterURL(url, "")
+			result[filename] = normalizedURL
+		}
+
+		// If we found chapters in at least one payload, stop searching
+		if len(result) > 0 {
+			break
+		}
+	}
+
+	if len(result) > 0 {
+		log.Printf("[PhiliaScans] Found %d unique free chapters via RSC", len(result))
+		return result, nil
+	}
+
+	return nil, fmt.Errorf("PhiliaScans: no langChapters data found in RSC payloads")
+}
+
+// extractMangaSlug extracts the manga slug from the page HTML.
+// It looks for the slug in the RSC data or in the page URL pattern /series/{slug}.
+func extractMangaSlug(html string) string {
+	// The RSC flight data inside __next_f.push has escaped quotes:
+	// \"c\":[\"\",\"series\",\"{slug}\"]
+	rscEscRe := regexp.MustCompile(`\\+"c\\+"\s*:\s*\[\\+"\\+"\s*,\s*\\+"series\\+"\s*,\s*\\+"([^\\]+)\\+"\]`)
+	if m := rscEscRe.FindStringSubmatch(html); len(m) > 1 {
+		return m[1]
+	}
+
+	// Also try unescaped version (in case HTML is already decoded)
+	rscRe := regexp.MustCompile(`"c":\["","series","([^"]+)"\]`)
+	if m := rscRe.FindStringSubmatch(html); len(m) > 1 {
+		return m[1]
+	}
+
+	// Fallback: look for /series/{slug}/chapter pattern in the HTML
+	canonicalRe := regexp.MustCompile(`/series/([a-z0-9-]+)/chapter`)
+	if m := canonicalRe.FindStringSubmatch(html); len(m) > 1 {
+		return m[1]
+	}
+
+	// Last resort: look for /series/{slug}" pattern
+	pathRe := regexp.MustCompile(`/series/([a-z0-9-]+)"`)
+	if m := pathRe.FindStringSubmatch(html); len(m) > 1 {
+		return m[1]
+	}
+
+	return ""
+}
+
+// parseHTMLChapters is a fallback parser that extracts chapter links from HTML <a> tags.
+// Used when RSC payload extraction fails.
+func parseHTMLChapters(html string) (map[string]string, error) {
+	// Match chapter links that point to /read/ URLs with chapter number in text
 	chapterRe := regexp.MustCompile(
-		`<li[^>]+class="[^"]*free-chap[^"]*"[^>]+data-chapter="(Chapter\s+[\d\.]+)"[\s\S]*?<a\s+href="(https://philiascans\.org/series/[^"]+)"`,
+		`<a[^>]+href="(/read/[^"]+)"[^>]*>[\s\S]*?<div[^>]+class="chapter-num"[^>]*>\s*Ch\.([\d\.]+)\s*</div>`,
 	)
 
 	matches := chapterRe.FindAllStringSubmatch(html, -1)
@@ -161,14 +334,16 @@ func parsePhiliaScansChapters(html string) (map[string]string, error) {
 	seen := make(map[string]bool)
 
 	for _, m := range matches {
-		label := strings.TrimSpace(m[1]) // e.g. "Chapter 33"
-		url := strings.TrimSpace(m[2])   // e.g. "https://philiascans.org/series/.../chapter-33/"
+		href := strings.TrimSpace(m[1])
+		chNum := strings.TrimSpace(m[2])
 
-		// Deduplicate: the page renders two identical lists (desktop + mobile)
-		if seen[label] {
+		if chNum == "" || seen[chNum] {
 			continue
 		}
-		seen[label] = true
+		seen[chNum] = true
+
+		url := "https://philiascans.org" + href
+		label := "Chapter " + chNum
 
 		data := map[string]string{
 			"url":  url,
@@ -180,7 +355,7 @@ func parsePhiliaScansChapters(html string) (map[string]string, error) {
 		result[filename] = normalizedURL
 	}
 
-	log.Printf("[PhiliaScans] Found %d unique free chapters", len(result))
+	log.Printf("[PhiliaScans] Found %d unique chapters via HTML fallback", len(result))
 	return result, nil
 }
 

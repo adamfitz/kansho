@@ -112,6 +112,20 @@ type ManualCFPromptSite interface {
 	NeedsManualCFPrompt() bool
 }
 
+// ImageDecryptorSite is implemented by sites where images are encrypted in
+// transit and must be decrypted/descrambled client-side. The download manager
+// calls TransformImage on each raw image byte slice fetched from the network.
+type ImageDecryptorSite interface {
+	// TransformImage decrypts or descrambles a single image.
+	// chapterKey is the raw bytes of the base64-decoded chapter decryption key.
+	// gridSize is the tile grid dimension (e.g. 4 for 4x4 grid).
+	// pageIndex is the 0-based index of the image in the chapter.
+	// rawURL is the original image URL (for logging/context).
+	// encryptedData is the raw HTTP response body.
+	// Returns the clean image bytes (e.g. JPEG/PNG).
+	TransformImage(chapterKey []byte, gridSize int, pageIndex int, rawURL string, encryptedData []byte) ([]byte, error)
+}
+
 // Debugger defines optional debugging behavior for a site
 // Sites may return nil if no debugging is required
 type Debugger struct {
