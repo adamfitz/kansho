@@ -96,3 +96,19 @@ The system SHALL support context-based cancellation of downloads at all levels.
 - WHEN the context is cancelled during the 1500ms rate limit wait
 - THEN `WaitCtx(ctx)` SHALL return immediately instead of waiting for the next tick
 - AND the downloader SHALL return the context error
+
+### Requirement: Encrypted Image Sites
+The system SHALL support sites where images are encrypted in transit and require client-side decryption.
+
+#### Scenario: Download encrypted images
+- GIVEN a chapter URL on a site that implements `ImageDecryptorSite`
+- WHEN the standard HTTP extraction returns 0 images
+- THEN the manager SHALL create a browser session for the site's domain
+- AND SHALL call `DownloadCanvasImages` with the site's `TransformImage` method as the transform function
+- AND SHALL write each decrypted image to the chapter directory with a zero-padded filename
+- AND SHALL use the extension detected from the decrypted image's magic bytes
+
+#### Scenario: Encrypted extraction failure falls back to HTTP
+- GIVEN `DownloadCanvasImages` fails or returns 0 images
+- WHEN the encrypted extraction path is exhausted
+- THEN the manager SHALL log the failure and fall back to standard HTTP extraction

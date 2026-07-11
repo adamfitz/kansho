@@ -78,3 +78,27 @@ The system SHALL attempt HTTP fetching first, falling back to browser automation
 - AND if HTTP succeeds, return the HTML directly
 - AND if HTTP fails with a non-CF error, fall back to a headless browser session
 - AND if a CF challenge is detected at any point, return it as a CfChallengeError
+
+### Requirement: Encrypted Image Extraction
+The system SHALL support extracting images from sites that encrypt images in transit and serve them through canvas-based rendering with React fiber metadata.
+
+#### Scenario: Two-phase encrypted image download
+- GIVEN a chapter URL on an encrypted-image site (e.g. PhiliaScans)
+- WHEN `DownloadCanvasImages(chapterURL, waitSelector, transform)` is called
+- THEN the browser SHALL navigate to the chapter page and wait for canvas elements to appear
+- AND SHALL extract image URLs and chapter metadata from the React fiber tree via JavaScript evaluation
+- AND SHALL close the browser (no longer needed after metadata extraction)
+- AND SHALL fetch page decryption keys from the site's API (`/api/chapters/{id}/page-keys`)
+- AND SHALL fetch each encrypted image via plain HTTP
+- AND SHALL call the provided `ImageTransformFunc` on each image to decrypt/descramble
+- AND SHALL return a `ChapterImages` with the decrypted image bytes
+
+#### Scenario: Transform function is optional
+- GIVEN `DownloadCanvasImages` is called with a nil transform function
+- WHEN images are fetched
+- THEN the raw encrypted bytes SHALL be returned without transformation
+
+#### Scenario: Relative URL resolution
+- GIVEN extracted image URLs from the React fiber tree are relative paths (e.g. `/api/media/...`)
+- WHEN fetching images via HTTP
+- THEN the browser domain SHALL be prepended to form absolute URLs

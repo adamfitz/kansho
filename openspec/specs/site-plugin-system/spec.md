@@ -100,6 +100,22 @@ The system SHALL support optional debugging per site plugin via the `DebugSite` 
 - WHEN `SaveHTML` is true and `HTMLPath` is set
 - THEN the downloader SHALL save fetched HTML to the specified path
 
+### Requirement: Encrypted Image Decryption
+The system SHALL support sites where images are encrypted in transit via the `ImageDecryptorSite` interface.
+
+#### Scenario: Site implements ImageDecryptorSite
+- GIVEN a site plugin that implements `ImageDecryptorSite`
+- WHEN `TransformImage(chapterKey, gridSize, pageIndex, rawURL, encryptedData)` is called
+- THEN the site SHALL decrypt or descramble the image using its scheme-specific algorithm
+- AND SHALL return the clean image bytes (e.g. JPEG/PNG)
+- AND the download manager SHALL use this interface when the site supports it
+
+#### Scenario: Manager detects ImageDecryptorSite
+- GIVEN the download manager is processing a chapter for a site that implements `ImageDecryptorSite`
+- WHEN `DownloadCanvasImages` is called
+- THEN the manager SHALL pass the site's `TransformImage` method as the transform function
+- AND encrypted images SHALL be decrypted via the site's algorithm
+
 ### Requirement: Site Configuration
 The system SHALL embed a site configuration file that specifies which fields are required when adding manga from each source.
 
