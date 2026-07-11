@@ -65,19 +65,21 @@ func (p *PhiliaScansSite) GetChapterExtractionMethod() *downloader.ChapterExtrac
 	}
 }
 
-// GetImageExtractionMethod uses "custom" extraction.
+// GetImageExtractionMethod uses "javascript" extraction.
 //
-// The chapter page is fully SSR. All manga images live inside:
-//
-//	<div id="ch-images">
-//	    <img class="preload-image ... lazyload" data-src="https://philiascans.org/wp-content/uploads/WP-manga/data/...">
-//
-// Images use lazy-loading via data-src (not src). The final image in
-// every chapter is "9999.webp" — a subscribe banner — and is filtered out.
+// The chapter page renders canvas elements with React fiber data containing
+// image URLs. The manager uses DownloadCanvasImages to extract URLs from the
+// fiber tree, fetch encrypted images via HTTP, and decrypt in Go.
 func (p *PhiliaScansSite) GetImageExtractionMethod() *downloader.ImageExtractionMethod {
 	return &downloader.ImageExtractionMethod{
-		Type:         "custom",
-		CustomParser: parsePhiliaScansImages,
+		Type:         "javascript",
+		WaitSelector: "#pages-container, .page-wrap",
+		JavaScript: `
+			(() => {
+				const canvases = document.querySelectorAll('.page-wrap canvas, #pages-container canvas');
+				return Array.from(canvases).map(c => c.toDataURL('image/webp'));
+			})()
+		`,
 	}
 }
 
@@ -92,6 +94,13 @@ func (p *PhiliaScansSite) NormalizeChapterURL(rawURL, baseURL string) string {
 		rawURL = "/" + rawURL
 	}
 	return "https://philiascans.org" + rawURL
+}
+
+// TransformImage decrypts and descrambles a PhiliaScans encrypted image.
+// The encrypted format uses AES-CTR with HMAC-derived keys and Fisher-Yates tile scrambling.
+func (p *PhiliaScansSite) TransformImage(chapterKey []byte, gridSize int, pageIndex int, rawURL string, encryptedData []byte) ([]byte, error) {
+	log.Printf("[PhiliaScans] TransformImage: pageIndex=%d, gridSize=%d, encrypted=%d bytes", pageIndex, gridSize, len(encryptedData))
+	return philliaDecryptAndDescramble(chapterKey, pageIndex, gridSize, encryptedData)
 }
 
 // NormalizeChapterFilename converts chapter data to a CBZ filename.
@@ -159,6 +168,13 @@ func parseRSCChapters(html string) (map[string]string, error) {
 	site := &PhiliaScansSite{}
 	result := make(map[string]string)
 	seen := make(map[string]bool)
+
+	// Extract manga slug from the page URL in the RSC data.
+	// The series page URL contains the manga slug: /series/{slug}
+	mangaSlug := extractMangaSlug(html)
+	if mangaSlug == "" {
+		return nil, fmt.Errorf("PhiliaScans: could not extract manga slug from page")
+	}
 
 	// Find all __next_f.push script tags
 	scriptRe := regexp.MustCompile(`<script>self\.__next_f\.push\(\[1,"(.+?)"\]\)</script>`)
@@ -242,7 +258,7 @@ func parseRSCChapters(html string) (map[string]string, error) {
 			}
 			seen[num] = true
 
-			url := "https://philiascans.org/read/" + ch.Slug + "?lang=" + ch.Lang
+			url := "https://philiascans.org/series/" + mangaSlug + "/" + ch.Slug + "?lang=" + ch.Lang
 			label := "Chapter " + ch.Number
 
 			data := map[string]string{
@@ -267,6 +283,37 @@ func parseRSCChapters(html string) (map[string]string, error) {
 	}
 
 	return nil, fmt.Errorf("PhiliaScans: no langChapters data found in RSC payloads")
+}
+
+// extractMangaSlug extracts the manga slug from the page HTML.
+// It looks for the slug in the RSC data or in the page URL pattern /series/{slug}.
+func extractMangaSlug(html string) string {
+	// The RSC flight data inside __next_f.push has escaped quotes:
+	// \"c\":[\"\",\"series\",\"{slug}\"]
+	rscEscRe := regexp.MustCompile(`\\+"c\\+"\s*:\s*\[\\+"\\+"\s*,\s*\\+"series\\+"\s*,\s*\\+"([^\\]+)\\+"\]`)
+	if m := rscEscRe.FindStringSubmatch(html); len(m) > 1 {
+		return m[1]
+	}
+
+	// Also try unescaped version (in case HTML is already decoded)
+	rscRe := regexp.MustCompile(`"c":\["","series","([^"]+)"\]`)
+	if m := rscRe.FindStringSubmatch(html); len(m) > 1 {
+		return m[1]
+	}
+
+	// Fallback: look for /series/{slug}/chapter pattern in the HTML
+	canonicalRe := regexp.MustCompile(`/series/([a-z0-9-]+)/chapter`)
+	if m := canonicalRe.FindStringSubmatch(html); len(m) > 1 {
+		return m[1]
+	}
+
+	// Last resort: look for /series/{slug}" pattern
+	pathRe := regexp.MustCompile(`/series/([a-z0-9-]+)"`)
+	if m := pathRe.FindStringSubmatch(html); len(m) > 1 {
+		return m[1]
+	}
+
+	return ""
 }
 
 // parseHTMLChapters is a fallback parser that extracts chapter links from HTML <a> tags.

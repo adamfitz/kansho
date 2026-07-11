@@ -242,6 +242,56 @@ func (m *Manager) downloadChapter(ctx context.Context, chapterURL, cbzName strin
 		}
 	}
 
+	// For sites with encrypted images (e.g. philiascans), use browser to extract
+	// metadata from React fiber, then fetch + decrypt images via HTTP + Go.
+	if successCount == 0 && site.GetSiteName() == "philiascans" {
+		imgMethod := site.GetImageExtractionMethod()
+		log.Printf("[Downloader:%s] Trying browser-based encrypted image extraction for philiascans", cbzName)
+
+		browserCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
+		defer cancel()
+
+		session, err := NewBrowserSession(browserCtx, DomainFromURL(chapterURL, site.GetDomain()), false)
+		if err != nil {
+			log.Printf("[Downloader:%s] Failed to create browser session, falling back to HTTP: %v", cbzName, err)
+		} else {
+			// Build transform function if site supports decryption
+			var transformFn ImageTransformFunc
+			if decryptor, ok := site.(ImageDecryptorSite); ok {
+				transformFn = decryptor.TransformImage
+			}
+
+			chapterImages, dlErr := session.DownloadCanvasImages(chapterURL, imgMethod.WaitSelector, transformFn)
+			// Note: DownloadCanvasImages closes the session internally
+
+			if dlErr != nil {
+				log.Printf("[Downloader:%s] Encrypted extraction failed, falling back to HTTP: %v", cbzName, dlErr)
+			} else if len(chapterImages.Data) == 0 {
+				log.Printf("[Downloader:%s] Encrypted extraction returned 0 images, falling back to HTTP", cbzName)
+			} else {
+				log.Printf("[Downloader:%s] Extracted %d encrypted images", cbzName, len(chapterImages.Data))
+
+				for id, key := range chapterImages.URLs {
+					data, ok := chapterImages.Data[key]
+					if !ok {
+						log.Printf("[Downloader:%s] Image key not in results: %s", cbzName, key)
+						continue
+					}
+					filename := fmt.Sprintf("%03d", id+1)
+					ext := guessExtension(data)
+					if err := os.WriteFile(filepath.Join(chapterDir, filename+"."+ext), data, 0644); err != nil {
+						log.Printf("[Downloader:%s] Failed to save image %s: %v", cbzName, filename, err)
+						continue
+					}
+					successCount++
+				}
+
+				imageURLs = chapterImages.URLs
+				log.Printf("[Downloader:%s] Downloaded %d/%d images from encrypted extraction", cbzName, successCount, len(chapterImages.Data))
+			}
+		}
+	}
+
 	// Fallback to standard flow for non-CF sites or non-JS extraction methods
 	if successCount == 0 {
 		var err error

@@ -3,6 +3,8 @@ package downloader
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -331,6 +333,238 @@ func (bs *BrowserSession) GetHTML() (string, error) {
 		cf.LogCFError("GetHTML", bs.domain, err)
 	}
 	return html, err
+}
+
+// ImageTransformFunc is called on each raw image byte slice fetched from the
+// network. It transforms (decrypts, descrambles, etc.) the data and returns the
+// clean image bytes. If nil, raw data is returned as-is.
+type ImageTransformFunc func(chapterKey []byte, gridSize int, pageIndex int, rawURL string, encryptedData []byte) ([]byte, error)
+
+// DownloadCanvasImages navigates to a chapter page and extracts images using a
+// two-phase approach:
+//
+//  1. Browser phase: navigate to the page, wait for React to render canvas
+//     elements, then extract image URLs and chapter metadata from the React
+//     fiber tree via JS evaluation.
+//  2. HTTP phase: fetch page decryption keys from the API, then fetch each
+//     encrypted image via plain HTTP. If a transform function is provided, it
+//     is called on each image to decrypt/descramble before returning.
+//
+// This replaces the old canvas-based approach where a Web Worker was expected
+// to boot and decrypt images into <canvas> elements (which failed because the
+// worker never started in headless Chrome).
+func (bs *BrowserSession) DownloadCanvasImages(chapterURL, waitSelector string, transform ImageTransformFunc) (*ChapterImages, error) {
+	log.Printf("[Browser:%s] DownloadCanvasImages starting for: %s", bs.domain, chapterURL)
+
+	timeout := 120 * time.Second
+	ctx, cancel := context.WithTimeout(bs.ctx, timeout)
+	defer cancel()
+
+	// Phase 1: Navigate and wait for React to render
+	var tasks []chromedp.Action
+	bs.injectCookies(&tasks)
+	tasks = append(tasks,
+		chromedp.Navigate(chapterURL),
+		chromedp.WaitReady("body"),
+	)
+	if waitSelector != "" {
+		tasks = append(tasks, chromedp.WaitVisible(waitSelector, chromedp.ByQuery))
+	}
+
+	if err := chromedp.Run(ctx, tasks...); err != nil {
+		return nil, fmt.Errorf("navigation failed: %w", err)
+	}
+
+	// Wait for canvas elements to appear in the DOM (React renders them even
+	// though the worker may not decrypt into them).
+	log.Printf("[Browser:%s] Waiting for canvas elements to appear", bs.domain)
+
+	pollJS := `(function() {
+		var canvases = document.querySelectorAll('.page-wrap canvas, #pages-container canvas');
+		return canvases.length;
+	})()`
+
+	var canvasCount int
+	for i := 0; i < 30; i++ {
+		if err := chromedp.Run(ctx, chromedp.Evaluate(pollJS, &canvasCount)); err != nil {
+			return nil, fmt.Errorf("canvas poll failed: %w", err)
+		}
+		if canvasCount > 0 {
+			break
+		}
+		time.Sleep(1 * time.Second)
+	}
+
+	if canvasCount == 0 {
+		return nil, fmt.Errorf("no canvas elements found on chapter page")
+	}
+
+	log.Printf("[Browser:%s] Found %d canvas elements, extracting metadata from React fiber", bs.domain, canvasCount)
+
+	// Extract image URLs and chapterId from React fiber tree.
+	// Each canvas has __reactFiber$... which walks up to memoizedProps.src (the URL).
+	// The chapterId is found in a nearby __reactProps$... element.
+	extractFiberJS := `(function() {
+		var canvases = document.querySelectorAll('.page-wrap canvas, #pages-container canvas');
+		var results = {urls: [], chapterId: null};
+
+		for (var i = 0; i < canvases.length; i++) {
+			var c = canvases[i];
+			var fiberKey = Object.keys(c).find(function(k) { return k.startsWith('__reactFiber'); });
+			if (!fiberKey) continue;
+
+			var fiber = c[fiberKey];
+			var node = fiber;
+			// Walk up the fiber tree to find memoizedProps.src
+			for (var j = 0; j < 10 && node; j++) {
+				if (node.memoizedProps && node.memoizedProps.src) {
+					results.urls.push(node.memoizedProps.src);
+					break;
+				}
+				node = node.return;
+			}
+		}
+
+		// Extract chapterId from __reactProps on .page-wrap elements
+		var pages = document.querySelectorAll('.page-wrap');
+		for (var i = 0; i < pages.length; i++) {
+			var propsKey = Object.keys(pages[i]).find(function(k) { return k.startsWith('__reactProps'); });
+			if (!propsKey) continue;
+			var props = pages[i][propsKey];
+			if (props && props.children && props.children.props && props.children.props.chapterId) {
+				results.chapterId = props.children.props.chapterId;
+				break;
+			}
+		}
+
+		return results;
+	})()`
+
+	var fiberData struct {
+		URLs      []string `json:"urls"`
+		ChapterID *int     `json:"chapterId"`
+	}
+	if err := chromedp.Run(ctx, chromedp.Evaluate(extractFiberJS, &fiberData)); err != nil {
+		return nil, fmt.Errorf("fiber extraction failed: %w", err)
+	}
+
+	if len(fiberData.URLs) == 0 {
+		return nil, fmt.Errorf("no image URLs extracted from React fiber")
+	}
+
+	log.Printf("[Browser:%s] Extracted %d image URLs from fiber, chapterId=%v",
+		bs.domain, len(fiberData.URLs), fiberData.ChapterID)
+
+	// Close browser — we no longer need it
+	bs.Close()
+
+	// Phase 2: Fetch page keys via HTTP API
+	if fiberData.ChapterID == nil {
+		return nil, fmt.Errorf("chapterId not found in React fiber data")
+	}
+
+	pageKeys, err := bs.fetchPageKeys(*fiberData.ChapterID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch page keys: %w", err)
+	}
+
+	// Decode the chapter key from base64
+	chapterKey, err := base64.StdEncoding.DecodeString(pageKeys.ChapterKeyB64)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode chapter key: %w", err)
+	}
+
+	log.Printf("[Browser:%s] Page keys: gridSize=%d, scrambled=%v, key=%d bytes",
+		bs.domain, pageKeys.GridSize, pageKeys.Scrambled, len(chapterKey))
+
+	// Phase 3: Fetch each encrypted image via HTTP and optionally transform
+	result := &ChapterImages{
+		URLs: make([]string, len(fiberData.URLs)),
+		Data: make(map[string][]byte, len(fiberData.URLs)),
+	}
+
+	for i, rawURL := range fiberData.URLs {
+		// Ensure URLs are absolute (the fiber tree contains relative paths like /api/media/...)
+		absURL := rawURL
+		if !strings.HasPrefix(rawURL, "http://") && !strings.HasPrefix(rawURL, "https://") {
+			absURL = "https://" + bs.domain + rawURL
+		}
+		key := rawURL
+		result.URLs[i] = key
+
+		// Fetch encrypted image via HTTP
+		encryptedData, err := httpGet(absURL)
+		if err != nil {
+			log.Printf("[Browser:%s] Failed to fetch image %d: %v", bs.domain, i, err)
+			continue
+		}
+
+		log.Printf("[Browser:%s] Fetched image %d: %d bytes", bs.domain, i, len(encryptedData))
+
+		// Apply transform if provided
+		var imageData []byte
+		if transform != nil {
+			imageData, err = transform(chapterKey, pageKeys.GridSize, i, rawURL, encryptedData)
+			if err != nil {
+				log.Printf("[Browser:%s] Transform failed for image %d: %v", bs.domain, i, err)
+				continue
+			}
+		} else {
+			imageData = encryptedData
+		}
+
+		result.Data[key] = imageData
+	}
+
+	log.Printf("[Browser:%s] DownloadCanvasImages complete: %d/%d images",
+		bs.domain, len(result.Data), len(fiberData.URLs))
+
+	return result, nil
+}
+
+// pageKeys holds the decryption parameters returned by the PhiliaScans API.
+type pageKeys struct {
+	ChapterKeyB64 string `json:"chapterKeyB64"`
+	GridSize      int    `json:"gridSize"`
+	Scrambled     bool   `json:"scrambled"`
+}
+
+// fetchPageKeys fetches the decryption keys for a chapter from the API.
+func (bs *BrowserSession) fetchPageKeys(chapterID int) (*pageKeys, error) {
+	url := fmt.Sprintf("https://%s/api/chapters/%d/page-keys", bs.domain, chapterID)
+	log.Printf("[Browser:%s] Fetching page keys: %s", bs.domain, url)
+
+	body, err := httpGet(url)
+	if err != nil {
+		return nil, fmt.Errorf("page keys request failed: %w", err)
+	}
+
+	var keys pageKeys
+	if err := json.Unmarshal(body, &keys); err != nil {
+		return nil, fmt.Errorf("decode page keys failed: %w", err)
+	}
+
+	return &keys, nil
+}
+
+// httpGet fetches a URL and returns the response body.
+func httpGet(url string) ([]byte, error) {
+	resp, err := http.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+
+	return io.ReadAll(resp.Body)
+}
+
+// decodeBase64 decodes a base64 string into raw bytes.
+func decodeBase64(s string) ([]byte, error) {
+	return base64.StdEncoding.DecodeString(s)
 }
 
 // Close closes the browser session
