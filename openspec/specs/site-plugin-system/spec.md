@@ -40,6 +40,23 @@ The system SHALL provide a registry for site download functions.
 - WHEN the site is not registered
 - THEN an error SHALL be returned indicating the site is not supported
 
+### Requirement: Site Plugin Registry
+The system SHALL provide a registry mapping site names to their `SitePlugin` instances so the UI can fetch chapter lists and download single chapters for any configured site.
+
+#### Scenario: Look up site plugin
+- GIVEN a site name such as "stonescape"
+- WHEN `GetSitePlugin(name)` is called
+- THEN it SHALL return a `downloader.SitePlugin` instance for that site
+- AND it SHALL return nil if the site is not registered
+
+#### Scenario: Download a single chapter via registry
+- GIVEN a registered site and a chapter URL
+- WHEN `DownloadSingleChapter(ctx, manga, chapterURL, cbzName, progressCallback)` is called
+- THEN it SHALL build a `DownloadConfig` from the manga data and the site's plugin
+- AND SHALL call `Manager.DownloadSingleChapter` to download just that chapter
+- AND all sites SHALL register this chapter-download function via `config.RegisterChapterDownload` during initialization
+- AND the whole-manga download functions SHALL continue to be registered via `config.RegisterSite` for legacy tasks
+
 ### Requirement: Extraction Methods
 The system SHALL support multiple chapter and image extraction strategies.
 

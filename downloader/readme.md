@@ -32,18 +32,22 @@ Sites without CF protection (`NeedsCFBypass() = false`) work normally with zero 
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                     Download Queue                          │
-│              (config.ExecuteSiteDownload)                   │
+│   (config.AddChapterTask → ExecuteChapterDownload for each  │
+│    single chapter; legacy whole-manga via ExecuteSiteDownload│
 └───────────────────────┬─────────────────────────────────────┘
                         │
                         ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                  Site Download Function                      │
-│              (e.g., StonescapeDownloadChapters)             │
+│            (sites.DownloadSingleChapter → Manager.           │
+│              DownloadSingleChapter for one chapter; legacy   │
+│              e.g. StonescapeDownloadChapters for whole manga)│
 │                                                              │
 │  ┌────────────────────────────────────────────────────┐    │
 │  │  1. Create SitePlugin instance                      │    │
 │  │  2. Create DownloadConfig                           │    │
-│  │  3. Create Manager and call Download()             │    │
+│  │  3. Create Manager and call Download() or           │    │
+│  │     DownloadSingleChapter()                         │    │
 │  └────────────────────────────────────────────────────┘    │
 └───────────────────────┬─────────────────────────────────────┘
                         │
@@ -246,20 +250,27 @@ func (s *MySite) GetChapterImages(ctx context.Context, chapterURL string) ([]str
 }
 ```
 
-### Step 2: Create the Download Entry Point
+### Step 2: Create the Download Entry Points
+
+Per-chapter downloads (used by the current UI) and the legacy whole-manga path both delegate to the Manager:
 
 ```go
-func MySiteDownloadChapters(ctx context.Context, manga *config.Bookmarks, progressCallback func(string, float64, int, int, int)) error {
-    site := &MySite{}
-    
-    config := &downloader.DownloadConfig{
+func MySiteDownloadSingleChapter(ctx context.Context, manga *config.Bookmarks, chapterURL, cbzName string, progressCallback func(string, float64, int, int, int)) error {
+    cfg := &downloader.DownloadConfig{
         Manga:            manga,
-        Site:             site,
+        Site:             &MySite{},
         ProgressCallback: progressCallback,
     }
+    return downloader.NewManager(cfg).DownloadSingleChapter(ctx, chapterURL, cbzName)
+}
 
-    manager := downloader.NewManager(config)
-    return manager.Download(ctx)
+func MySiteDownloadChapters(ctx context.Context, manga *config.Bookmarks, progressCallback func(string, float64, int, int, int)) error {
+    cfg := &downloader.DownloadConfig{
+        Manga:            manga,
+        Site:             &MySite{},
+        ProgressCallback: progressCallback,
+    }
+    return downloader.NewManager(cfg).Download(ctx)
 }
 ```
 
@@ -271,8 +282,11 @@ In `sites/siteRegistry.go`:
 func init() {
     // ... existing sites ...
     config.RegisterSite("mysite", MySiteDownloadChapters)
+    config.RegisterChapterDownload(MySiteDownloadSingleChapter)
 }
 ```
+
+The chapter download function is registered once per site so the queue can dispatch single-chapter tasks for it.
 
 ### Step 4: Add to sites.json
 
@@ -421,6 +435,22 @@ func (s *MySite) GetChapterImages(ctx context.Context, chapterURL string) ([]str
     return images, nil
 }
 ```
+
+## Per-Chapter Downloads
+
+Since the UI refactor, the app downloads chapters individually instead of whole mangas. The queue dispatches a single chapter through `sites.DownloadSingleChapter`, which calls `Manager.DownloadSingleChapter`:
+
+```go
+func DownloadSingleChapter(ctx context.Context, manga *config.Bookmarks, chapterURL, cbzName string, progressCallback func(string, float64, int, int, int)) error {
+    site := sites.GetSitePlugin(manga.Site)   // look up the SitePlugin by site name
+    cfg := &downloader.DownloadConfig{Manga: manga, Site: site, ProgressCallback: progressCallback}
+    return downloader.NewManager(cfg).DownloadSingleChapter(ctx, chapterURL, cbzName)
+}
+```
+
+- All sites register this entry point once via `config.RegisterChapterDownload(DownloadSingleChapter)` in `sites/siteRegistry.go`.
+- The legacy whole-manga path (`manager.Download(ctx)`) is still registered per site via `config.RegisterSite` and is used when a task has no chapter data.
+- `DownloadSingleChapter` reports progress scaled to a total of 1 chapter, so the per-chapter progress bar fills from 0.0 to 1.0 for that single chapter.
 
 ## What the Downloader Handles Automatically
 

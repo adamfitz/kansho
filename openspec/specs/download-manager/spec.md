@@ -27,8 +27,26 @@ The Manager SHALL execute the full download workflow for a single manga title.
 - GIVEN a download is in progress
 - WHEN a ProgressCallback is provided in the config
 - THEN the callback SHALL be invoked with: status message, progress fraction (0.0 to 1.0), actual chapter number, current download index, and total chapters found
+- AND the progress fraction SHALL advance in steps of `1/newChaptersToDownload` per chapter, starting from `0` for the first chapter
 - AND during retry backoff, the callback SHALL report the retry status (e.g., "Retrying chapter 5 in 4s (attempt 2/3)...")
 - AND on cancellation, the callback SHALL report "Cancelling..." before returning
+
+### Requirement: Single Chapter Download
+The Manager SHALL support downloading a single chapter to produce one CBZ archive, without fetching or filtering the full chapter list.
+
+#### Scenario: Download a single chapter
+- GIVEN a configured DownloadConfig with manga data and a site plugin
+- WHEN `Manager.DownloadSingleChapter(ctx, chapterURL, cbzName)` is called
+- THEN the system SHALL download the images of the given chapter URL only
+- AND SHALL package them into the given CBZ filename in the manga's configured location
+- AND SHALL report progress through the config's ProgressCallback using a total of 1 chapter
+- AND SHALL return without error on success
+
+#### Scenario: Cancel a single chapter download
+- GIVEN a single chapter download is in progress
+- WHEN the context is cancelled
+- THEN the download SHALL abort with the context error
+- AND SHALL NOT create a partial CBZ archive
 
 ### Requirement: Chapter Download
 Each chapter download SHALL fetch page images, convert them to JPEG, and package them as a CBZ (ZIP) archive.

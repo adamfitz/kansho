@@ -12,9 +12,10 @@ import (
 // with a gradient background.
 //
 // The layout structure is:
-// - Background: Purple gradient (45° angle)
-// - Header: Application title and subtitle (top)
-// - Content Area: Two-column layout
+//   - Background: Purple gradient (45° angle)
+//   - Header: Application title and subtitle (top) with the download queue
+//     summary button on the right
+//   - Content Area: Two-column layout
 //   - Left Column: Manga list (top 50%) and Edit Manga form (bottom 50%)
 //   - Right Column: Chapter list (100%)
 //
@@ -38,9 +39,14 @@ func BuildMainLayout(window fyne.Window) fyne.CanvasObject {
 		GradientAngle,      // 45 degree angle
 	)
 
+	// Download queue summary button (top-right of the header)
+	// Shows overall progress across all chapters in the download queue
+	downloadQueueButton := NewDownloadQueueButton(state)
+
 	// Create the header component
-	// Shows application title "鑑賞 kansho" and subtitle
-	header := NewHeader()
+	// Shows application title "鑑賞 kansho" and subtitle, with the download
+	// queue summary button on the right
+	header := NewHeader(downloadQueueButton.Card)
 
 	// Create the three main view components
 	// Each view is self-contained and manages its own state through callbacks
@@ -58,8 +64,9 @@ func BuildMainLayout(window fyne.Window) fyne.CanvasObject {
 	mangaListView.SetEditMangaView(editMangaView)
 
 	// Chapter List View (right card)
-	// Displays chapters for the currently selected manga
-	chapterListView := NewChapterListView(state)
+	// Displays chapters for the currently selected manga with per-chapter
+	// progress bars and download controls
+	chapterListView := NewChapterListView(state, downloadQueueButton)
 
 	// Assemble the left column
 	// This contains the manga list (top) and edit manga form (bottom)
