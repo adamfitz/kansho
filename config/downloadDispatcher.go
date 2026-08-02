@@ -39,3 +39,32 @@ func getRegisteredSiteNames() []string {
 	}
 	return names
 }
+
+// ChapterDownloadFunc downloads a single chapter of a manga.
+// Parameters: context, manga, chapter URL, chapter CBZ filename, progress callback
+type ChapterDownloadFunc func(context.Context, *Bookmarks, string, string, func(string, float64, int, int, int)) error
+
+// registeredChapterDownload is the generic single-chapter download dispatcher.
+// It is registered by the sites package during initialization.
+var registeredChapterDownload ChapterDownloadFunc
+
+// RegisterChapterDownload registers the generic single-chapter download function.
+// This should be called during initialization by the sites package.
+func RegisterChapterDownload(downloadFunc ChapterDownloadFunc) {
+	registeredChapterDownload = downloadFunc
+	log.Printf("[Queue] Registered chapter download dispatcher")
+}
+
+// ExecuteChapterDownload dispatches a single-chapter download.
+// Parameters:
+//   - ctx: cancellable context for aborting the download
+//   - manga: the manga the chapter belongs to
+//   - chapterURL: the URL of the chapter on the target site
+//   - cbzName: the CBZ filename to produce, e.g. "ch001.cbz"
+//   - progressCallback: callback for reporting download progress
+func ExecuteChapterDownload(ctx context.Context, manga *Bookmarks, chapterURL, cbzName string, progressCallback func(string, float64, int, int, int)) error {
+	if registeredChapterDownload == nil {
+		return fmt.Errorf("no chapter download dispatcher registered")
+	}
+	return registeredChapterDownload(ctx, manga, chapterURL, cbzName, progressCallback)
+}

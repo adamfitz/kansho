@@ -10,10 +10,13 @@ import (
 	"kansho/cf"
 )
 
-// DownloadTask represents a single manga download task
+// DownloadTask represents a single download task. Since the UI refactor, a task
+// is a single chapter of a manga (previously a task was an entire manga).
 type DownloadTask struct {
 	ID            string    // Unique ID for this task
 	Manga         Bookmarks // Changed from pointer to value - this creates a copy!
+	Chapter       string    // CBZ filename being downloaded, e.g. "ch001.cbz" ("" for legacy manga-level tasks)
+	ChapterURL    string    // URL of the chapter to download ("" for legacy manga-level tasks)
 	Status        string    // "queued", "downloading", "completed", "cancelled", "failed", "waiting_cf"
 	Progress      float64   // 0.0 to 1.0
 	StatusMessage string
@@ -70,7 +73,54 @@ func (q *DownloadQueue) SetCallbacks(
 	q.onQueueEmpty = onEmpty
 }
 
-// AddTask adds a manga download to the queue
+// AddChapterTask adds a single chapter of a manga to the download queue.
+//
+// Parameters:
+//   - manga: The manga bookmark the chapter belongs to
+//   - chapter: The CBZ filename to produce, e.g. "ch001.cbz"
+//   - chapterURL: The URL of the chapter on the target site
+func (q *DownloadQueue) AddChapterTask(manga *Bookmarks, chapter, chapterURL string) (*DownloadTask, error) {
+	q.mu.Lock()
+
+	// Check if this chapter is already in queue
+	for _, task := range q.tasks {
+		if task.Manga.Title == manga.Title && task.Chapter == chapter {
+			q.mu.Unlock()
+			return nil, fmt.Errorf("chapter '%s' for '%s' is already in download queue", chapter, manga.Title)
+		}
+	}
+
+	// CRITICAL FIX: Create a copy of the manga data
+	// This prevents the task from being affected by changes to the original bookmarks
+	mangaCopy := *manga
+
+	task := &DownloadTask{
+		ID:            fmt.Sprintf("%s-%s-%d", manga.Shortname, chapter, len(q.tasks)),
+		Manga:         mangaCopy, // Store the copy, not a pointer
+		Chapter:       chapter,
+		ChapterURL:    chapterURL,
+		Status:        "queued",
+		StatusMessage: "Waiting in queue...",
+		Progress:      0.0,
+	}
+
+	q.tasks = append(q.tasks, task)
+	q.mu.Unlock()
+
+	log.Printf("[Queue] Added chapter task: %s - %s (%s)", task.Manga.Title, task.Chapter, task.ID)
+
+	if q.onTaskAdded != nil {
+		q.onTaskAdded(task)
+	}
+
+	// Start processing if not already running
+	go q.processQueue()
+
+	return task, nil
+}
+
+// AddTask adds a legacy whole-manga download to the queue.
+// Deprecated: use AddChapterTask for per-chapter downloads.
 func (q *DownloadQueue) AddTask(manga *Bookmarks) (*DownloadTask, error) {
 	q.mu.Lock()
 
@@ -109,14 +159,43 @@ func (q *DownloadQueue) AddTask(manga *Bookmarks) (*DownloadTask, error) {
 	return task, nil
 }
 
-// RetryTask retries a task that failed due to CF challenge
+// GetTaskForChapter returns the task for the given manga title and chapter,
+// or nil if no such task is in the queue.
+func (q *DownloadQueue) GetTaskForChapter(mangaTitle, chapter string) *DownloadTask {
+	q.mu.RLock()
+	defer q.mu.RUnlock()
+
+	for _, task := range q.tasks {
+		if task.Manga.Title == mangaTitle && task.Chapter == chapter {
+			return task
+		}
+	}
+	return nil
+}
+
+// ChapterQueued returns true if a task for the given manga title and chapter
+// is already present in the queue.
+func (q *DownloadQueue) ChapterQueued(mangaTitle, chapter string) bool {
+	q.mu.RLock()
+	defer q.mu.RUnlock()
+
+	for _, task := range q.tasks {
+		if task.Manga.Title == mangaTitle && task.Chapter == chapter {
+			return true
+		}
+	}
+	return false
+}
+
+// RetryTask retries a task that did not finish: it failed, was cancelled, or
+// is waiting on a CF challenge.
 func (q *DownloadQueue) RetryTask(id string) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
 	for _, task := range q.tasks {
 		if task.ID == id {
-			if task.Status == "waiting_cf" || task.Status == "failed" {
+			if task.Status == "waiting_cf" || task.Status == "failed" || task.Status == "cancelled" {
 				log.Printf("[Queue] Retrying task: %s", task.Manga.Title)
 				task.Status = "queued"
 				task.StatusMessage = "Retrying..."
@@ -147,6 +226,27 @@ func (q *DownloadQueue) GetTasks() []*DownloadTask {
 	return tasksCopy
 }
 
+// RemoveTask removes any task from the queue by ID, regardless of status.
+// It is used to drop stale (non-active) tasks so a chapter can be re-queued.
+func (q *DownloadQueue) RemoveTask(id string) error {
+	q.mu.Lock()
+
+	for i, task := range q.tasks {
+		if task.ID == id {
+			q.tasks = append(q.tasks[:i], q.tasks[i+1:]...)
+			q.mu.Unlock()
+
+			if q.onTaskRemoved != nil {
+				q.onTaskRemoved(id)
+			}
+			return nil
+		}
+	}
+
+	q.mu.Unlock()
+	return fmt.Errorf("task not found: %s", id)
+}
+
 // GetTask returns a specific task by ID
 func (q *DownloadQueue) GetTask(id string) *DownloadTask {
 	q.mu.RLock()
@@ -166,7 +266,7 @@ func (q *DownloadQueue) CancelTask(id string) error {
 
 	for i, task := range q.tasks {
 		if task.ID == id {
-			if task.Status == "downloading" && task.CancelFunc != nil {
+			if (task.Status == "downloading" || task.Status == "waiting_cf") && task.CancelFunc != nil {
 				log.Printf("[Queue] Cancelling active download: %s", task.Manga.Title)
 				// Immediately show cancelling status to the user
 				task.Status = "cancelled"
@@ -232,6 +332,72 @@ func (q *DownloadQueue) CancelAll() {
 	q.mu.Unlock()
 
 	// Step 2: Trigger context cancellations (no lock held)
+	for _, cancel := range cancelFuncs {
+		cancel()
+	}
+}
+
+// CancelMangaTasks cancels every active task (downloading, waiting on a CF
+// challenge, or queued) whose manga title matches. Completed, failed and
+// already-cancelled tasks are left untouched.
+func (q *DownloadQueue) CancelMangaTasks(mangaTitle string) {
+	q.mu.Lock()
+
+	log.Printf("[Queue] Cancelling tasks for manga: %s", mangaTitle)
+
+	var cancelFuncs []context.CancelFunc
+	for _, task := range q.tasks {
+		if task.Manga.Title != mangaTitle {
+			continue
+		}
+		if (task.Status == "downloading" || task.Status == "waiting_cf") && task.CancelFunc != nil {
+			task.Status = "cancelled"
+			task.StatusMessage = "Cancelling..."
+			cancelFuncs = append(cancelFuncs, task.CancelFunc)
+		} else if task.Status == "queued" {
+			task.Status = "cancelled"
+			task.StatusMessage = "Cancelled by user"
+		}
+
+		if q.onTaskUpdated != nil {
+			q.onTaskUpdated(task)
+		}
+	}
+
+	q.mu.Unlock()
+
+	for _, cancel := range cancelFuncs {
+		cancel()
+	}
+}
+
+// ClearAll empties the queue entirely, cancelling any tasks that are actively
+// downloading or waiting on a CF challenge first. Unlike CancelAll, the tasks
+// are removed outright (nothing is left to retry).
+func (q *DownloadQueue) ClearAll() {
+	q.mu.Lock()
+
+	log.Printf("[Queue] Clearing all tasks (%d total)", len(q.tasks))
+
+	var cancelFuncs []context.CancelFunc
+	removed := make([]string, 0, len(q.tasks))
+	for _, task := range q.tasks {
+		if (task.Status == "downloading" || task.Status == "waiting_cf") && task.CancelFunc != nil {
+			cancelFuncs = append(cancelFuncs, task.CancelFunc)
+		}
+		removed = append(removed, task.ID)
+	}
+	q.tasks = nil
+
+	onTaskRemoved := q.onTaskRemoved
+	q.mu.Unlock()
+
+	for _, id := range removed {
+		if onTaskRemoved != nil {
+			onTaskRemoved(id)
+		}
+	}
+
 	for _, cancel := range cancelFuncs {
 		cancel()
 	}
@@ -349,7 +515,12 @@ func (q *DownloadQueue) executeTask(task *DownloadTask) {
 	// CRITICAL: Pass a pointer to the manga copy
 	// This ensures the download uses the snapshot taken when the task was created
 	log.Printf("[Queue] Starting download for: %s to location: %s", task.Manga.Title, task.Manga.Location)
-	err := ExecuteSiteDownload(ctx, &task.Manga, progressCallback)
+	var err error
+	if task.Chapter != "" && task.ChapterURL != "" {
+		err = ExecuteChapterDownload(ctx, &task.Manga, task.ChapterURL, task.Chapter, progressCallback)
+	} else {
+		err = ExecuteSiteDownload(ctx, &task.Manga, progressCallback)
+	}
 
 	q.mu.Lock()
 	if err != nil {
@@ -387,6 +558,16 @@ func (q *DownloadQueue) executeTask(task *DownloadTask) {
 
 	if q.onTaskUpdated != nil {
 		q.onTaskUpdated(task)
+	}
+
+	if task.Status == "completed" {
+		// Successfully downloaded chapters are removed from the queue so they do
+		// not linger. A manga title disappears from the queue once all of its
+		// queued chapters have completed. Unfinished chapters (failed, cancelled
+		// or waiting on a CF challenge) are kept so the user can retry them.
+		if err := q.RemoveTask(task.ID); err != nil {
+			log.Printf("[Queue] Failed to remove completed task %s: %v", task.ID, err)
+		}
 	}
 
 	log.Printf("[Queue] Task completed: %s (status: %s)", task.Manga.Title, task.Status)

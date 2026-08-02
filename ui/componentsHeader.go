@@ -4,7 +4,6 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/layout"
 )
 
 // NewHeader creates the application header with title and subtitle.
@@ -14,11 +13,15 @@ import (
 // The header includes:
 // - Large, bold title with Japanese characters and romanization
 // - Smaller subtitle with application description
-// - Spacer at the bottom for layout purposes
+// - An optional right-side object (e.g. the download queue summary button)
+//
+// Parameters:
+//   - rightObject: An optional fyne.CanvasObject placed on the right of the
+//     header. Pass nil to render the header without a right-side object.
 //
 // Returns:
 //   - fyne.CanvasObject: A container with the formatted header content
-func NewHeader() fyne.CanvasObject {
+func NewHeader(rightObject fyne.CanvasObject) fyne.CanvasObject {
 	// Create the main title text with Japanese characters and romanization
 	// "鑑賞" means "appreciation" or "viewing" in Japanese
 	titleText := canvas.NewText("鑑賞 kansho", TextColorLight)
@@ -36,10 +39,24 @@ func NewHeader() fyne.CanvasObject {
 
 	// Combine title and subtitle in a vertical box with spacing
 	// layout.NewSpacer() adds flexible space that pushes content apart
-	header := container.NewVBox(
+	titleAndSubtitle := container.NewVBox(
 		titleText,
 		subtitleText,
-		layout.NewSpacer(), // Add space below header to separate from content
+	)
+
+	var right fyne.CanvasObject
+	if rightObject != nil {
+		right = container.NewPadded(rightObject)
+	}
+
+	// Border layout places the optional right object at the right edge while
+	// keeping the title/subtitle centered in the remaining space
+	header := container.NewBorder(
+		nil,
+		nil,
+		nil,
+		right,
+		titleAndSubtitle,
 	)
 
 	return header

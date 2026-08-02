@@ -1,7 +1,7 @@
 # download-queue Specification
 
 ## Purpose
-Provide a FIFO download queue that manages multiple manga download tasks with lifecycle tracking, cancellation, and retry support.
+Provide a FIFO download queue that manages single-chapter download tasks with lifecycle tracking, cancellation, and retry support. Each task represents one chapter of a manga (since the UI refactor, tasks are no longer whole-manga downloads).
 
 ## Requirements
 
@@ -32,24 +32,31 @@ The queue SHALL manage download tasks through defined states.
 - WHEN a CF challenge is detected
 - THEN its status SHALL be "waiting_cf"
 
-#### Scenario: Add task to queue
+#### Scenario: Add chapter task to queue
 - GIVEN the queue is empty
-- WHEN a manga bookmark is added as a task
-- THEN a task with a unique ID SHALL be created using `fmt.Sprintf("%s-%d", manga.Shortname, len(q.tasks))`
+- WHEN `AddChapterTask(manga, chapter, chapterURL)` is called
+- THEN a task with a unique ID SHALL be created using `fmt.Sprintf("%s-%s-%d", manga.Shortname, chapter, len(q.tasks))`
+- AND the task SHALL store the chapter CBZ filename and its download URL
 - AND a value copy of the manga data SHALL be stored (not a pointer) to prevent external mutation
 - AND a callback SHALL notify UI of the new task
 - AND queue processing SHALL start automatically in a goroutine
 
-#### Scenario: Duplicate manga rejected
-- GIVEN a manga is already in the queue
-- WHEN the same manga title is added again
-- THEN the operation SHALL return an error indicating the manga is already queued
+#### Scenario: Duplicate chapter rejected
+- GIVEN a chapter task for a manga is already in the queue
+- WHEN `AddChapterTask` is called for the same manga title and chapter filename
+- THEN the operation SHALL return an error indicating the chapter is already queued
+
+#### Scenario: Look up task for a chapter
+- GIVEN tasks exist in the queue
+- WHEN `GetTaskForChapter(mangaTitle, chapter)` is called
+- THEN it SHALL return the matching task, or nil if none exists
+- AND `ChapterQueued(mangaTitle, chapter)` SHALL return true if such a task exists
 
 ### Requirement: FIFO Processing
-The queue SHALL process tasks in first-in-first-out order.
+The queue SHALL process chapter tasks in first-in-first-out order.
 
-#### Scenario: Process queued tasks sequentially
-- GIVEN multiple tasks are in the queue
+#### Scenario: Process queued chapter tasks sequentially
+- GIVEN multiple chapter tasks are in the queue
 - WHEN processing starts
 - THEN tasks SHALL be executed in the order they were added
 - AND only one task SHALL be processed at a time
@@ -141,7 +148,8 @@ The queue SHALL notify the UI of state changes through registered callbacks.
 Each downloading task SHALL use a cancellable context for aborting in-flight operations.
 
 #### Scenario: Task context creation
-- GIVEN a queued task begins processing
+- GIVEN a queued chapter task begins processing
 - WHEN the executor goroutine creates a cancellable context
 - THEN the context SHALL be stored in `task.CancelFunc` for external cancellation
-- AND the context SHALL propagate through `Manager.Download(ctx)` to all sub-operations (chapter fetching, image downloads, retry sleeps, rate limit waits)
+- AND for chapter tasks the context SHALL propagate through `ExecuteChapterDownload(ctx, manga, chapterURL, cbzName, progressCallback)` to all sub-operations (chapter fetching, image downloads, retry sleeps, rate limit waits)
+- AND for legacy manga-level tasks the context SHALL propagate through `Manager.Download(ctx)` to all sub-operations

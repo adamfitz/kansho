@@ -102,7 +102,8 @@ func (m *Manager) Download(ctx context.Context) error {
 		chapterURL := chapterMap[cbzName]
 		actualChapterNum := extractChapterNumber(cbzName)
 		currentDownload := idx + 1
-		progress := float64(currentDownload) / float64(newChaptersToDownload)
+		// Progress at the START of this chapter (each chapter contributes 1/n of total progress)
+		progress := float64(currentDownload-1) / float64(newChaptersToDownload)
 
 		if callback != nil {
 			callback(
@@ -135,6 +136,34 @@ func (m *Manager) Download(ctx context.Context) error {
 			newChaptersToDownload,
 			totalChaptersFound,
 		)
+	}
+
+	return nil
+}
+
+// DownloadSingleChapter downloads a single chapter to the manga's configured
+// location. This is used by the UI's per-chapter download feature.
+//
+// Parameters:
+//   - ctx: cancellable context for aborting the download
+//   - chapterURL: the URL of the chapter on the target site
+//   - cbzName: the CBZ filename to produce, e.g. "ch001.cbz"
+func (m *Manager) DownloadSingleChapter(ctx context.Context, chapterURL, cbzName string) error {
+	callback := m.config.ProgressCallback
+
+	actualChapterNum := extractChapterNumber(cbzName)
+
+	if callback != nil {
+		callback(fmt.Sprintf("Downloading chapter %d", actualChapterNum), 0.0, actualChapterNum, 1, 1)
+	}
+
+	err := m.downloadChapter(ctx, chapterURL, cbzName, actualChapterNum, 1, 1, 1, 0.0)
+	if err != nil {
+		return err
+	}
+
+	if callback != nil {
+		callback(fmt.Sprintf("Download complete: %s", cbzName), 1.0, actualChapterNum, 1, 1)
 	}
 
 	return nil
@@ -324,7 +353,7 @@ func (m *Manager) downloadChapter(ctx context.Context, chapterURL, cbzName strin
 			}
 
 			if callback != nil {
-				imgProgress := progress + (float64(imgIdx) / float64(len(imageURLs)) / float64(newChaptersToDownload))
+				imgProgress := progress + (float64(imgIdx+1) / float64(len(imageURLs)) / float64(newChaptersToDownload))
 				callback(
 					fmt.Sprintf("Chapter %d/%d: Downloading image %d/%d", actualChapterNum, totalChaptersFound, imgIdx+1, len(imageURLs)),
 					imgProgress,
@@ -361,7 +390,7 @@ func (m *Manager) downloadChapter(ctx context.Context, chapterURL, cbzName strin
 	if callback != nil {
 		callback(
 			fmt.Sprintf("Chapter %d/%d: Creating CBZ file...", actualChapterNum, totalChaptersFound),
-			progress,
+			float64(currentDownload)/float64(newChaptersToDownload),
 			actualChapterNum,
 			currentDownload,
 			totalChaptersFound,

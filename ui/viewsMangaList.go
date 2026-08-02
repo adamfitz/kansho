@@ -146,7 +146,31 @@ func (h *hoverLabel) updateTooltipPosition(pos fyne.Position) {
 
 func (h *hoverLabel) hideTooltip() {
 	if h.overlayShown && h.tooltipContainer != nil {
-		h.window.Canvas().Overlays().Remove(h.tooltipContainer)
+		overlays := h.window.Canvas().Overlays()
+
+		// Preserve any overlays that are above the tooltip before removing it.
+		// Fyne's OverlayStack.Remove removes the given overlay AND everything
+		// above it, so removing a tooltip that sits below an open modal dialog
+		// (e.g. the cf Challenge dialog) would silently destroy that dialog.
+		var above []fyne.CanvasObject
+		found := false
+		for _, o := range overlays.List() {
+			if o == h.tooltipContainer {
+				found = true
+				continue
+			}
+			if found {
+				above = append(above, o)
+			}
+		}
+
+		overlays.Remove(h.tooltipContainer)
+
+		// Restore the overlays that were above the tooltip, keeping their order.
+		for _, o := range above {
+			overlays.Add(o)
+		}
+
 		h.overlayShown = false
 		h.tooltipContainer = nil
 		h.tooltipLabel = nil
