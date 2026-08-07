@@ -165,7 +165,10 @@ The system SHALL display an overall download progress summary instead of a dedic
 - AND it SHALL show the overall manga and chapter counts remaining in the queue
 - AND it SHALL list each manga title, the chapter currently being processed for it, and its status
 - AND each task row SHALL show its chapter name on a single line, truncating with an ellipsis if it does not fit
-- AND it SHALL NOT show per-task progress bars
+- AND when a chapter is actively downloading, a prominent "Currently Downloading" section SHALL be shown at the top of the pop-up
+- AND that section SHALL be split in two halves: the left half SHALL show the chapter currently being downloaded, and the right half SHALL show a live progress bar for that chapter next to a "Stop" button
+- AND clicking "Stop" SHALL cancel the active download while leaving the task in the queue so it can be started again
+- AND the remaining queue tasks SHALL be listed below the "Currently Downloading" section
 - AND the list SHALL be constrained to the pop-up size and SHALL show a scrollbar when the queue is too long to fit
 - AND a global "Cancel All" button SHALL be shown in the pop-up header that cancels every queued/downloading task
 - AND a "Clear All" button SHALL be shown in the pop-up header that removes every task from the queue entirely (cancelling any active downloads), leaving nothing to retry
@@ -179,19 +182,20 @@ The system SHALL display an overall download progress summary instead of a dedic
 - THEN the task SHALL be removed from the queue immediately
 - AND the manga title SHALL be removed from the queue once all of its queued chapters have finished successfully
 
-#### Scenario: Retry unfinished chapters
+#### Scenario: Start or retry unfinished chapters
 - GIVEN a chapter task did not finish downloading (failed, cancelled, or waiting on a CF challenge)
 - WHEN the task remains in the queue
 - THEN the task SHALL stay in the queue
-- AND a "Retry" button SHALL be shown next to that chapter in the pop-up
-- AND clicking "Retry" SHALL re-queue the chapter for download
+- AND a "Start" button SHALL be shown next to a chapter the user stopped or cancelled
+- AND a "Retry" button SHALL be shown next to a chapter that failed or is waiting on a CF challenge
+- AND clicking "Start" or "Retry" SHALL re-queue the chapter for download
 
 #### Scenario: Cancel all downloads for a manga
 - GIVEN the download queue pop-up is open
 - WHEN the user clicks a manga group's "Cancel All" button
 - THEN every queued or downloading task for that manga title SHALL be cancelled
 - AND tasks for other manga SHALL be left untouched
-- AND the cancelled tasks SHALL remain in the queue with a "Retry" button
+- AND the cancelled tasks SHALL remain in the queue with a "Start" button
 
 #### Scenario: Empty download queue
 - GIVEN the queue is empty

@@ -52,6 +52,13 @@ The system SHALL extract the manga ID from user-provided MangaDex URLs.
 - WHEN no `/title/` segment exists
 - THEN an error SHALL be returned
 
+#### Scenario: Derive ID from base URL at fetch time
+- GIVEN a MangaDex plugin instance whose manga ID is not pre-set at creation
+- WHEN chapters are fetched via `APIFunc`
+- THEN the system SHALL derive the manga ID from the plugin's base URL and use it for the API request
+- AND an unparseable base URL SHALL result in an error
+- AND the plugin SHALL work both when created from a saved manga record and when re-created from the URL alone (e.g., the UI's remote chapter refresh)
+
 ### Requirement: Chapter Filtering
 The system SHALL skip unavailable or invalid chapters.
 

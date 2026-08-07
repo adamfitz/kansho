@@ -103,11 +103,19 @@ The queue SHALL detect CF challenges and pause affected tasks for manual resolut
 - THEN the task status SHALL be reset to "queued"
 - AND queue processing SHALL restart
 
-### Requirement: Retry Failed Tasks
-The queue SHALL support retrying failed tasks.
+### Requirement: Retry Unfinished Tasks
+The queue SHALL support retrying tasks that did not complete, including failed, cancelled, and CF-blocked tasks.
 
 #### Scenario: Retry failed task
 - GIVEN a task is in "failed" status
+- WHEN `RetryTask` is called with the task ID
+- THEN the task status SHALL be reset to "queued"
+- AND the StatusMessage SHALL be set to "Retrying..."
+- AND the error SHALL be cleared
+- AND queue processing SHALL restart in a goroutine
+
+#### Scenario: Retry cancelled task
+- GIVEN a task is in "cancelled" status (e.g., stopped by the user)
 - WHEN `RetryTask` is called with the task ID
 - THEN the task status SHALL be reset to "queued"
 - AND the StatusMessage SHALL be set to "Retrying..."
