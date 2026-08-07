@@ -36,11 +36,11 @@ func newChapterListViewTest(t *testing.T, location string) (*KanshoAppState, *Ch
 }
 
 // chapterRowParts unwraps the container structure created by createChapterRow.
-func chapterRowParts(item fyne.CanvasObject) (tick *widget.Icon, downloadBtn, xBtn *widget.Button) {
+func chapterRowParts(item fyne.CanvasObject) (tick *widget.Icon, downloadBtn, xBtn *iconButton) {
 	grid := item.(*fyne.Container)
 	rightCell := grid.Objects[2].(*fyne.Container)
 	rightColumn := rightCell.Objects[0].(*fyne.Container)
-	return rightColumn.Objects[0].(*widget.Icon), rightColumn.Objects[1].(*widget.Button), rightColumn.Objects[2].(*widget.Button)
+	return rightColumn.Objects[0].(*widget.Icon), rightColumn.Objects[1].(*iconButton), rightColumn.Objects[2].(*iconButton)
 }
 
 // TestChapterRowDownloadedShowsTick verifies that a chapter that exists on disk
@@ -310,6 +310,54 @@ func TestChapterListDoesNotShowRemoteForNeverRefreshedManga(t *testing.T) {
 	}
 	if view.chapters[0].Name != "ch001.cbz" || !view.chapters[0].Downloaded {
 		t.Fatalf("unexpected chapter: %+v", view.chapters[0])
+	}
+}
+
+// TestRefreshAfterTaskChangeMarksDownloadedOnDisk verifies that a chapter whose
+// download just finished (its completed task has already been removed from the
+// queue) is still shown as downloaded as soon as its CBZ file exists on disk.
+// This covers the case where the UI processes the task removal before the
+// "completed" update, so the queue no longer holds the task.
+func TestRefreshAfterTaskChangeMarksDownloadedOnDisk(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "ch001.cbz"), []byte("cbz"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, view, _ := newChapterListViewTest(t, dir)
+	view.chapters = []*ChapterItem{{Name: "ch001.cbz", Downloaded: false, State: chapterDownloading, Progress: 1.0}}
+
+	view.refreshAfterTaskChange()
+
+	if len(view.chapters) != 1 {
+		t.Fatalf("expected 1 chapter, got %d", len(view.chapters))
+	}
+	ch := view.chapters[0]
+	if !ch.Downloaded {
+		t.Error("chapter exists on disk so it must be marked downloaded")
+	}
+	if ch.State != chapterDownloaded {
+		t.Errorf("expected state chapterDownloaded, got %v", ch.State)
+	}
+	if ch.Progress != 1.0 {
+		t.Errorf("expected progress 1.0, got %v", ch.Progress)
+	}
+}
+
+// TestRefreshAfterTaskChangeKeepsNotDownloadedWhenNotOnDisk verifies that a
+// chapter that is downloading but has not yet written its CBZ file to disk is
+// not falsely marked as downloaded after a queue update.
+func TestRefreshAfterTaskChangeKeepsNotDownloadedWhenNotOnDisk(t *testing.T) {
+	dir := t.TempDir()
+
+	_, view, _ := newChapterListViewTest(t, dir)
+	view.chapters = []*ChapterItem{{Name: "ch001.cbz", Downloaded: false, State: chapterDownloading, Progress: 0.5}}
+
+	view.refreshAfterTaskChange()
+
+	ch := view.chapters[0]
+	if ch.Downloaded {
+		t.Error("chapter is not on disk so it must not be marked downloaded")
 	}
 }
 

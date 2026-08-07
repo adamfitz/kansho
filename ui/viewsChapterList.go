@@ -455,16 +455,15 @@ func (v *ChapterListView) createChapterRow() fyne.CanvasObject {
 	tickIcon := widget.NewIcon(greenTickResource)
 	tickIcon.Hide()
 
-	// Download arrow button for chapters that are not downloaded.
-	downloadButton := widget.NewButtonWithIcon("", theme.DownloadIcon(), nil)
-	downloadButton.Importance = widget.LowImportance
-	downloadButton.Resize(fyne.NewSize(32, 32))
+	// Download arrow icon for chapters that are not downloaded. It is a plain
+	// tappable icon (no button chrome, no hover highlight) so the row controls
+	// stay visually quiet, especially while a download is running.
+	downloadButton := newIconButton(theme.DownloadIcon())
 
-	// Red circle-with-slash button: cancels an active download or deletes the
-	// local chapter file (with confirmation).
-	xButton := widget.NewButtonWithIcon("", redNoEntryResource, nil)
-	xButton.Importance = widget.LowImportance
-	xButton.Resize(fyne.NewSize(32, 32))
+	// Red circle-with-slash icon: cancels an active download or deletes the
+	// local chapter file (with confirmation). Like the download arrow it is a
+	// plain tappable icon with no hover highlight.
+	xButton := newIconButton(redNoEntryResource)
 
 	rightColumn := container.NewHBox(tickIcon, downloadButton, xButton)
 	// The Border places the control column on the far right of its grid cell.
@@ -487,8 +486,8 @@ func (v *ChapterListView) updateChapterRow(id widget.ListItemID, item fyne.Canva
 	rightCell := grid.Objects[2].(*fyne.Container)
 	rightColumn := rightCell.Objects[0].(*fyne.Container)
 	tickIcon := rightColumn.Objects[0].(*widget.Icon)
-	downloadButton := rightColumn.Objects[1].(*widget.Button)
-	xButton := rightColumn.Objects[2].(*widget.Button)
+	downloadButton := rightColumn.Objects[1].(*iconButton)
+	xButton := rightColumn.Objects[2].(*iconButton)
 
 	label.SetText(ch.Name)
 	rowID := int(id)
@@ -501,7 +500,6 @@ func (v *ChapterListView) updateChapterRow(id widget.ListItemID, item fyne.Canva
 		tickIcon.Refresh()
 		downloadButton.Hide()
 		xButton.Enable()
-		xButton.Importance = widget.LowImportance
 		xButton.OnTapped = func() {
 			v.deleteChapterFile(rowID)
 		}
@@ -510,9 +508,7 @@ func (v *ChapterListView) updateChapterRow(id widget.ListItemID, item fyne.Canva
 		progressBar.SetValue(ch.Progress)
 		tickIcon.Hide()
 		downloadButton.Disable()
-		downloadButton.Importance = widget.LowImportance
 		xButton.Enable()
-		xButton.Importance = widget.HighImportance
 		xButton.OnTapped = func() {
 			v.cancelChapterTask(rowID)
 		}
@@ -522,7 +518,6 @@ func (v *ChapterListView) updateChapterRow(id widget.ListItemID, item fyne.Canva
 		tickIcon.Hide()
 		downloadButton.Show()
 		downloadButton.Enable()
-		downloadButton.Importance = widget.LowImportance
 		downloadButton.OnTapped = func() {
 			v.startChapterDownload(rowID)
 		}
@@ -691,6 +686,13 @@ func (v *ChapterListView) refreshAfterTaskChange() {
 		return
 	}
 
+	// Re-read the on-disk chapters for the selected manga. A completed chapter
+	// task is removed from the queue as soon as its download finishes, which can
+	// happen before the UI processes the "completed" update, so the queue alone
+	// cannot be relied on to know that a download succeeded. The disk is the
+	// source of truth for whether a chapter has been downloaded.
+	v.reconcileDownloadedChapters()
+
 	// Reset to the on-disk truth
 	for _, ch := range v.chapters {
 		if ch.Downloaded {
@@ -729,6 +731,26 @@ func (v *ChapterListView) refreshAfterTaskChange() {
 
 	v.chapterList.Refresh()
 	v.updateDownloadAllButton()
+}
+
+// reconcileDownloadedChapters marks every chapter in the list as downloaded when
+// its CBZ file currently exists on disk for the selected manga. The on-disk
+// state is the source of truth for whether a chapter has been downloaded: a
+// chapter's completed queue task is removed from the queue as soon as it
+// finishes, so the UI cannot rely on seeing the task to know the download
+// succeeded.
+func (v *ChapterListView) reconcileDownloadedChapters() {
+	manga := v.state.GetSelectedManga()
+	if manga == nil || manga.Location == "" {
+		return
+	}
+	onDisk := make(map[string]bool)
+	for _, name := range localChapterNames(manga) {
+		onDisk[name] = true
+	}
+	for _, ch := range v.chapters {
+		ch.Downloaded = onDisk[ch.Name]
+	}
 }
 
 // findChapter returns the chapter item for the given manga title and chapter,
