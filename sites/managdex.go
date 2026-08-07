@@ -80,6 +80,15 @@ func (m *MangadexSite) GetChapterExtractionMethod() *downloader.ChapterExtractio
 	return &downloader.ChapterExtractionMethod{
 		Type: "api",
 		APIFunc: func(baseURL string, client *downloader.APIClient) ([]map[string]string, error) {
+			// The site plugin may be constructed without a pre-set manga ID
+			// (e.g. GetSitePlugin for UI chapter refresh), so derive it from
+			// the base URL here rather than relying on the struct field.
+			mangaID, err := extractMangaDexID(baseURL)
+			if err != nil {
+				return nil, fmt.Errorf("failed to extract manga ID from %s: %w", baseURL, err)
+			}
+			m.mangaID = mangaID
+
 			// Get all chapters from API with pagination
 			allChapters, err := m.getAllChaptersAPI(client)
 			if err != nil {
