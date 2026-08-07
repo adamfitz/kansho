@@ -36,11 +36,11 @@ func newChapterListViewTest(t *testing.T, location string) (*KanshoAppState, *Ch
 }
 
 // chapterRowParts unwraps the container structure created by createChapterRow.
-func chapterRowParts(item fyne.CanvasObject) (tick *widget.Icon, downloadBtn, xBtn *widget.Button) {
+func chapterRowParts(item fyne.CanvasObject) (tick *widget.Icon, downloadBtn, xBtn *iconButton) {
 	grid := item.(*fyne.Container)
 	rightCell := grid.Objects[2].(*fyne.Container)
 	rightColumn := rightCell.Objects[0].(*fyne.Container)
-	return rightColumn.Objects[0].(*widget.Icon), rightColumn.Objects[1].(*widget.Button), rightColumn.Objects[2].(*widget.Button)
+	return rightColumn.Objects[0].(*widget.Icon), rightColumn.Objects[1].(*iconButton), rightColumn.Objects[2].(*iconButton)
 }
 
 // TestChapterRowDownloadedShowsTick verifies that a chapter that exists on disk

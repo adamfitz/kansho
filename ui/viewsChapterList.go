@@ -455,16 +455,15 @@ func (v *ChapterListView) createChapterRow() fyne.CanvasObject {
 	tickIcon := widget.NewIcon(greenTickResource)
 	tickIcon.Hide()
 
-	// Download arrow button for chapters that are not downloaded.
-	downloadButton := widget.NewButtonWithIcon("", theme.DownloadIcon(), nil)
-	downloadButton.Importance = widget.LowImportance
-	downloadButton.Resize(fyne.NewSize(32, 32))
+	// Download arrow icon for chapters that are not downloaded. It is a plain
+	// tappable icon (no button chrome, no hover highlight) so the row controls
+	// stay visually quiet, especially while a download is running.
+	downloadButton := newIconButton(theme.DownloadIcon())
 
-	// Red circle-with-slash button: cancels an active download or deletes the
-	// local chapter file (with confirmation).
-	xButton := widget.NewButtonWithIcon("", redNoEntryResource, nil)
-	xButton.Importance = widget.LowImportance
-	xButton.Resize(fyne.NewSize(32, 32))
+	// Red circle-with-slash icon: cancels an active download or deletes the
+	// local chapter file (with confirmation). Like the download arrow it is a
+	// plain tappable icon with no hover highlight.
+	xButton := newIconButton(redNoEntryResource)
 
 	rightColumn := container.NewHBox(tickIcon, downloadButton, xButton)
 	// The Border places the control column on the far right of its grid cell.
@@ -487,8 +486,8 @@ func (v *ChapterListView) updateChapterRow(id widget.ListItemID, item fyne.Canva
 	rightCell := grid.Objects[2].(*fyne.Container)
 	rightColumn := rightCell.Objects[0].(*fyne.Container)
 	tickIcon := rightColumn.Objects[0].(*widget.Icon)
-	downloadButton := rightColumn.Objects[1].(*widget.Button)
-	xButton := rightColumn.Objects[2].(*widget.Button)
+	downloadButton := rightColumn.Objects[1].(*iconButton)
+	xButton := rightColumn.Objects[2].(*iconButton)
 
 	label.SetText(ch.Name)
 	rowID := int(id)
@@ -501,7 +500,6 @@ func (v *ChapterListView) updateChapterRow(id widget.ListItemID, item fyne.Canva
 		tickIcon.Refresh()
 		downloadButton.Hide()
 		xButton.Enable()
-		xButton.Importance = widget.LowImportance
 		xButton.OnTapped = func() {
 			v.deleteChapterFile(rowID)
 		}
@@ -510,9 +508,7 @@ func (v *ChapterListView) updateChapterRow(id widget.ListItemID, item fyne.Canva
 		progressBar.SetValue(ch.Progress)
 		tickIcon.Hide()
 		downloadButton.Disable()
-		downloadButton.Importance = widget.LowImportance
 		xButton.Enable()
-		xButton.Importance = widget.HighImportance
 		xButton.OnTapped = func() {
 			v.cancelChapterTask(rowID)
 		}
@@ -522,7 +518,6 @@ func (v *ChapterListView) updateChapterRow(id widget.ListItemID, item fyne.Canva
 		tickIcon.Hide()
 		downloadButton.Show()
 		downloadButton.Enable()
-		downloadButton.Importance = widget.LowImportance
 		downloadButton.OnTapped = func() {
 			v.startChapterDownload(rowID)
 		}
