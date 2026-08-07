@@ -155,15 +155,26 @@ func (b *DownloadQueueButton) buildPopup() fyne.CanvasObject {
 }
 
 // refreshPopup rebuilds the pop-up's list from the current queue state,
-// grouping tasks by manga with a per-manga "Cancel All" button and a "Retry"
-// button on any unfinished task.
+// grouping tasks by manga with a per-manga "Cancel All" button and a "Start"
+// / "Retry" button on any unfinished task. A prominent "Currently Downloading"
+// section sits at the top of the list whenever a download is active, showing
+// the in-progress chapter next to a live progress bar and a Stop button.
 func (b *DownloadQueueButton) refreshPopup() {
 	queue := config.GetDownloadQueue()
 	tasks := queue.GetTasks()
 
 	b.overallLabel.SetText(fmt.Sprintf("Overall: %d manga · %d chapters in queue", len(taskTitles(tasks)), len(tasks)))
 
-	objects := make([]fyne.CanvasObject, 0, len(tasks)+len(tasks)/2)
+	objects := make([]fyne.CanvasObject, 0, len(tasks)+len(tasks)/2+4)
+
+	// Prominent "Currently Downloading" section: the left half shows the chapter
+	// being downloaded, the right half a live progress bar with a Stop button.
+	if active := activeDownloadTask(tasks); active != nil {
+		objects = append(objects, NewBoldLabel("Currently Downloading"))
+		objects = append(objects, b.activeTaskRow(active))
+		objects = append(objects, widget.NewSeparator())
+	}
+
 	for _, group := range groupTasksByManga(tasks) {
 		mangaTitle := group.title
 		groupCancel := widget.NewButtonWithIcon("Cancel All", theme.CancelIcon(), func() {
@@ -180,6 +191,49 @@ func (b *DownloadQueueButton) refreshPopup() {
 
 	b.listBox.Objects = objects
 	b.listBox.Refresh()
+}
+
+// activeDownloadTask returns the single task that is currently downloading, or
+// nil if the queue is idle. The queue processes tasks one at a time, so there
+// is never more than one actively downloading task.
+func activeDownloadTask(tasks []*config.DownloadTask) *config.DownloadTask {
+	for _, task := range tasks {
+		if task.Status == "downloading" {
+			return task
+		}
+	}
+	return nil
+}
+
+// activeTaskRow renders the currently downloading task split in half: the left
+// pane shows the chapter being downloaded (manga title above, chapter name
+// below), the right pane shows a live progress bar with a Stop button that
+// cancels the download.
+func (b *DownloadQueueButton) activeTaskRow(task *config.DownloadTask) fyne.CanvasObject {
+	mangaLabel := widget.NewLabel(task.Manga.Title)
+	mangaLabel.Truncation = fyne.TextTruncateEllipsis
+	mangaLabel.TextStyle = fyne.TextStyle{Bold: true}
+
+	chapterLabel := widget.NewLabel(task.Chapter)
+	chapterLabel.Truncation = fyne.TextTruncateEllipsis
+
+	leftPane := container.NewVBox(mangaLabel, chapterLabel)
+
+	progress := widget.NewProgressBar()
+	progress.SetValue(task.Progress)
+
+	stopButton := widget.NewButtonWithIcon("Stop", theme.MediaStopIcon(), func() {
+		if err := config.GetDownloadQueue().CancelTask(task.ID); err != nil {
+			dialog.ShowError(err, b.state.Window)
+			return
+		}
+		log.Printf("[UI] Stopped task %s (%s - %s)", task.ID, task.Manga.Title, task.Chapter)
+	})
+	stopButton.Importance = widget.HighImportance
+
+	rightPane := container.NewVBox(progress, container.NewBorder(nil, nil, nil, stopButton, nil))
+
+	return container.NewGridWithColumns(2, leftPane, rightPane)
 }
 
 // groupTasksByManga groups the given tasks by manga title, preserving order.
@@ -200,10 +254,11 @@ func groupTasksByManga(tasks []*config.DownloadTask) []*mangaTaskGroup {
 
 // taskSummaryRow returns a one-line summary of a queue task. Tasks that did not
 // finish downloading (failed, cancelled, or waiting on a CF challenge) stay in
-// the queue and get a "Retry" button so the user can re-queue them. The label
-// occupies the centre of the row (so it gets the remaining width and truncates
-// cleanly instead of wrapping into the Retry button) and the button hugs the
-// right edge.
+// the queue and get an action button so the user can re-queue them: "Start" for
+// a download the user stopped, "Retry" for a failed or CF-blocked one. The
+// label occupies the centre of the row (so it gets the remaining width and
+// truncates cleanly instead of wrapping into the button) and the button hugs
+// the right edge.
 func (b *DownloadQueueButton) taskSummaryRow(task *config.DownloadTask) fyne.CanvasObject {
 	status := task.Status
 	if task.Chapter != "" {
@@ -216,7 +271,14 @@ func (b *DownloadQueueButton) taskSummaryRow(task *config.DownloadTask) fyne.Can
 		return label
 	}
 
-	retryButton := widget.NewButtonWithIcon("Retry", theme.MediaReplayIcon(), func() {
+	actionLabel := "Retry"
+	actionIcon := theme.MediaReplayIcon()
+	if task.Status == "cancelled" {
+		actionLabel = "Start"
+		actionIcon = theme.MediaPlayIcon()
+	}
+
+	retryButton := widget.NewButtonWithIcon(actionLabel, actionIcon, func() {
 		if err := config.GetDownloadQueue().RetryTask(task.ID); err != nil {
 			dialog.ShowError(err, b.state.Window)
 			return

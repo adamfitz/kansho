@@ -52,6 +52,21 @@ func findButton(root fyne.CanvasObject, text string) *widget.Button {
 	return nil
 }
 
+// findProgressBar walks a canvas object tree looking for a progress bar.
+func findProgressBar(root fyne.CanvasObject) (*widget.ProgressBar, bool) {
+	switch obj := root.(type) {
+	case *widget.ProgressBar:
+		return obj, true
+	case *fyne.Container:
+		for _, child := range obj.Objects {
+			if bar, ok := findProgressBar(child); ok {
+				return bar, true
+			}
+		}
+	}
+	return nil, false
+}
+
 // TestDownloadQueuePopupUsesScrollContainer verifies that the queue pop-up is a
 // Border layout with a scrollable centre (so the list is constrained and gets a
 // scrollbar when too long) and a global "Cancel All" button in the header.
@@ -115,18 +130,24 @@ func TestGetStatusIcon(t *testing.T) {
 	}
 }
 
-// TestUnfinishedTaskRowHasRetryButton verifies that a task that did not finish
-// downloading (failed/cancelled/waiting_cf) gets a "Retry" button while active
-// tasks do not.
-func TestUnfinishedTaskRowHasRetryButton(t *testing.T) {
+// TestUnfinishedTaskRowHasActionButton verifies that a task that did not finish
+// downloading gets an action button — "Start" for a user-stopped (cancelled)
+// task, "Retry" for a failed or CF-blocked one — while active tasks do not.
+func TestUnfinishedTaskRowHasActionButton(t *testing.T) {
 	state, _, _ := newChapterListViewTest(t, "")
 	b := NewDownloadQueueButton(state)
 
-	for _, status := range []string{"failed", "cancelled", "waiting_cf"} {
-		task := &config.DownloadTask{ID: status, Manga: config.Bookmarks{Title: "Manga A"}, Chapter: "a1.cbz", Status: status}
-		if btn := findButton(b.taskSummaryRow(task), "Retry"); btn == nil {
-			t.Errorf("%s task row should have a Retry button", status)
-		}
+	task := &config.DownloadTask{ID: "failed", Manga: config.Bookmarks{Title: "Manga A"}, Chapter: "a1.cbz", Status: "failed"}
+	if btn := findButton(b.taskSummaryRow(task), "Retry"); btn == nil {
+		t.Error("failed task row should have a Retry button")
+	}
+	task = &config.DownloadTask{ID: "waiting_cf", Manga: config.Bookmarks{Title: "Manga A"}, Chapter: "a1.cbz", Status: "waiting_cf"}
+	if btn := findButton(b.taskSummaryRow(task), "Retry"); btn == nil {
+		t.Error("waiting_cf task row should have a Retry button")
+	}
+	task = &config.DownloadTask{ID: "cancelled", Manga: config.Bookmarks{Title: "Manga A"}, Chapter: "a1.cbz", Status: "cancelled"}
+	if btn := findButton(b.taskSummaryRow(task), "Start"); btn == nil {
+		t.Error("cancelled task row should have a Start button")
 	}
 
 	for _, status := range []string{"queued", "downloading", "completed"} {
@@ -134,12 +155,15 @@ func TestUnfinishedTaskRowHasRetryButton(t *testing.T) {
 		if btn := findButton(b.taskSummaryRow(task), "Retry"); btn != nil {
 			t.Errorf("%s task row should NOT have a Retry button", status)
 		}
+		if btn := findButton(b.taskSummaryRow(task), "Start"); btn != nil {
+			t.Errorf("%s task row should NOT have a Start button", status)
+		}
 	}
 }
 
 // TestRetryRowLabelIsCentreWithButtonRight verifies that a retryable task row
 // lays the chapter label out in the centre (so it gets the remaining width and
-// does not wrap/break) with the Retry button hugging the right edge.
+// does not wrap/break) with the action button hugging the right edge.
 func TestRetryRowLabelIsCentreWithButtonRight(t *testing.T) {
 	state, _, _ := newChapterListViewTest(t, "")
 	b := NewDownloadQueueButton(state)
@@ -158,8 +182,8 @@ func TestRetryRowLabelIsCentreWithButtonRight(t *testing.T) {
 		t.Fatalf("row centre should be the chapter label, got %T", border.Objects[0])
 	}
 	btn, ok := border.Objects[1].(*widget.Button)
-	if !ok || btn.Text != "Retry" {
-		t.Fatalf("row right element should be the Retry button, got %T", border.Objects[1])
+	if !ok || btn.Text != "Start" {
+		t.Fatalf("row right element should be the Start button, got %T", border.Objects[1])
 	}
 
 	// After laying out the row, the label must occupy most of the width and the
@@ -169,10 +193,62 @@ func TestRetryRowLabelIsCentreWithButtonRight(t *testing.T) {
 		t.Fatal("label should have a non-zero width in the row layout")
 	}
 	if btn.Position().X <= label.Position().X {
-		t.Error("Retry button should be positioned to the right of the label")
+		t.Error("Start button should be positioned to the right of the label")
 	}
 	if btn.Position().X+btn.Size().Width > row.Size().Width {
-		t.Error("Retry button should hug the right edge of the row")
+		t.Error("Start button should hug the right edge of the row")
+	}
+}
+
+// TestActiveDownloadTask verifies that activeDownloadTask returns the single
+// downloading task, or nil when nothing is downloading.
+func TestActiveDownloadTask(t *testing.T) {
+	tasks := []*config.DownloadTask{
+		{Manga: config.Bookmarks{Title: "Manga A"}, Chapter: "a1.cbz", Status: "queued"},
+		{Manga: config.Bookmarks{Title: "Manga B"}, Chapter: "b1.cbz", Status: "downloading"},
+	}
+	active := activeDownloadTask(tasks)
+	if active == nil || active.Chapter != "b1.cbz" {
+		t.Fatalf("expected the downloading task, got %+v", active)
+	}
+
+	if active := activeDownloadTask([]*config.DownloadTask{
+		{Manga: config.Bookmarks{Title: "Manga A"}, Chapter: "a1.cbz", Status: "queued"},
+	}); active != nil {
+		t.Fatalf("expected nil when nothing is downloading, got %+v", active)
+	}
+}
+
+// TestActiveTaskRowShowsProgressAndStopButton verifies that the currently
+// downloading task row is split into a left chapter pane and a right pane with
+// a live progress bar and a Stop button.
+func TestActiveTaskRowShowsProgressAndStopButton(t *testing.T) {
+	state, _, _ := newChapterListViewTest(t, "")
+	b := NewDownloadQueueButton(state)
+
+	task := &config.DownloadTask{ID: "1", Manga: config.Bookmarks{Title: "Manga A"}, Chapter: "a1.cbz", Status: "downloading", Progress: 0.42}
+	row := b.activeTaskRow(task)
+
+	grid, ok := row.(*fyne.Container)
+	if !ok {
+		t.Fatal("active task row should be a container")
+	}
+	if grid.Layout == nil || fmt.Sprintf("%T", grid.Layout) != "*layout.gridLayout" {
+		t.Fatalf("active task row should split into two columns, got %T", grid.Layout)
+	}
+	if len(grid.Objects) != 2 {
+		t.Fatalf("expected two panes (left chapter, right progress), got %d", len(grid.Objects))
+	}
+
+	if btn := findButton(grid.Objects[1], "Stop"); btn == nil {
+		t.Error("right pane should contain a Stop button")
+	}
+	progress, ok := findProgressBar(grid.Objects[1])
+	if !ok {
+		t.Fatal("right pane should contain a progress bar")
+	}
+	if progress.Value != 0.42 {
+		t.Errorf("progress bar should reflect task progress, got %f", progress.Value)
 	}
 }
 
