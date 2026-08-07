@@ -691,6 +691,13 @@ func (v *ChapterListView) refreshAfterTaskChange() {
 		return
 	}
 
+	// Re-read the on-disk chapters for the selected manga. A completed chapter
+	// task is removed from the queue as soon as its download finishes, which can
+	// happen before the UI processes the "completed" update, so the queue alone
+	// cannot be relied on to know that a download succeeded. The disk is the
+	// source of truth for whether a chapter has been downloaded.
+	v.reconcileDownloadedChapters()
+
 	// Reset to the on-disk truth
 	for _, ch := range v.chapters {
 		if ch.Downloaded {
@@ -729,6 +736,26 @@ func (v *ChapterListView) refreshAfterTaskChange() {
 
 	v.chapterList.Refresh()
 	v.updateDownloadAllButton()
+}
+
+// reconcileDownloadedChapters marks every chapter in the list as downloaded when
+// its CBZ file currently exists on disk for the selected manga. The on-disk
+// state is the source of truth for whether a chapter has been downloaded: a
+// chapter's completed queue task is removed from the queue as soon as it
+// finishes, so the UI cannot rely on seeing the task to know the download
+// succeeded.
+func (v *ChapterListView) reconcileDownloadedChapters() {
+	manga := v.state.GetSelectedManga()
+	if manga == nil || manga.Location == "" {
+		return
+	}
+	onDisk := make(map[string]bool)
+	for _, name := range localChapterNames(manga) {
+		onDisk[name] = true
+	}
+	for _, ch := range v.chapters {
+		ch.Downloaded = onDisk[ch.Name]
+	}
 }
 
 // findChapter returns the chapter item for the given manga title and chapter,
