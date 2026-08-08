@@ -144,7 +144,7 @@ The downloader implements **exponential backoff** for all network operations:
 | Chapter URLs fetch | 3 | 10s | 2^attempt seconds |
 | Chapter images fetch | 3 | 10s | 2^attempt seconds |
 | Individual chapter download | 3 | - | 2^attempt seconds |
-| Image download | 3 | - | 2^attempt seconds |
+| Image download | 3 | 60s per attempt (derived from parent context, so it aborts immediately on cancel) | 2^attempt seconds |
 | HTTP request (internal) | 5 | 10s | +5s per attempt |
 
 **Example**: Image download fails:
