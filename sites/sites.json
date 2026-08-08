@@ -169,6 +169,16 @@
         "title": true,
         "location": true
       }
+    },
+    {
+      "name": "comix",
+      "display_name": "comix",
+      "required_fields": {
+        "url": true,
+        "shortname": false,
+        "title": true,
+        "location": true
+      }
     }
   ]
 }

@@ -174,7 +174,7 @@ func extractChaptersWithJS(ctx context.Context, mangaURL string, site SitePlugin
 		log.Printf("[Downloader] CF data already exists for %s — skipping manual prompt", domain)
 	}
 
-	jsCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	jsCtx, cancel := context.WithTimeout(ctx, chapterTimeout(method.Timeout))
 	defer cancel()
 
 	var rawData []map[string]string
@@ -185,7 +185,7 @@ func extractChaptersWithJS(ctx context.Context, mangaURL string, site SitePlugin
 	}
 	defer session.Close()
 
-	if err := session.NavigateAndEvaluate(mangaURL, method.WaitSelector, method.JavaScript, &rawData); err != nil {
+	if err := session.NavigateScrollPaginateAndEvaluate(mangaURL, downloaderOptions(method.WaitSelector, method.JavaScript, method.NextPageJS, false, method.Timeout), &rawData); err != nil {
 		return nil, fmt.Errorf("navigation and JavaScript evaluation failed: %w", err)
 	}
 
@@ -264,7 +264,7 @@ func extractChaptersCustom(ctx context.Context, mangaURL string, site SitePlugin
 
 // extractImagesWithJS uses JavaScript evaluation
 func extractImagesWithJS(ctx context.Context, chapterURL string, site SitePlugin, method *ImageExtractionMethod) ([]string, error) {
-	jsCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	jsCtx, cancel := context.WithTimeout(ctx, chapterTimeout(method.Timeout))
 	defer cancel()
 
 	var imageURLs []string
@@ -275,11 +275,32 @@ func extractImagesWithJS(ctx context.Context, chapterURL string, site SitePlugin
 	}
 	defer session.Close()
 
-	if err := session.NavigateAndEvaluate(chapterURL, method.WaitSelector, method.JavaScript, &imageURLs); err != nil {
+	if err := session.NavigateScrollPaginateAndEvaluate(chapterURL, downloaderOptions(method.WaitSelector, method.JavaScript, "", method.ScrollToLoad, method.Timeout), &imageURLs); err != nil {
 		return nil, fmt.Errorf("navigation and JavaScript evaluation failed: %w", err)
 	}
 
 	return imageURLs, nil
+}
+
+// chapterTimeout returns the extraction timeout to use for a JS-based method,
+// defaulting to 45s when the method does not specify one.
+func chapterTimeout(methodTimeout time.Duration) time.Duration {
+	if methodTimeout <= 0 {
+		return 45 * time.Second
+	}
+	return methodTimeout
+}
+
+// downloaderOptions builds a NavigateOptions for browser-based extraction from
+// a site's extraction method fields.
+func downloaderOptions(waitSelector, javascript, nextPageJS string, scrollToLoad bool, timeout time.Duration) NavigateOptions {
+	return NavigateOptions{
+		WaitSelector: waitSelector,
+		JavaScript:   javascript,
+		NextPageJS:   nextPageJS,
+		ScrollToLoad: scrollToLoad,
+		Timeout:      timeout,
+	}
 }
 
 // extractImagesWithSelector uses HTML parsing
