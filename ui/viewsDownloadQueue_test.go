@@ -325,6 +325,64 @@ func TestTruncateMangaTitle(t *testing.T) {
 	}
 }
 
+// TestRefreshPopupThrottlesStructuralRebuilds verifies that a pure progress tick
+// on the task currently being displayed updates the active row and status bar in
+// place instead of rebuilding the whole list.
+func TestRefreshPopupThrottlesStructuralRebuilds(t *testing.T) {
+	state, _, _ := newChapterListViewTest(t, "")
+	b := NewDownloadQueueButton(state)
+	b.buildPopup()
+
+	task := &config.DownloadTask{ID: "1", Manga: config.Bookmarks{Title: "Manga A"}, Chapter: "a1.cbz", Status: "downloading", Progress: 0.2}
+	b.refreshPopup([]*config.DownloadTask{task})
+	firstRebuild := b.lastFullRebuild
+	if firstRebuild.IsZero() || b.lastStructureKey == "" {
+		t.Fatal("first refresh should rebuild and record its structure key")
+	}
+
+	// Pure progress tick: same task pointer, same status → in-place update.
+	task.Progress = 0.6
+	task.StatusMessage = "Chapter 1/1: Downloading image 2/5"
+	b.refreshPopup([]*config.DownloadTask{task})
+
+	if !b.lastFullRebuild.Equal(firstRebuild) {
+		t.Error("progress tick should not trigger a full list rebuild")
+	}
+	if b.activeRowProgress == nil || b.activeRowProgress.Value != 0.6 {
+		t.Errorf("active row progress should update in place, got %+v", b.activeRowProgress)
+	}
+	if !strings.Contains(b.statusMessage.Text, "Downloading image 2/5") {
+		t.Errorf("status bar should reflect the progress tick, got %q", b.statusMessage.Text)
+	}
+}
+
+// TestRefreshPopupCoalescesRapidStructuralChanges verifies that structural
+// changes arriving inside the throttle window are coalesced into a scheduled
+// rebuild instead of rebuilding the list immediately.
+func TestRefreshPopupCoalescesRapidStructuralChanges(t *testing.T) {
+	state, _, _ := newChapterListViewTest(t, "")
+	b := NewDownloadQueueButton(state)
+	b.buildPopup()
+
+	task := &config.DownloadTask{ID: "1", Manga: config.Bookmarks{Title: "Manga A"}, Chapter: "a1.cbz", Status: "downloading", Progress: 0.2}
+	b.refreshPopup([]*config.DownloadTask{task})
+	firstRebuild := b.lastFullRebuild
+
+	task.Status = "completed"
+	b.refreshPopup([]*config.DownloadTask{task})
+
+	if b.pendingRebuild == nil {
+		t.Error("rapid structural change should schedule a coalesced rebuild")
+	}
+	if !b.lastFullRebuild.Equal(firstRebuild) {
+		t.Error("coalesced rebuild should not run immediately")
+	}
+	if b.pendingRebuild != nil {
+		b.pendingRebuild.Stop()
+		b.pendingRebuild = nil
+	}
+}
+
 // TestUpdateStatusBar verifies the footer status bar shows the site in the
 // badge and the truncated manga title plus status message, and shows the idle
 // state when nothing is downloading.

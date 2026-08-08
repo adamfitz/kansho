@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/url"
 	"strings"
+	"time"
 
 	"kansho/config"
 
@@ -46,7 +47,27 @@ type DownloadQueueButton struct {
 	// doing (downloading, stalled, waiting to retry, packaging the CBZ, ...).
 	statusBadge   *widget.Label
 	statusMessage *widget.Label
+
+	// Incremental refresh state. A progress event that only touches the currently
+	// downloading task updates these widgets in place instead of rebuilding the
+	// whole list, which keeps the main thread responsive during downloads.
+	activeRowTask     *config.DownloadTask
+	activeRowManga    *widget.Label
+	activeRowChapter  *widget.Label
+	activeRowProgress *widget.ProgressBar
+
+	// Throttle state for full list rebuilds. Structural changes (a task added,
+	// removed, or changed status) rebuild the list at most every
+	// progressRefreshInterval, coalescing bursts of events into one rebuild.
+	lastFullRebuild  time.Time
+	pendingRebuild   *time.Timer
+	lastStructureKey string
 }
+
+// progressRefreshInterval caps how often the pop-up list is rebuilt from
+// scratch during downloads. Progress-bar updates at this rate are visually
+// smooth while leaving the main thread free for input.
+const progressRefreshInterval = 100 * time.Millisecond
 
 // mangaTaskGroup is a group of queue tasks that belong to one manga title.
 type mangaTaskGroup struct {
@@ -81,7 +102,7 @@ func (b *DownloadQueueButton) Refresh() {
 			dialog.ShowInformation("Download Queue", "No downloads in queue.", b.state.Window)
 			return
 		}
-		b.refreshPopup()
+		b.refreshPopup(tasks)
 	}
 }
 
@@ -108,7 +129,7 @@ func (b *DownloadQueueButton) showSummary() {
 	}
 	// Fit the pop-up to the whole window so the queue list has room to work.
 	b.popup.Resize(b.state.Window.Canvas().Size())
-	b.refreshPopup()
+	b.refreshPopup(config.GetDownloadQueue().GetTasks())
 	b.popup.Show()
 }
 
@@ -173,23 +194,87 @@ func (b *DownloadQueueButton) buildPopup() fyne.CanvasObject {
 	return container.NewBorder(header, footer, nil, nil, scroll)
 }
 
-// refreshPopup rebuilds the pop-up's list from the current queue state,
+// refreshPopup reconciles the pop-up with the current queue state.
+//
+// The status bar updates on every call (it is just two labels, so it stays
+// crisp). Full list rebuilds only happen on structural changes — a task added,
+// removed, or changed status — and are throttled to progressRefreshInterval so
+// a burst of progress events is coalesced into a single rebuild. Pure progress
+// ticks on the task that is already on screen are applied to the active row in
+// place, so the main thread is never spent rebuilding the whole list per image.
+func (b *DownloadQueueButton) refreshPopup(tasks []*config.DownloadTask) {
+	b.updateStatusBar(tasks)
+
+	active := activeDownloadTask(tasks)
+	key := structureKey(tasks)
+
+	// Nothing structural changed: if the same task is still downloading, nudge
+	// its progress bar in place. (The queue stores stable task pointers, so
+	// pointer identity reliably means "same task".)
+	if key == b.lastStructureKey {
+		if active != nil && active == b.activeRowTask {
+			b.updateActiveRowInPlace(active)
+		}
+		return
+	}
+
+	// A rebuild is already scheduled; let it fire with fresh state.
+	if b.pendingRebuild != nil {
+		return
+	}
+
+	// Structural change arrived inside the throttle window: coalesce into one
+	// scheduled rebuild instead of rebuilding immediately.
+	if elapsed := time.Since(b.lastFullRebuild); elapsed < progressRefreshInterval {
+		b.pendingRebuild = time.AfterFunc(progressRefreshInterval-elapsed, func() {
+			fyne.Do(func() {
+				b.pendingRebuild = nil
+				if b.popup == nil || !b.popup.Visible() {
+					return
+				}
+				b.refreshPopup(config.GetDownloadQueue().GetTasks())
+			})
+		})
+		return
+	}
+
+	b.rebuildPopup(tasks, active)
+}
+
+// structureKey returns a stable snapshot of the queue's structural state: the
+// ID and status of every task. Progress ticks (Progress / StatusMessage) do not
+// change the key, so they are handled incrementally.
+func structureKey(tasks []*config.DownloadTask) string {
+	var sb strings.Builder
+	for _, task := range tasks {
+		sb.WriteString(task.ID)
+		sb.WriteByte(':')
+		sb.WriteString(task.Status)
+		sb.WriteByte('|')
+	}
+	return sb.String()
+}
+
+// rebuildPopup rebuilds the pop-up's list from the current queue state,
 // grouping tasks by manga with a per-manga "Cancel All" button and a "Start"
 // / "Retry" button on any unfinished task. A prominent "Currently Downloading"
 // section sits at the top of the list whenever a download is active, showing
 // the in-progress chapter next to a live progress bar and a Stop button.
-func (b *DownloadQueueButton) refreshPopup() {
-	queue := config.GetDownloadQueue()
-	tasks := queue.GetTasks()
-
+func (b *DownloadQueueButton) rebuildPopup(tasks []*config.DownloadTask, active *config.DownloadTask) {
 	b.overallLabel.SetText(fmt.Sprintf("Overall: %d manga · %d chapters in queue", len(taskTitles(tasks)), len(tasks)))
-	b.updateStatusBar(tasks)
+
+	// Track which task owns the active row, so progress ticks can update it in
+	// place. Stale widgets from a previous build are dropped.
+	b.activeRowTask = active
+	if active == nil {
+		b.activeRowManga, b.activeRowChapter, b.activeRowProgress = nil, nil, nil
+	}
 
 	objects := make([]fyne.CanvasObject, 0, len(tasks)+len(tasks)/2+4)
 
 	// Prominent "Currently Downloading" section: the left half shows the chapter
 	// being downloaded, the right half a live progress bar with a Stop button.
-	if active := activeDownloadTask(tasks); active != nil {
+	if active != nil {
 		objects = append(objects, NewBoldLabel("Currently Downloading"))
 		objects = append(objects, b.activeTaskRow(active))
 		objects = append(objects, widget.NewSeparator())
@@ -211,6 +296,9 @@ func (b *DownloadQueueButton) refreshPopup() {
 
 	b.listBox.Objects = objects
 	b.listBox.Refresh()
+
+	b.lastStructureKey = structureKey(tasks)
+	b.lastFullRebuild = time.Now()
 }
 
 // activeDownloadTask returns the single task that is currently downloading, or
@@ -335,7 +423,24 @@ func (b *DownloadQueueButton) activeTaskRow(task *config.DownloadTask) fyne.Canv
 
 	rightPane := container.NewVBox(progress, container.NewBorder(nil, nil, nil, stopButton, nil))
 
+	// Keep the widgets so later progress ticks can update them in place without
+	// rebuilding the whole list.
+	b.activeRowManga = mangaLabel
+	b.activeRowChapter = chapterLabel
+	b.activeRowProgress = progress
+
 	return container.NewGridWithColumns(2, leftPane, rightPane)
+}
+
+// updateActiveRowInPlace refreshes the currently displayed "Currently
+// Downloading" row without rebuilding the list, for pure progress ticks.
+func (b *DownloadQueueButton) updateActiveRowInPlace(task *config.DownloadTask) {
+	if b.activeRowProgress == nil {
+		return
+	}
+	b.activeRowManga.SetText(task.Manga.Title)
+	b.activeRowChapter.SetText(task.Chapter)
+	b.activeRowProgress.SetValue(task.Progress)
 }
 
 // groupTasksByManga groups the given tasks by manga title, preserving order.
