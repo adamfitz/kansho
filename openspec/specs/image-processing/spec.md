@@ -8,31 +8,29 @@ Download manga page images, convert them to JPEG format, and package them into C
 ### Requirement: Image Download
 The system SHALL download images from URLs with support for multiple transport methods.
 
-#### Scenario: Standard HTTP image download
-- GIVEN a direct image URL on a non-CF-protected site
-- WHEN `DownloadConvertToJPGRename(ctx, filename, imageURL, targetDir)` is called
-- THEN the context SHALL be passed to `http.NewRequestWithContext` for cancellation support
-- AND the image SHALL be downloaded via HTTP GET
-- AND converted to JPEG if needed
-- AND saved with a zero-padded 3-digit filename (e.g., "001.jpg")
-- AND up to 3 retries SHALL be attempted on failure
+#### Scenario: Shared client image download (FlameComics only)
+- GIVEN a FlameComics download with multiple chapters of images on the same domain
+- WHEN the FlameComics download path uses the shared keep-alive client for each image
+- THEN one shared `http.Client`/`http.Transport` SHALL live for the whole FlameComics session, so TCP/TLS connections are reused across every image of every chapter instead of opening a fresh connection per image
+- AND the request context SHALL be derived from the parent `ctx` via `context.WithTimeout` so parent cancellation aborts an in-flight download immediately
+- AND the image SHALL be converted to JPEG if needed and saved with a zero-padded 3-digit filename (e.g., "001.jpg")
+- AND retry/backoff SHALL be handled by the caller at exactly one level (no nested retries inside the download function)
+- AND all other sites SHALL keep their legacy per-image download paths unchanged
 
 #### Scenario: Image download with CF bypass
 - GIVEN an image URL on a CF-protected site
-- WHEN `DownloadConvertToJPGRenameCf(ctx, filename, imageURL, targetDir, domain)` is called
-- THEN a Colly collector with CF bypass cookies SHALL be created
-- AND the context SHALL be checked for cancellation before and after the Colly Visit call
-- AND the image SHALL be downloaded with the bypass applied
-- AND the MaxBodySize SHALL be set to 0 (unlimited) to handle large images
-- AND the response Content-Length SHALL be validated against actual bytes received
-- AND converted to JPEG and saved with zero-padded filename
-
-#### Scenario: Image download with shared Colly collector
-- GIVEN a pre-configured Colly collector (with CF bypass already applied)
-- WHEN `DownloadConvertToJPGRenameCfWithCollector(c, filename, imageURL, targetDir)` is called
-- THEN the provided collector SHALL be used directly without creating a new one
+- WHEN a CF-protected image is downloaded through the legacy `DownloadConvertToJPGRenameCf` path (or the FlameComics shared path)
+- THEN the CF bypass cookie for `domain` SHALL be loaded and applied to the request
+- AND the cookie domain SHALL be dot-prefixed so it applies to the CDN subdomain (e.g. `cdn.flamecomics.xyz`)
+- AND the CF bypass User-Agent SHALL be applied
 - AND the image SHALL be downloaded, converted to JPEG, and saved with zero-padded filename
-- NOTE: This variant does NOT support context cancellation (no ctx parameter)
+
+#### Scenario: No-data stall detection
+- GIVEN a server accepts a connection but sends no body bytes (Cloudflare throttling)
+- WHEN `readBodyWithStallDetect` reads the response body
+- THEN the download SHALL abort the request after `noDataTimeout` (20s) of zero bytes received
+- AND a STALLED log line SHALL be emitted identifying the URL
+- AND a `parser.StalledError` SHALL be returned so the caller can detect the stall and retry, instead of blocking silently for the full request timeout
 
 ### Requirement: Image Format Conversion
 The system SHALL convert WebP, PNG, and GIF images to JPEG format.

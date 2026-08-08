@@ -265,3 +265,142 @@ func TestIsRetryableTaskStatus(t *testing.T) {
 		}
 	}
 }
+
+// TestStatusEmojiForMessage verifies the state glyph reflects what the current
+// download is doing: downloading, stalled, in backoff, packaging, or starting.
+func TestStatusEmojiForMessage(t *testing.T) {
+	cases := map[string]string{
+		"Chapter 3/19: Downloading image 8/10":                                                "⬇",
+		"Chapter 3/19: Downloading image 8/10 (attempt 1/3)":                                  "⬇",
+		"Chapter 3/19: Downloading image 8/10 — STALLED (no data received), waiting to retry": "⚠",
+		"Chapter 3/19: Downloading image 8/10 — retry 2/3 in 4s (last error: ...)":            "⏳",
+		"Chapter 3/19: Creating CBZ file...":                                                  "📦",
+		"Found 2 new chapters to download":                                                    "▶",
+		"Starting download...":                                                                "▶",
+	}
+	for msg, want := range cases {
+		if got := statusEmojiForMessage(msg); got != want {
+			t.Errorf("statusEmojiForMessage(%q) = %q, want %q", msg, got, want)
+		}
+	}
+}
+
+// TestSiteNameForTask verifies the badge site name prefers the bookmark's site
+// field and falls back to the URL hostname.
+func TestSiteNameForTask(t *testing.T) {
+	task := &config.DownloadTask{Manga: config.Bookmarks{Site: "FlameComics", Url: "https://flamecomics.xyz/manga/xyz"}}
+	if got := siteNameForTask(task); got != "FlameComics" {
+		t.Errorf("expected bookmark site name, got %q", got)
+	}
+
+	task = &config.DownloadTask{Manga: config.Bookmarks{Url: "https://www.example.com/manga/xyz"}}
+	if got := siteNameForTask(task); got != "example.com" {
+		t.Errorf("expected hostname fallback, got %q", got)
+	}
+
+	if got := siteNameForTask(nil); got != "" {
+		t.Errorf("expected empty for nil task, got %q", got)
+	}
+}
+
+// TestTruncateMangaTitle verifies long titles are fixed to a specific length
+// with an ellipsis, short titles are unchanged, and the truncation is rune-safe.
+func TestTruncateMangaTitle(t *testing.T) {
+	short := "One Piece"
+	if got := truncateMangaTitle(short, 30); got != short {
+		t.Errorf("short title should be unchanged, got %q", got)
+	}
+
+	long := "The 100 Girlfriends Who Really, Really, Really, Really, REALLY Love You"
+	got := truncateMangaTitle(long, 30)
+	if len([]rune(got)) != 30 {
+		t.Errorf("truncated title should be exactly 30 runes, got %d (%q)", len([]rune(got)), got)
+	}
+	if runes := []rune(got); runes[len(runes)-1] != '…' {
+		t.Errorf("truncated title should end with an ellipsis, got %q", got)
+	}
+
+	if got := truncateMangaTitle("日本語の長いタイトルテスト", 5); got != "日本語の…" {
+		t.Errorf("rune-safe truncation failed, got %q", got)
+	}
+}
+
+// TestUpdateStatusBar verifies the footer status bar shows the site in the
+// badge and the truncated manga title plus status message, and shows the idle
+// state when nothing is downloading.
+func TestUpdateStatusBar(t *testing.T) {
+	state, _, _ := newChapterListViewTest(t, "")
+	b := NewDownloadQueueButton(state)
+	b.buildPopup()
+
+	active := &config.DownloadTask{
+		ID:            "1",
+		Manga:         config.Bookmarks{Title: "The 100 Girlfriends Who Really, Really, Really, Really, REALLY Love You", Site: "FlameComics"},
+		Chapter:       "a1.cbz",
+		Status:        "downloading",
+		StatusMessage: "Chapter 3/19: Downloading image 8/10 — retry 2/3 in 4s",
+	}
+	b.updateStatusBar([]*config.DownloadTask{active})
+	if b.statusBadge.Text != "FlameComics ⏳" {
+		t.Errorf("expected badge with site and backoff glyph, got %q", b.statusBadge.Text)
+	}
+	if !strings.HasPrefix(b.statusMessage.Text, "The 100 Girlfriends Who Reall…") {
+		t.Errorf("expected message to start with truncated manga title, got %q", b.statusMessage.Text)
+	}
+	if !strings.HasSuffix(b.statusMessage.Text, active.StatusMessage) {
+		t.Errorf("expected message to contain the status message, got %q", b.statusMessage.Text)
+	}
+
+	b.updateStatusBar([]*config.DownloadTask{
+		{Manga: config.Bookmarks{Title: "Manga A"}, Chapter: "a1.cbz", Status: "queued"},
+	})
+	if b.statusBadge.Text != "⏸ Idle" {
+		t.Errorf("expected Idle badge with no active task, got %q", b.statusBadge.Text)
+	}
+
+	b.updateStatusBar(nil)
+	if b.statusBadge.Text != "⏸ Idle" || b.statusMessage.Text != "No downloads in queue" {
+		t.Errorf("expected empty idle message, got badge=%q message=%q", b.statusBadge.Text, b.statusMessage.Text)
+	}
+}
+
+// TestDownloadQueuePopupHasStatusBar verifies the pop-up is a Border layout with
+// a footer status bar (bottom) holding the status badge and message labels.
+func TestDownloadQueuePopupHasStatusBar(t *testing.T) {
+	app := test.NewApp()
+	w := test.NewWindow(nil)
+	t.Cleanup(func() {
+		w.Close()
+		app.Quit()
+	})
+
+	b := NewDownloadQueueButton(&KanshoAppState{Window: w})
+	content := b.buildPopup()
+
+	border, ok := content.(*fyne.Container)
+	if !ok {
+		t.Fatal("popup content should be a container")
+	}
+	if len(border.Objects) < 3 {
+		t.Fatalf("popup should have center, header and footer, got %d objects", len(border.Objects))
+	}
+
+	// container.NewBorder stores the centre first, then top, then bottom.
+	footer := border.Objects[2]
+	vbox, ok := footer.(*fyne.Container)
+	if !ok {
+		t.Fatalf("popup footer should be a container, got %T", footer)
+	}
+	row := vbox.Objects[len(vbox.Objects)-1]
+	if _, ok := row.(*fyne.Container); !ok {
+		t.Fatalf("footer status row should be a border container, got %T", row)
+	}
+
+	// The status bar should reflect the current download once the popup refreshes.
+	b.updateStatusBar([]*config.DownloadTask{
+		{ID: "1", Manga: config.Bookmarks{Title: "Manga A"}, Chapter: "a1.cbz", Status: "downloading", StatusMessage: "Chapter 3/19: Downloading image 8/10"},
+	})
+	if b.statusBadge.Text == "" || b.statusMessage.Text == "" {
+		t.Error("status bar labels should be populated after updateStatusBar")
+	}
+}

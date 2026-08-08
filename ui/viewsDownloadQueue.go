@@ -3,6 +3,8 @@ package ui
 import (
 	"fmt"
 	"log"
+	"net/url"
+	"strings"
 
 	"kansho/config"
 
@@ -39,6 +41,11 @@ type DownloadQueueButton struct {
 	popup        *widget.PopUp
 	listBox      *fyne.Container
 	overallLabel *widget.Label
+
+	// Footer status bar: a compact live readout of what the current download is
+	// doing (downloading, stalled, waiting to retry, packaging the CBZ, ...).
+	statusBadge   *widget.Label
+	statusMessage *widget.Label
 }
 
 // mangaTaskGroup is a group of queue tasks that belong to one manga title.
@@ -107,7 +114,8 @@ func (b *DownloadQueueButton) showSummary() {
 
 // buildPopup constructs the stable pop-up structure: a fixed header (title,
 // overall progress + global "Cancel All", and a Close button) above a
-// scrollable list of the queue contents.
+// scrollable list of the queue contents, with a live status bar pinned to the
+// bottom.
 func (b *DownloadQueueButton) buildPopup() fyne.CanvasObject {
 	titleLabel := NewBoldLabel("Download Queue")
 
@@ -151,7 +159,18 @@ func (b *DownloadQueueButton) buildPopup() fyne.CanvasObject {
 	b.listBox = container.NewVBox()
 	scroll := container.NewVScroll(b.listBox)
 
-	return container.NewBorder(header, nil, nil, nil, scroll)
+	// Footer status bar: a short bold state badge on the left and the current
+	// download's status message on the right (truncating so it never wraps).
+	b.statusBadge = widget.NewLabel("")
+	b.statusBadge.TextStyle = fyne.TextStyle{Bold: true}
+	b.statusMessage = widget.NewLabel("")
+	b.statusMessage.Truncation = fyne.TextTruncateEllipsis
+	footer := container.NewVBox(
+		widget.NewSeparator(),
+		container.NewBorder(nil, nil, b.statusBadge, nil, b.statusMessage),
+	)
+
+	return container.NewBorder(header, footer, nil, nil, scroll)
 }
 
 // refreshPopup rebuilds the pop-up's list from the current queue state,
@@ -164,6 +183,7 @@ func (b *DownloadQueueButton) refreshPopup() {
 	tasks := queue.GetTasks()
 
 	b.overallLabel.SetText(fmt.Sprintf("Overall: %d manga · %d chapters in queue", len(taskTitles(tasks)), len(tasks)))
+	b.updateStatusBar(tasks)
 
 	objects := make([]fyne.CanvasObject, 0, len(tasks)+len(tasks)/2+4)
 
@@ -203,6 +223,88 @@ func activeDownloadTask(tasks []*config.DownloadTask) *config.DownloadTask {
 		}
 	}
 	return nil
+}
+
+// mangaTitleMaxRunes is the fixed length the manga title is truncated to in the
+// status bar, so long titles stay readable at a glance.
+const mangaTitleMaxRunes = 30
+
+// updateStatusBar refreshes the footer status bar with what the current download
+// is doing right now. The badge shows the site being downloaded from plus a
+// small state glyph; the message shows the (truncated) manga title followed by
+// the latest status message. This is driven by the progress callback, which
+// emits an update for every phase of an image download, so the bar never sits
+// stale during a stalled download.
+func (b *DownloadQueueButton) updateStatusBar(tasks []*config.DownloadTask) {
+	active := activeDownloadTask(tasks)
+	if active == nil {
+		b.statusBadge.SetText("⏸ Idle")
+		if len(tasks) == 0 {
+			b.statusMessage.SetText("No downloads in queue")
+		} else {
+			b.statusMessage.SetText(fmt.Sprintf("%d chapters queued, waiting for a free slot", len(tasks)))
+		}
+		return
+	}
+
+	if site := siteNameForTask(active); site != "" {
+		b.statusBadge.SetText(fmt.Sprintf("%s %s", site, statusEmojiForMessage(active.StatusMessage)))
+	} else {
+		b.statusBadge.SetText(statusEmojiForMessage(active.StatusMessage))
+	}
+
+	if title := truncateMangaTitle(active.Manga.Title, mangaTitleMaxRunes); title != "" {
+		b.statusMessage.SetText(fmt.Sprintf("%s — %s", title, active.StatusMessage))
+	} else {
+		b.statusMessage.SetText(active.StatusMessage)
+	}
+}
+
+// siteNameForTask returns the human-readable site name for a download task,
+// falling back to the URL hostname when the bookmark has no site set.
+func siteNameForTask(task *config.DownloadTask) string {
+	if task == nil {
+		return ""
+	}
+	if task.Manga.Site != "" {
+		return task.Manga.Site
+	}
+	if task.Manga.Url != "" {
+		if host, err := url.Parse(task.Manga.Url); err == nil && host.Hostname() != "" {
+			return strings.TrimPrefix(host.Hostname(), "www.")
+		}
+	}
+	return ""
+}
+
+// statusEmojiForMessage returns a small state glyph derived from the current
+// download's status message.
+func statusEmojiForMessage(msg string) string {
+	switch {
+	case strings.Contains(msg, "STALLED"):
+		return "⚠"
+	case strings.Contains(msg, "retry"):
+		return "⏳"
+	case strings.Contains(msg, "Creating CBZ"):
+		return "📦"
+	case strings.Contains(msg, "Starting download"), strings.Contains(msg, "Found "):
+		return "▶"
+	default:
+		return "⬇"
+	}
+}
+
+// truncateMangaTitle truncates a (possibly very long) manga title to at most
+// maxRunes runes, appending an ellipsis.
+func truncateMangaTitle(title string, maxRunes int) string {
+	runes := []rune(title)
+	if len(runes) <= maxRunes {
+		return title
+	}
+	if maxRunes <= 1 {
+		return "…"
+	}
+	return string(runes[:maxRunes-1]) + "…"
 }
 
 // activeTaskRow renders the currently downloading task split in half: the left

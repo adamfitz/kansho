@@ -86,9 +86,21 @@ The system SHALL automatically retry failed downloads with exponential backoff.
 #### Scenario: Retry failed image download
 - GIVEN an image download fails
 - WHEN retrying
-- THEN the system SHALL retry up to 3 times
+- THEN the system SHALL retry up to 3 times for all sites
 - AND SHALL use 2, 4, and 8 second exponential backoff
 - AND SHALL use `SleepCtx(ctx, backoff)` so the wait is cancelled immediately if the context is cancelled
+- AND FlameComics SHALL retry up to 5 times (2, 4, 8, 16, and 32 second backoff) to ride out CDN throttling
+- AND for the FlameComics path, each attempt SHALL be a single HTTP request — `DownloadFlameComicsImage` SHALL NOT retry internally, avoiding nested retries that could stall on one image for minutes
+- AND all other sites SHALL keep their legacy retry behavior unchanged
+- AND every attempt, stall, and backoff phase SHALL be pushed through the progress callback and logged, so the status bar indicator updates live for all downloads
+
+#### Scenario: Stalled image download (FlameComics only)
+- GIVEN a server accepts a connection but sends no body bytes (Cloudflare throttling)
+- WHEN a FlameComics image download stalls
+- THEN `DownloadFlameComicsImage` SHALL abort the request after 20 seconds of no data and return a `parser.StalledError`
+- AND a STALLED log line SHALL be emitted identifying the URL
+- AND the manager's `downloadImageWithRetry` SHALL retry the image with exponential backoff (up to 5 attempts)
+- AND the stall SHALL never block the download for more than the no-data timeout plus the retry backoff
 
 ### Requirement: Cancellation
 The system SHALL support context-based cancellation of downloads at all levels.
@@ -101,6 +113,13 @@ The system SHALL support context-based cancellation of downloads at all levels.
 - AND SHALL check `ctx.Done()` before CBZ archive creation
 - AND SHALL return the context error immediately
 - AND SHALL not start new downloads for subsequent chapters
+
+#### Scenario: Cancel an in-flight image download
+- GIVEN an individual image is being downloaded
+- WHEN the parent context is cancelled mid-download
+- THEN the FlameComics request SHALL abort immediately because its timeout SHALL be derived from the parent context via `context.WithTimeout(ctx, ...)`
+- AND the non-CF legacy request SHALL abort immediately because it SHALL use the parent context directly
+- AND the context cancellation error SHALL propagate to the caller
 
 #### Scenario: Cancellation during extraction
 - GIVEN an extraction operation (chapter listing or image URL fetching) is in progress

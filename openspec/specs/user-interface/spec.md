@@ -175,6 +175,10 @@ The system SHALL display an overall download progress summary instead of a dedic
 - AND clicking "Clear All" SHALL prompt the user with an OK/Cancel confirmation dialog before any tasks are cleared
 - AND the pop-up SHALL stay live, updating as the queue changes
 - AND it SHALL close automatically when the queue becomes empty
+- AND a live status bar SHALL be pinned to the bottom of the pop-up
+- AND the status bar SHALL show a badge with the name of the site being downloaded from plus a state glyph (downloading, stalled, backoff, packaging)
+- AND the status bar SHALL show the manga title (truncated to a fixed length with an ellipsis for long titles) followed by the current download's status message
+- AND the status bar SHALL show an idle state ("⏸ Idle") when nothing is downloading
 
 #### Scenario: Remove finished chapters from the queue
 - GIVEN a chapter task finishes downloading successfully
