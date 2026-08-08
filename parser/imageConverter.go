@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"kansho/cf"
@@ -471,4 +472,189 @@ func DownloadConvertToJPGRenameCfWithCollector(c *colly.Collector, filename, ima
 	}
 
 	return nil
+}
+
+// -------------------------
+// FlameComics shared-client image download
+// -------------------------
+
+// StalledError reports that a server accepted a connection but sent no body
+// bytes for the no-data timeout. Cloudflare-protected CDNs do this when they
+// throttle a burst of fresh connections.
+type StalledError struct {
+	URL string
+}
+
+func (e *StalledError) Error() string {
+	return fmt.Sprintf("stalled (no data received in %d seconds): %s", noDataTimeout/time.Second, e.URL)
+}
+
+// noDataTimeout is how long a download may receive zero bytes before it is
+// aborted as stalled and retried.
+const noDataTimeout = 20 * time.Second
+
+var (
+	flameComicsClientOnce sync.Once
+	flameComicsClient     *http.Client
+)
+
+// sharedFlameComicsClient returns a single keep-alive HTTP client. Reusing the
+// transport means every image of a batch reuses the TCP/TLS connection instead
+// of opening a fresh one (a burst of fresh handshakes to the Cloudflare CDN
+// gets throttled, causing silent stalls).
+func sharedFlameComicsClient() *http.Client {
+	flameComicsClientOnce.Do(func() {
+		flameComicsClient = &http.Client{
+			Transport: &http.Transport{
+				Proxy:                 http.ProxyFromEnvironment,
+				ForceAttemptHTTP2:     true,
+				MaxIdleConns:          10,
+				MaxIdleConnsPerHost:   4,
+				IdleConnTimeout:       90 * time.Second,
+				TLSHandshakeTimeout:   15 * time.Second,
+				ResponseHeaderTimeout: 30 * time.Second,
+			},
+		}
+	})
+	return flameComicsClient
+}
+
+var (
+	flameComicsBypassMu    sync.Mutex
+	flameComicsBypassCache = map[string]*cf.BypassData{}
+)
+
+// flameComicsBypassData loads the CF bypass cookies once per session per domain.
+func flameComicsBypassData(domain string) (*cf.BypassData, error) {
+	flameComicsBypassMu.Lock()
+	defer flameComicsBypassMu.Unlock()
+
+	if data, ok := flameComicsBypassCache[domain]; ok {
+		return data, nil
+	}
+
+	data, err := cf.LoadFromFile(domain)
+	if err != nil {
+		return nil, err
+	}
+
+	flameComicsBypassCache[domain] = data
+	return data, nil
+}
+
+// readBodyWithStallDetect reads the response body, aborting with a StalledError
+// if no data arrives for noDataTimeout. Returns the full body on success.
+func readBodyWithStallDetect(ctx context.Context, cancel context.CancelFunc, body io.Reader, imageURL string) ([]byte, error) {
+	var buf bytes.Buffer
+	buf.Grow(1024 * 1024)
+	chunk := make([]byte, 32*1024)
+
+	readWithWatchdog := func() (int, error) {
+		type result struct {
+			n   int
+			err error
+		}
+		resCh := make(chan result, 1)
+		go func() {
+			n, err := body.Read(chunk)
+			resCh <- result{n, err}
+		}()
+		select {
+		case r := <-resCh:
+			return r.n, r.err
+		case <-time.After(noDataTimeout):
+			log.Printf("⚠️ STALLED: no data received from %s for %d seconds, aborting", imageURL, int(noDataTimeout/time.Second))
+			cancel()
+			return 0, &StalledError{URL: imageURL}
+		case <-ctx.Done():
+			return 0, ctx.Err()
+		}
+	}
+
+	for {
+		n, err := readWithWatchdog()
+		if n > 0 {
+			buf.Write(chunk[:n])
+		}
+		if err == io.EOF {
+			return buf.Bytes(), nil
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+}
+
+// DownloadFlameComicsImage downloads a FlameComics image using the shared
+// keep-alive client and CF bypass cookies, converts it to JPEG, and saves it
+// into targetDir. It is FlameComics-only: every other site keeps the legacy
+// per-image download paths.
+func DownloadFlameComicsImage(ctx context.Context, filename, imageURL, targetDir, domain string) error {
+	reqCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(reqCtx, "GET", imageURL, nil)
+	if err != nil {
+		return err
+	}
+
+	bypassData, err := flameComicsBypassData(domain)
+	if err != nil {
+		log.Printf("[FlameComics] No CF bypass data found for domain: %s", domain)
+	} else {
+		req.Header.Set("User-Agent", bypassData.Entropy.UserAgent)
+
+		if bypassData.CfClearanceStruct != nil {
+			cs := bypassData.CfClearanceStruct
+
+			// Dot-prefix the cookie domain so it is also sent for the CDN
+			// subdomain (e.g. cdn.flamecomics.xyz).
+			cookieDomain := cs.Domain
+			if cookieDomain != "" && !strings.HasPrefix(cookieDomain, ".") {
+				cookieDomain = "." + cookieDomain
+			}
+
+			httpCookie := &http.Cookie{
+				Name:     cs.Name,
+				Value:    cs.Value,
+				Path:     cs.Path,
+				Domain:   cookieDomain,
+				Secure:   cs.Secure,
+				HttpOnly: cs.HttpOnly,
+			}
+			if cs.Expires != nil {
+				httpCookie.Expires = *cs.Expires
+			}
+			req.AddCookie(httpCookie)
+			log.Printf("✓ Applied CF bypass with cookie domain: %s for URL: %s", cookieDomain, imageURL)
+		}
+
+		for _, ck := range bypassData.AllCookies {
+			if ck.Name != "" && ck.Name != "cf_clearance" {
+				req.AddCookie(&http.Cookie{Name: ck.Name, Value: ck.Value, Path: ck.Path})
+			}
+		}
+	}
+
+	resp, err := sharedFlameComicsClient().Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return errors.New("bad response status: " + resp.Status)
+	}
+
+	imgBytes, err := readBodyWithStallDetect(reqCtx, cancel, resp.Body, imageURL)
+	if err != nil {
+		return err
+	}
+
+	if len(imgBytes) == 0 {
+		return errors.New("empty response body")
+	}
+
+	outputFile := filepath.Join(targetDir, padFileName(filename+".jpg"))
+	return ConvertImageToJPEG(imgBytes, outputFile)
 }
