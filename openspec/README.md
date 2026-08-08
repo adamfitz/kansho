@@ -7,8 +7,8 @@ This directory contains Gherkin-style specifications for the kansho manga downlo
 | Spec | File | Covers |
 |------|------|--------|
 | [Overview](specs/kansho-overview/spec.md) | `specs/kansho-overview/spec.md` | Application entrypoint, window, menus, keyboard shortcuts |
-| [Site Plugin System](specs/site-plugin-system/spec.md) | `specs/site-plugin-system/spec.md` | Plugin interface, extraction methods (JS/selector/custom/api), site registry, config, filename normalization, CF bypass support, API client User-Agent |
-| [Download Manager](specs/download-manager/spec.md) | `specs/download-manager/spec.md` | Download lifecycle, chapter/image fetch orchestration, CBZ creation, retry with backoff (skip CF challenges), context cancellation |
+| [Site Plugin System](specs/site-plugin-system/spec.md) | `specs/site-plugin-system/spec.md` | Plugin interface, extraction methods (JS/selector/custom/api), site registry, config, filename normalization, CF bypass support, API client User-Agent, filtering of non-chapter assets from image lists |
+| [Download Manager](specs/download-manager/spec.md) | `specs/download-manager/spec.md` | Download lifecycle, chapter/image fetch orchestration, CBZ creation, single-level image retry with backoff (skip CF challenges), context cancellation including in-flight image requests |
 | [Download Queue](specs/download-queue/spec.md) | `specs/download-queue/spec.md` | FIFO queue singleton, single-chapter tasks, task states, cancellation (single + all), CF challenge handling, retry (failed/cancelled/CF-blocked), UI callbacks |
 | [HTTP Client](specs/http-client/spec.md) | `specs/http-client/spec.md` | Unified HTTP client, CF bypass headers, timeout-based retry, decompression (gzip/brotli/deflate), CF challenge detection, debug HTML saving |
 | [Request Executor](specs/request-executor/spec.md) | `specs/request-executor/spec.md` | HTTP-first with browser fallback strategy, CF challenge handling, domain resolution |

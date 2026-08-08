@@ -183,21 +183,37 @@ func parseFlameComicsImages(html string) ([]string, error) {
 
 			// Try pageProps.chapter.images first
 			if len(data.Props.PageProps.Chapter.Images) > 0 {
-				return data.Props.PageProps.Chapter.Images, nil
+				seen := make(map[string]bool)
+				for _, img := range data.Props.PageProps.Chapter.Images {
+					if !isFlameComicsPageImage(img) {
+						continue
+					}
+					if !seen[img] {
+						seen[img] = true
+						imageURLs = append(imageURLs, img)
+					}
+				}
+				if len(imageURLs) > 0 {
+					return imageURLs, nil
+				}
 			}
 
 			// Try pageProps.images
 			if len(data.Props.PageProps.Images) > 0 {
 				for _, img := range data.Props.PageProps.Images {
+					var url string
 					if imgStr, ok := img.(string); ok {
-						imageURLs = append(imageURLs, imgStr)
+						url = imgStr
 					} else if imgMap, ok := img.(map[string]interface{}); ok {
 						// Image might be an object with a url/src field
-						if url, ok := imgMap["url"].(string); ok {
-							imageURLs = append(imageURLs, url)
+						if u, ok := imgMap["url"].(string); ok {
+							url = u
 						} else if src, ok := imgMap["src"].(string); ok {
-							imageURLs = append(imageURLs, src)
+							url = src
 						}
+					}
+					if url != "" && isFlameComicsPageImage(url) {
+						imageURLs = append(imageURLs, url)
 					}
 				}
 				if len(imageURLs) > 0 {
@@ -227,6 +243,10 @@ func parseFlameComicsImages(html string) ([]string, error) {
 					}
 					url = actualURL
 				}
+			}
+
+			if !isFlameComicsPageImage(url) {
+				continue
 			}
 
 			if !seen[url] {
@@ -263,6 +283,9 @@ func parseFlameComicsImages(html string) ([]string, error) {
 
 				// Only include if it looks like a manga page image
 				if strings.Contains(url, "cdn") || strings.HasPrefix(url, "http") {
+					if !isFlameComicsPageImage(url) {
+						continue
+					}
 					seen[url] = true
 					images = append(images, url)
 				}
@@ -280,6 +303,30 @@ func parseFlameComicsImages(html string) ([]string, error) {
 // -------------------------
 // Helper functions
 // -------------------------
+
+// isFlameComicsPageImage reports whether a CDN URL points at an actual chapter
+// page image. FlameComics' image arrays also include non-chapter assets such as
+// the series thumbnail (thumbnail.png) and "read on flame" promo images
+// (/assets/read/...), which must not be packaged into a CBZ.
+func isFlameComicsPageImage(u string) bool {
+	lower := strings.ToLower(u)
+	if strings.Contains(lower, "/assets/") {
+		return false
+	}
+
+	base := lower
+	if idx := strings.LastIndex(lower, "/"); idx >= 0 {
+		base = lower[idx+1:]
+	}
+
+	for _, junk := range []string{"thumbnail", "thumb_", "cover", "logo", "icon", "banner", "read_on_flame"} {
+		if strings.Contains(base, junk) {
+			return false
+		}
+	}
+
+	return true
+}
 
 func extractFlameChapterNumber(s string) int {
 	// Extract the first number from the string (handles "11.00", "0.00", "11", "Chapter 11", etc.)

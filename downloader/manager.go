@@ -2,6 +2,7 @@ package downloader
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"math"
@@ -352,19 +353,15 @@ func (m *Manager) downloadChapter(ctx context.Context, chapterURL, cbzName strin
 				return ctx.Err()
 			}
 
+			status := fmt.Sprintf("Chapter %d/%d: Downloading image %d/%d", actualChapterNum, totalChaptersFound, imgIdx+1, len(imageURLs))
+			imgProgress := progress + (float64(imgIdx+1) / float64(len(imageURLs)) / float64(newChaptersToDownload))
+
 			if callback != nil {
-				imgProgress := progress + (float64(imgIdx+1) / float64(len(imageURLs)) / float64(newChaptersToDownload))
-				callback(
-					fmt.Sprintf("Chapter %d/%d: Downloading image %d/%d", actualChapterNum, totalChaptersFound, imgIdx+1, len(imageURLs)),
-					imgProgress,
-					actualChapterNum,
-					currentDownload,
-					totalChaptersFound,
-				)
+				callback(status, imgProgress, actualChapterNum, currentDownload, totalChaptersFound)
 			}
 
 			filename := fmt.Sprintf("%03d", imgIdx+1)
-			err := m.downloadImageWithRetry(ctx, imgURL, chapterDir, filename)
+			err := m.downloadImageWithRetry(ctx, imgURL, chapterDir, filename, status, callback, imgProgress, actualChapterNum, currentDownload, totalChaptersFound)
 			if err != nil {
 				log.Printf("[Downloader:%s] Failed to download image %d: %v", cbzName, imgIdx+1, err)
 			} else {
@@ -431,21 +428,47 @@ func guessExtension(data []byte) string {
 }
 
 // downloadImageWithRetry downloads a single image with retry logic
-func (m *Manager) downloadImageWithRetry(ctx context.Context, imageURL, targetDir, filename string) error {
+func (m *Manager) downloadImageWithRetry(ctx context.Context, imageURL, targetDir, filename, status string, callback ProgressCallback, progress float64, actualChapter, currentDownload, totalChaptersFound int) error {
+	// FlameComics is allowed more attempts because its CDN throttles bursts of
+	// fresh connections and needs longer to ride the throttle out; every other
+	// site keeps its previous retry count.
 	maxRetries := 3
+	if m.config.Site.GetSiteName() == "flamecomics" {
+		maxRetries = 5
+	}
 	var lastErr error
+
+	// notify logs each phase and pushes it through the progress callback so the
+	// status bar updates live for every download, regardless of site.
+	notify := func(message string) {
+		log.Printf("[Downloader:%s] %s", filename, message)
+		if callback != nil {
+			callback(message, progress, actualChapter, currentDownload, totalChaptersFound)
+		}
+	}
 
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		if attempt > 0 {
 			backoff := time.Duration(math.Pow(2, float64(attempt))) * time.Second
+			notify(fmt.Sprintf("%s — retry %d/%d in %v (last error: %v)", status, attempt, maxRetries, backoff, lastErr))
 			if !parser.SleepCtx(ctx, backoff) {
-				log.Printf("[Downloader] Image retry cancelled for: %s", filename)
+				log.Printf("[Downloader:%s] Retry cancelled for: %s", filename, imageURL)
 				return ctx.Err()
 			}
 		}
 
-		// Use parser's download function with CF support if needed
-		if m.config.Site.NeedsCFBypass() {
+		notify(fmt.Sprintf("%s (attempt %d/%d)", status, attempt+1, maxRetries))
+
+		// Use parser's download function with CF support if needed.
+		// FlameComics gets the shared keep-alive client with stall detection;
+		// every other site keeps its legacy per-image download path.
+		if m.config.Site.GetSiteName() == "flamecomics" {
+			err := parser.DownloadFlameComicsImage(ctx, filename, imageURL, targetDir, m.domain)
+			if err == nil {
+				return nil
+			}
+			lastErr = err
+		} else if m.config.Site.NeedsCFBypass() {
 			err := parser.DownloadConvertToJPGRenameCf(ctx, filename, imageURL, targetDir, m.domain)
 			if err == nil {
 				return nil
@@ -457,6 +480,13 @@ func (m *Manager) downloadImageWithRetry(ctx context.Context, imageURL, targetDi
 				return nil
 			}
 			lastErr = err
+		}
+
+		// FlameComics stall detection surfaces a StalledError; report it clearly
+		// so the status bar shows the stall instead of sitting on "downloading".
+		var stalled *parser.StalledError
+		if errors.As(lastErr, &stalled) {
+			notify(fmt.Sprintf("%s — STALLED (no data received), waiting to retry", status))
 		}
 	}
 

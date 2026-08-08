@@ -77,6 +77,12 @@ The system SHALL support multiple chapter and image extraction strategies.
 - THEN it SHALL fetch the raw HTML content
 - AND it SHALL invoke the provided CustomParser function to extract data from the HTML
 
+#### Scenario: Image lists contain only chapter pages
+- GIVEN a site's image extraction returns image URLs (e.g. FlameComics includes the series thumbnail and "read on flame" promo assets alongside the actual page images)
+- WHEN the image list is built
+- THEN non-chapter assets such as thumbnails, covers, logos, icons, banners, and promo images SHALL be filtered out and de-duplicated
+- AND the CBZ SHALL be packaged with only the actual chapter page images
+
 #### Scenario: API extraction type
 - GIVEN a site configured with `extraction.Type = "api"`
 - WHEN the downloader processes chapters or images

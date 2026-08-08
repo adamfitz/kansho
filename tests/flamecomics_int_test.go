@@ -63,6 +63,15 @@ func Test_FlameComics_Series2_Chapters_And_Images(t *testing.T) {
 			!strings.Contains(img, "flamecomics") {
 			t.Fatalf("Invalid image URL: %s", img)
 		}
+
+		// Non-chapter assets (series thumbnail, "read on flame" promos, etc.)
+		// must be filtered out so they are not packaged into the CBZ.
+		lower := strings.ToLower(img)
+		if strings.Contains(lower, "/assets/") ||
+			strings.Contains(lower, "thumbnail") ||
+			strings.Contains(lower, "read_on_flame") {
+			t.Fatalf("Non-chapter image leaked into list: %s", img)
+		}
 	}
 
 	log.Printf("[TEST] SUCCESS — FlameComics scraper is working")
