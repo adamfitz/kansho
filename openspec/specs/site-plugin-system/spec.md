@@ -65,6 +65,25 @@ The system SHALL support multiple chapter and image extraction strategies.
 - WHEN the downloader processes chapters or images
 - THEN it SHALL use chromedp to navigate the page and evaluate the provided JavaScript code
 
+#### Scenario: Paginated JavaScript extraction
+- GIVEN a site configured with `extraction.Type = "javascript"` and a `NextPageJS` expression that clicks the next-page control and returns true when a next page existed
+- WHEN the downloader extracts chapters from a paginated chapter list
+- THEN it SHALL evaluate the JavaScript on each page, click the next page control, and repeat until the last page
+- AND it SHALL accumulate results across pages
+- AND the pagination loop SHALL run in Go rather than an async/promise JS IIFE
+
+#### Scenario: Scroll-to-load image extraction
+- GIVEN a site configured with `ImageExtractionMethod.ScrollToLoad = true` for a reader that lazy-loads images as the page scrolls
+- WHEN the downloader extracts chapter images
+- THEN the browser SHALL scroll the page incrementally before reading image srcs from the DOM
+- AND scrolling SHALL be browser-driven step by step, without JS promises
+
+#### Scenario: Custom extraction timeout
+- GIVEN a site sets `extraction.Timeout`
+- WHEN browser-based extraction runs
+- THEN the timeout SHALL bound the whole browser extraction operation (e.g. paginated chapter lists or slowly-lazy-loading readers may need more than the 45s default)
+- AND a zero timeout SHALL fall back to the default
+
 #### Scenario: HTML selector extraction type
 - GIVEN a site configured with `extraction.Type = "html_selector"`
 - WHEN the downloader processes chapters or images
