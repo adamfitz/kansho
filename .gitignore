@@ -1,1 +1,5 @@
 .vscode
+
+# scratch test harnesses and debug context
+cmd/
+context/

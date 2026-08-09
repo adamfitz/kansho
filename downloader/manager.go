@@ -468,6 +468,12 @@ func (m *Manager) downloadImageWithRetry(ctx context.Context, imageURL, targetDi
 				return nil
 			}
 			lastErr = err
+		} else if m.config.Site.GetSiteName() == "comix" {
+			err := parser.DownloadConvertToJPGRenameWithReferer(ctx, filename, imageURL, targetDir, "https://comix.to/")
+			if err == nil {
+				return nil
+			}
+			lastErr = err
 		} else if m.config.Site.NeedsCFBypass() {
 			err := parser.DownloadConvertToJPGRenameCf(ctx, filename, imageURL, targetDir, m.domain)
 			if err == nil {

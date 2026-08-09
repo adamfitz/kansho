@@ -1,6 +1,8 @@
 package downloader
 
 import (
+	"time"
+
 	//"context"
 	"kansho/config"
 )
@@ -13,11 +15,22 @@ type ChapterExtractionMethod struct {
 	// For Type="javascript": JavaScript code to execute
 	JavaScript string
 
+	// For Type="javascript" with a paginated list: plain JavaScript (no
+	// promises) that clicks the "next page" control and returns true when it
+	// did, false on the last page. When set, extraction repeats page by page
+	// and unique results are accumulated, replacing async/promise IIFEs.
+	NextPageJS string
+
 	// For Type="html_selector": CSS selector
 	Selector string
 
 	// WaitSelector: CSS selector to wait for before extraction
 	WaitSelector string
+
+	// Timeout: optional maximum time for the browser extraction step.
+	// Sites whose chapter lists need paginating through can raise this above
+	// the 45s default. Zero means use the default.
+	Timeout time.Duration
 
 	// CustomParser: optional function for custom parsing logic
 	// Receives HTML, returns map[filename]url
@@ -36,12 +49,22 @@ type ImageExtractionMethod struct {
 	// For Type="javascript": JavaScript code to execute
 	JavaScript string
 
+	// ScrollToLoad scrolls the page incrementally before extraction so
+	// lazy-loaded images (e.g. long-strip readers) are fetched. The scrolling
+	// is driven by the browser step by step — no JS promises required.
+	ScrollToLoad bool
+
 	// For Type="html_selector": CSS selector + attribute
 	Selector  string
 	Attribute string // e.g., "src", "data-src"
 
 	// WaitSelector: CSS selector to wait for before extraction
 	WaitSelector string
+
+	// Timeout: optional maximum time for the browser extraction step.
+	// Sites whose images only exist in React fiber data (lazy-loaded) may
+	// need this raised above the 45s default. Zero means use the default.
+	Timeout time.Duration
 
 	// CustomParser: optional function for custom parsing logic
 	// Receives HTML, returns []imageURL

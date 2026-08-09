@@ -176,9 +176,87 @@ func dumpBrowserCookies(ctx context.Context, domain string) {
 	}
 }
 
-// NavigateAndEvaluate performs navigation, waiting, and JS evaluation
-func (bs *BrowserSession) NavigateAndEvaluate(url, waitSelector, javascript string, result interface{}) error {
-	timeout := 60 * time.Second
+// NavigateOptions controls how a page is navigated and evaluated during
+// browser-based extraction. JavaScript expressions must be plain
+// (non-promise) and return an array of items.
+type NavigateOptions struct {
+	// WaitSelector, if set, is waited for (visible) before extraction.
+	WaitSelector string
+
+	// JavaScript returns one batch of results from the current DOM state.
+	JavaScript string
+
+	// NextPageJS, if set, is a plain expression that clicks the "next page"
+	// control and returns true when it did (false on the last page). When set,
+	// extraction repeats page by page and unique results are accumulated. This
+	// replaces the old async/promise IIFE pagination approach: the loop runs in
+	// Go, so the page rendering is never blocked by a script.
+	NextPageJS string
+
+	// ScrollToLoad scrolls the page incrementally before extraction so
+	// lazy-loaded content (e.g. reader images) is actually fetched. The
+	// scrolling runs browser-side step by step, giving the page time to fire
+	// intersection observers — no JS promises involved.
+	ScrollToLoad bool
+
+	// Timeout for the whole operation. Zero means 60s.
+	Timeout time.Duration
+}
+
+// scrollToLoad scrolls the page one viewport at a time so lazy-loaded content
+// (e.g. reader images) is fetched. It runs entirely browser-side: each step
+// scrolls down a viewport and sleeps between steps, giving the browser time to
+// fire intersection observers and load images — no JS promises required.
+func scrollToLoad(ctx context.Context) error {
+	const delay = 80 * time.Millisecond
+
+	var step int
+	if err := chromedp.Run(ctx, chromedp.Evaluate("window.innerHeight", &step)); err != nil {
+		return err
+	}
+	if step <= 0 {
+		step = 800
+	}
+
+	y := 0
+	for i := 0; i < 2000; i++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
+		var height int
+		if err := chromedp.Run(ctx,
+			chromedp.Evaluate(fmt.Sprintf("window.scrollTo(0, %d)", y), nil),
+			chromedp.Evaluate("document.body.scrollHeight", &height),
+		); err != nil {
+			return err
+		}
+
+		if y >= height {
+			break
+		}
+		y += step
+		time.Sleep(delay)
+	}
+
+	// Final scroll to the very bottom, then let the last batch of images load.
+	if err := chromedp.Run(ctx, chromedp.Evaluate("window.scrollTo(0, document.body.scrollHeight)", nil)); err != nil {
+		return err
+	}
+	time.Sleep(600 * time.Millisecond)
+	return nil
+}
+
+// NavigateScrollPaginateAndEvaluate navigates, waits, then repeatedly scrolls
+// (if ScrollToLoad), evaluates JavaScript, and clicks through pages (if
+// NextPageJS) until no more pages exist or no new results appear. Results from
+// every batch are accumulated and unmarshalled into result, which must be a
+// pointer to a slice (e.g. *[]map[string]string or *[]string).
+func (bs *BrowserSession) NavigateScrollPaginateAndEvaluate(url string, opts NavigateOptions, result interface{}) error {
+	timeout := opts.Timeout
+	if timeout <= 0 {
+		timeout = 120 * time.Second
+	}
 	ctx, cancel := context.WithTimeout(bs.ctx, timeout)
 	defer cancel()
 
@@ -191,7 +269,7 @@ func (bs *BrowserSession) NavigateAndEvaluate(url, waitSelector, javascript stri
 
 	err := chromedp.Run(ctx, tasks...)
 	if err != nil {
-		cf.LogCFError("NavigateAndEvaluate-Navigation", bs.domain, err)
+		cf.LogCFError("NavigateScrollPaginateAndEvaluate-Navigation", bs.domain, err)
 		return fmt.Errorf("navigation failed: %w", err)
 	}
 
@@ -229,19 +307,74 @@ func (bs *BrowserSession) NavigateAndEvaluate(url, waitSelector, javascript stri
 		}
 	}
 
-	var evalTasks []chromedp.Action
-	if waitSelector != "" {
-		evalTasks = append(evalTasks, chromedp.WaitVisible(waitSelector, chromedp.ByQuery))
+	if opts.WaitSelector != "" {
+		if err := chromedp.Run(ctx, chromedp.WaitVisible(opts.WaitSelector, chromedp.ByQuery)); err != nil {
+			cf.LogCFError("NavigateScrollPaginateAndEvaluate-Wait", bs.domain, err)
+			return fmt.Errorf("wait for %q failed: %w", opts.WaitSelector, err)
+		}
 	}
-	evalTasks = append(evalTasks, chromedp.Evaluate(javascript, result))
 
-	err = chromedp.Run(ctx, evalTasks...)
+	var all []json.RawMessage
+	var prev json.RawMessage
+	stale := 0
+
+	for page := 0; page < 300; page++ {
+		if opts.ScrollToLoad {
+			if err := scrollToLoad(ctx); err != nil {
+				cf.LogCFError("NavigateScrollPaginateAndEvaluate-Scroll", bs.domain, err)
+				return fmt.Errorf("scroll to load failed: %w", err)
+			}
+		}
+
+		var batch json.RawMessage
+		if err := chromedp.Run(ctx, chromedp.Evaluate(opts.JavaScript, &batch)); err != nil {
+			cf.LogCFError("NavigateScrollPaginateAndEvaluate-Eval", bs.domain, err)
+			return fmt.Errorf("evaluation failed: %w", err)
+		}
+
+		if len(batch) > 0 && string(batch) != "null" {
+			var items []json.RawMessage
+			if err := json.Unmarshal(batch, &items); err != nil {
+				return fmt.Errorf("decode batch as array: %w", err)
+			}
+			all = append(all, items...)
+		}
+
+		if opts.NextPageJS == "" {
+			break
+		}
+
+		// If the batch is unchanged from the previous one, the page did not
+		// advance — give it one more try, then stop paginating.
+		if bytes.Equal(batch, prev) {
+			stale++
+			if stale >= 2 {
+				break
+			}
+		} else {
+			stale = 0
+		}
+		prev = batch
+
+		var hasNext bool
+		if err := chromedp.Run(ctx, chromedp.Evaluate(opts.NextPageJS, &hasNext)); err != nil {
+			cf.LogCFError("NavigateScrollPaginateAndEvaluate-Next", bs.domain, err)
+			return fmt.Errorf("next page evaluation failed: %w", err)
+		}
+		if !hasNext {
+			break
+		}
+
+		if err := chromedp.Run(ctx, chromedp.Sleep(1200*time.Millisecond)); err != nil {
+			return err
+		}
+	}
+
+	data, err := json.Marshal(all)
 	if err != nil {
-		cf.LogCFError("NavigateAndEvaluate-Eval", bs.domain, err)
-		return fmt.Errorf("evaluation failed: %w", err)
+		return err
 	}
-
-	return nil
+	return json.Unmarshal(data, result)
 }
 
 // Navigate navigates to a URL and waits for page load
@@ -565,6 +698,12 @@ func httpGet(url string) ([]byte, error) {
 // decodeBase64 decodes a base64 string into raw bytes.
 func decodeBase64(s string) ([]byte, error) {
 	return base64.StdEncoding.DecodeString(s)
+}
+
+// Ctx returns the underlying browser context, for callers that need to run
+// raw chromedp actions against the session's browser.
+func (bs *BrowserSession) Ctx() context.Context {
+	return bs.ctx
 }
 
 // Close closes the browser session

@@ -170,6 +170,102 @@ func DownloadConvertToJPGRename(ctx context.Context, filename, imageURL, targetD
 	return lastErr
 }
 
+// DownloadConvertToJPGRenameWithReferer downloads an image with a Referer and
+// browser-like User-Agent header, converts it to JPEG, and saves it into
+// targetDir. Some CDNs (e.g. comix.to) refuse image requests that do not carry
+// a Referer from the reading page. Uses a shared keep-alive client so a batch
+// of images reuses connections instead of opening fresh ones per image.
+func DownloadConvertToJPGRenameWithReferer(ctx context.Context, filename, imageURL, targetDir, referer string) error {
+	var lastErr error
+	maxRetries := 3
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			log.Printf("Retry attempt %d/%d for: %s", attempt, maxRetries, imageURL)
+		}
+
+		err := downloadConvertToJPGRenameWithRefererCtx(ctx, filename, imageURL, targetDir, referer)
+		if err == nil {
+			return nil
+		}
+
+		lastErr = err
+		log.Printf("Download/conversion failed (attempt %d/%d): %v", attempt+1, maxRetries+1, err)
+	}
+
+	return lastErr
+}
+
+// downloadConvertToJPGRenameWithRefererCtx is the context-aware internal
+// function without retry logic.
+func downloadConvertToJPGRenameWithRefererCtx(ctx context.Context, filename, imageURL, targetDir, referer string) error {
+	reqCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(reqCtx, "GET", imageURL, nil)
+	if err != nil {
+		return err
+	}
+
+	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36")
+	if referer != "" {
+		req.Header.Set("Referer", referer)
+	}
+
+	resp, err := sharedRefererClient().Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return errors.New("bad response status: " + resp.Status)
+	}
+
+	imgBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+
+	if len(imgBytes) == 0 {
+		return errors.New("empty response body")
+	}
+
+	// pad the image filename to 3 digits
+	paddedFileName := padFileName(filename + ".jpg")
+
+	// join the padded dir / filename back together
+	outputFile := filepath.Join(targetDir, paddedFileName)
+
+	// Convert and save
+	return ConvertImageToJPEG(imgBytes, outputFile)
+}
+
+// sharedRefererClient returns a single keep-alive HTTP client for the
+// Referer-based image downloads. Reusing the transport lets a batch of images
+// share connections, avoiding Cloudflare throttling of fresh handshakes.
+func sharedRefererClient() *http.Client {
+	refererClientOnce.Do(func() {
+		refererClient = &http.Client{
+			Transport: &http.Transport{
+				Proxy:                 http.ProxyFromEnvironment,
+				ForceAttemptHTTP2:     true,
+				MaxIdleConns:          10,
+				MaxIdleConnsPerHost:   4,
+				IdleConnTimeout:       90 * time.Second,
+				TLSHandshakeTimeout:   15 * time.Second,
+				ResponseHeaderTimeout: 30 * time.Second,
+			},
+		}
+	})
+	return refererClient
+}
+
+var (
+	refererClientOnce sync.Once
+	refererClient     *http.Client
+)
+
 // downloadConvertToJPGRenameCtx is the context-aware internal function without retry
 func downloadConvertToJPGRenameCtx(ctx context.Context, filename, imageURL, targetDir string) error {
 	req, err := http.NewRequestWithContext(ctx, "GET", imageURL, nil)

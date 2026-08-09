@@ -17,6 +17,14 @@ The system SHALL download images from URLs with support for multiple transport m
 - AND retry/backoff SHALL be handled by the caller at exactly one level (no nested retries inside the download function)
 - AND all other sites SHALL keep their legacy per-image download paths unchanged
 
+#### Scenario: Referer-protected image download (comix)
+- GIVEN an image URL on a static CDN that rejects requests without a Referer from the reading site (e.g. comix.to)
+- WHEN the manager uses `DownloadConvertToJPGRenameWithReferer`
+- THEN the request SHALL carry a browser User-Agent and the configured Referer (e.g. `https://comix.to/`)
+- AND a shared keep-alive `http.Client` SHALL be reused across the whole batch so connections are not opened fresh per image
+- AND the image SHALL be converted to JPEG if needed and saved with a zero-padded 3-digit filename
+- AND retries SHALL be handled by the caller at exactly one level
+
 #### Scenario: Image download with CF bypass
 - GIVEN an image URL on a CF-protected site
 - WHEN a CF-protected image is downloaded through the legacy `DownloadConvertToJPGRenameCf` path (or the FlameComics shared path)

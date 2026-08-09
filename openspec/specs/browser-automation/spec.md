@@ -21,17 +21,38 @@ The system SHALL manage chromedp browser sessions with configurable options.
 - THEN both the browser context and allocator context SHALL be cancelled
 
 ### Requirement: Navigation and JavaScript Evaluation
-The system SHALL support navigating to pages and executing JavaScript for content extraction.
+The system SHALL support navigating to pages and executing JavaScript for content extraction, including paginated chapter lists and lazy-loaded readers.
 
-#### Scenario: Navigate and evaluate JavaScript
-- GIVEN a URL and JavaScript code
-- WHEN `NavigateAndEvaluate` is called
+#### Scenario: Navigate, scroll, paginate, and evaluate JavaScript
+- GIVEN a URL and a `NavigateOptions` value
+- WHEN `NavigateScrollPaginateAndEvaluate` is called
 - THEN the browser SHALL navigate to the URL
 - AND wait for the page body to load
 - AND check for CF challenge pages after navigation
 - AND if a CF challenge is detected, open the browser for manual solving and return a CfChallengeError
-- AND wait for the specified CSS selector (if provided)
-- AND evaluate the JavaScript code, storing results in the provided output variable
+- AND wait for the configured `WaitSelector` (if provided)
+- AND evaluate the plain (non-promise) JavaScript, accumulating results from each batch
+- AND unmarshal the accumulated results into the provided output variable, which SHALL be a pointer to a slice
+
+#### Scenario: Scroll-to-load lazy content
+- GIVEN `NavigateOptions.ScrollToLoad` is set
+- WHEN `NavigateScrollPaginateAndEvaluate` is called
+- THEN the browser SHALL scroll the page one viewport at a time before extraction, pausing between steps so lazy-loaded content (e.g. reader images) is fetched
+- AND scrolling SHALL be driven browser-side without async/promise JavaScript
+
+#### Scenario: Go-driven pagination
+- GIVEN `NavigateOptions.NextPageJS` is set (a plain expression that clicks the "next page" control and returns true when it did, false on the last page)
+- WHEN `NavigateScrollPaginateAndEvaluate` is called
+- THEN extraction SHALL repeat page by page — evaluate JavaScript, click the next page, wait for it to render, evaluate again
+- AND unique results SHALL be accumulated across pages
+- AND pagination SHALL stop when NextPageJS returns false, the page limit is reached, or two consecutive batches are identical (stale detection)
+- AND the pagination loop SHALL run in Go so page rendering is never blocked by a script
+
+#### Scenario: Extraction timeout
+- GIVEN a `NavigateOptions.Timeout`
+- WHEN `NavigateScrollPaginateAndEvaluate` runs longer than the timeout
+- THEN the whole operation SHALL abort with an error
+- AND a zero timeout SHALL default to 120 seconds
 
 #### Scenario: Navigate with wait selector
 - GIVEN a URL and a wait selector

@@ -94,6 +94,14 @@ The system SHALL automatically retry failed downloads with exponential backoff.
 - AND all other sites SHALL keep their legacy retry behavior unchanged
 - AND every attempt, stall, and backoff phase SHALL be pushed through the progress callback and logged, so the status bar indicator updates live for all downloads
 
+#### Scenario: Referer-protected image download (comix)
+- GIVEN a comix.to chapter download
+- WHEN each image is downloaded
+- THEN the image SHALL be fetched through `DownloadConvertToJPGRenameWithReferer` with a browser User-Agent and a Referer of `https://comix.to/`, because the static CDN 403s requests without one
+- AND a shared keep-alive client SHALL be reused across the batch
+- AND the image SHALL be converted to JPEG and saved with a zero-padded filename
+- AND comix SHALL be selected by site name before the generic CF-bypass and plain paths
+
 #### Scenario: Stalled image download (FlameComics only)
 - GIVEN a server accepts a connection but sends no body bytes (Cloudflare throttling)
 - WHEN a FlameComics image download stalls
