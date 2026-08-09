@@ -359,9 +359,10 @@ func (v *ChapterListView) refreshRemoteChapters(gen int, manga *config.Bookmarks
 				v.refreshing = false
 				v.refreshButton.Enable()
 				v.stopLoading()
-				// CF dialog behaves exactly as before; on success reload the list
+				// CF dialog behaves exactly as before; on success re-trigger the
+				// refresh so the freshly imported CF data is used to fetch chapters.
 				ShowcfDialog(v.state.Window, url, func() {
-					v.onMangaSelected(v.state.SelectedMangaID)
+					v.onRefreshClicked()
 				})
 			})
 			return
