@@ -215,6 +215,11 @@ func (v *EditMangaView) LoadMangaForEditing(mangaID int) {
 	log.Printf("[EditManga] Loaded manga for editing: %s (ID: %d)", manga.Title, mangaID)
 }
 
+// PrepareForNewManga resets the form so a new manga can be added.
+func (v *EditMangaView) PrepareForNewManga() {
+	v.clearForm()
+}
+
 // ClearForm resets the form to add mode
 func (v *EditMangaView) clearForm() {
 	v.Title.SetText("")

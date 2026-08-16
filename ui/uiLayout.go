@@ -16,7 +16,7 @@ import (
 //   - Header: Application title and subtitle (top) with the download queue
 //     summary button on the right
 //   - Content Area: Two-column layout
-//   - Left Column: Manga list (top 50%) and Edit Manga form (bottom 50%)
+//   - Left Column: Manga list (fills the column; Edit Manga form unfolds on demand)
 //   - Right Column: Chapter list (100%)
 //
 // - Footer: Attribution text (bottom)
@@ -69,12 +69,54 @@ func BuildMainLayout(window fyne.Window) fyne.CanvasObject {
 	chapterListView := NewChapterListView(state, downloadQueueButton)
 
 	// Assemble the left column
-	// This contains the manga list (top) and edit manga form (bottom)
-	// Using NewGridWithRows(2, ...) gives each card 50% of the vertical space
-	leftColumn := container.NewGridWithRows(2,
-		container.NewStack(mangaListView.Card), // Top 50%
-		container.NewStack(editMangaView.Card), // Bottom 50%
+	// The manga list fills the whole column by default; the edit manga form
+	// stays folded until the user opens it via "Add Manga" or "Edit Manga".
+	// Using a Border layout with the edit form as the bottom border, Fyne skips
+	// hidden border children, so the list takes the full column height while
+	// the edit panel is folded.
+	editPanel := container.NewStack(editMangaView.Card)
+	editPanel.Hide()
+
+	leftColumn := container.NewBorder(
+		nil,
+		editPanel,
+		nil,
+		nil,
+		container.NewStack(mangaListView.Card), // Fills full column while folded
 	)
+
+	// Track whether the edit panel is currently shown so the "Add Manga" /
+	// "Collapse" header button can act as a toggle. Fyne does not re-layout a
+	// container when a child's visibility changes, so refresh the border
+	// explicitly to expand/shrink the list accordingly.
+	editVisible := false
+	setEditVisible := func(visible bool) {
+		editVisible = visible
+		if visible {
+			editPanel.Show()
+			mangaListView.SetAddButtonText("Collapse")
+		} else {
+			editPanel.Hide()
+			mangaListView.SetAddButtonText("Add Manga")
+		}
+		leftColumn.Refresh()
+	}
+
+	// The header button toggles the panel: opening it resets the form to add
+	// mode, closing it folds the panel back down.
+	mangaListView.SetToggleEditHandler(func() {
+		if editVisible {
+			setEditVisible(false)
+		} else {
+			editMangaView.PrepareForNewManga()
+			setEditVisible(true)
+		}
+	})
+
+	// "Edit Manga" in the list always opens the panel with the selection.
+	mangaListView.SetUnfoldEditHandler(func() {
+		setEditVisible(true)
+	})
 
 	// Assemble the main content area
 	// This is a two-column layout with equal widths (50% each)

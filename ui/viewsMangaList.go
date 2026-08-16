@@ -182,11 +182,12 @@ func (h *hoverLabel) hideTooltip() {
 type MangaListView struct {
 	Card fyne.CanvasObject
 
-	List         *widget.List
-	deleteButton *widget.Button
-	editButton   *widget.Button
-	dirButton    *widget.Button
-	siteButton   *widget.Button
+	List           *widget.List
+	addMangaButton *widget.Button
+	deleteButton   *widget.Button
+	editButton     *widget.Button
+	dirButton      *widget.Button
+	siteButton     *widget.Button
 
 	searchEntry       *widget.Entry
 	searchButton      *widget.Button
@@ -198,6 +199,9 @@ type MangaListView struct {
 	selectedIndex int
 	state         *KanshoAppState
 	editMangaView *EditMangaView
+
+	onUnfoldEdit func()
+	onToggleEdit func()
 }
 
 func NewMangaListView(state *KanshoAppState) *MangaListView {
@@ -243,6 +247,12 @@ func NewMangaListView(state *KanshoAppState) *MangaListView {
 		view.clearSearch()
 	})
 
+	view.addMangaButton = widget.NewButton("Add Manga", func() {
+		if view.onToggleEdit != nil {
+			view.onToggleEdit()
+		}
+	})
+
 	sort.Slice(view.state.MangaData.Manga, func(i, j int) bool {
 		return view.state.MangaData.Manga[i].Title < view.state.MangaData.Manga[j].Title
 	})
@@ -277,7 +287,7 @@ func NewMangaListView(state *KanshoAppState) *MangaListView {
 				nil,
 				nil,
 				NewBoldLabel("Manga List"),
-				nil,
+				view.addMangaButton,
 				view.searchEntry,
 			),
 			NewSeparator(),
@@ -315,6 +325,24 @@ func NewMangaListView(state *KanshoAppState) *MangaListView {
 
 func (v *MangaListView) SetEditMangaView(editView *EditMangaView) {
 	v.editMangaView = editView
+}
+
+// SetUnfoldEditHandler registers a callback invoked when the user asks to
+// open the edit manga panel (via the "Edit Manga" button).
+func (v *MangaListView) SetUnfoldEditHandler(fn func()) {
+	v.onUnfoldEdit = fn
+}
+
+// SetToggleEditHandler registers a callback that toggles the edit manga panel
+// open/closed, invoked by the "Add Manga" / "Collapse" header button.
+func (v *MangaListView) SetToggleEditHandler(fn func()) {
+	v.onToggleEdit = fn
+}
+
+// SetAddButtonText updates the label of the add/collapse toggle button to
+// reflect the current state of the edit manga panel.
+func (v *MangaListView) SetAddButtonText(text string) {
+	v.addMangaButton.SetText(text)
 }
 
 func (v *MangaListView) refresh() {
@@ -367,6 +395,10 @@ func (v *MangaListView) onEditButtonClicked() {
 	}
 
 	v.editMangaView.LoadMangaForEditing(v.selectedIndex)
+
+	if v.onUnfoldEdit != nil {
+		v.onUnfoldEdit()
+	}
 }
 
 func (v *MangaListView) onDirButtonClicked() {
