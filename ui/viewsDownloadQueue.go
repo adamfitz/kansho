@@ -99,7 +99,6 @@ func (b *DownloadQueueButton) Refresh() {
 	if b.popup != nil && b.popup.Visible() {
 		if len(tasks) == 0 {
 			b.popup.Hide()
-			dialog.ShowInformation("Download Queue", "No downloads in queue.", b.state.Window)
 			return
 		}
 		b.refreshPopup(tasks)
@@ -117,13 +116,9 @@ func taskTitles(tasks []*config.DownloadTask) map[string]bool {
 
 // showSummary opens a modal download queue pop-up that fills the main Kansho
 // window, creating it on first use. The user must close it to return to the
-// normal application windows.
+// normal application windows. It opens regardless of whether the queue has any
+// downloads; an empty queue simply shows the empty state.
 func (b *DownloadQueueButton) showSummary() {
-	if len(config.GetDownloadQueue().GetTasks()) == 0 {
-		dialog.ShowInformation("Download Queue", "No downloads in queue.", b.state.Window)
-		return
-	}
-
 	if b.popup == nil {
 		b.popup = widget.NewModalPopUp(b.buildPopup(), b.state.Window.Canvas())
 	}
