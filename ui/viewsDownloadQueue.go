@@ -30,10 +30,14 @@ import (
 // chapters have finished. Chapters that did not finish (failed, cancelled, or
 // waiting on a CF challenge) stay in the queue and get a "Retry" button.
 //
-// The pop-up also offers two cancellation controls:
-//   - "Cancel All" (global, in the header) cancels every queued/downloading task
+// The pop-up also offers queue-wide controls:
+//   - "Cancel All" (global, in the header) cancels every queued/downloading
+//     task but leaves them in the queue so they can be started or retried
+//   - "Clear Retries" (global, in the header) removes every failed, cancelled
+//     or CF-blocked task across all manga titles, leaving active and queued
+//     downloads untouched
 //   - a per-manga "Cancel All" button next to each manga group cancels all
-//     active tasks for that manga only
+//     active tasks for that manga only, also leaving them retryable
 type DownloadQueueButton struct {
 	Card   fyne.CanvasObject
 	button *widget.Button
@@ -143,29 +147,30 @@ func (b *DownloadQueueButton) buildPopup() fyne.CanvasObject {
 
 	b.overallLabel = widget.NewLabel("")
 
-	// Clear All empties the queue entirely (removing even cancelled/failed
-	// entries); Cancel All only marks the active tasks as cancelled. It asks
-	// for confirmation first since it discards every entry in the queue.
-	clearAllButton := widget.NewButtonWithIcon("Clear All", theme.DeleteIcon(), func() {
+	// Clear Retries removes only the tasks that did not finish and can be
+	// retried (failed, cancelled, or CF-blocked), across all manga titles.
+	// Active downloads and still-queued tasks are left running. It asks for
+	// confirmation first since the removed entries are discarded.
+	clearRetriesButton := widget.NewButtonWithIcon("Clear Retries", theme.DeleteIcon(), func() {
 		dialog.ShowConfirm(
-			"Clear All Downloads",
-			"Cancel and clear all downloads from the queue?\nThis cannot be undone.",
+			"Clear Retries",
+			"Remove all retry/error downloads from the queue?\nThis cannot be undone.",
 			func(confirmed bool) {
 				if !confirmed {
 					return
 				}
-				config.GetDownloadQueue().ClearAll()
+				config.GetDownloadQueue().ClearRetries()
 			},
 			b.state.Window,
 		)
 	})
-	clearAllButton.Importance = widget.HighImportance
+	clearRetriesButton.Importance = widget.HighImportance
 	cancelAllButton := widget.NewButtonWithIcon("Cancel All", theme.CancelIcon(), func() {
 		config.GetDownloadQueue().CancelAll()
 	})
 	cancelAllButton.Importance = widget.HighImportance
 
-	controls := container.NewHBox(clearAllButton, cancelAllButton)
+	controls := container.NewHBox(clearRetriesButton, cancelAllButton)
 	overallRow := container.NewBorder(nil, nil, nil, controls, b.overallLabel)
 
 	header := container.NewVBox(titleRow, overallRow, widget.NewSeparator())
