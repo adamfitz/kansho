@@ -156,9 +156,11 @@ func TestRetryTaskAllowsCancelled(t *testing.T) {
 	}
 }
 
-// TestClearAllEmptiesQueue verifies that ClearAll removes every task, cancels
-// active downloads, and leaves nothing to retry.
-func TestClearAllEmptiesQueue(t *testing.T) {
+// TestClearRetriesRemovesOnlyRetryableTasks verifies that ClearRetries removes
+// every task that can be retried (failed, cancelled, waiting on a CF challenge,
+// or CF-skipped) across all manga titles, while leaving active and still-queued
+// tasks untouched.
+func TestClearRetriesRemovesOnlyRetryableTasks(t *testing.T) {
 	_, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -167,14 +169,67 @@ func TestClearAllEmptiesQueue(t *testing.T) {
 			{ID: "1", Manga: Bookmarks{Title: "Manga A"}, Chapter: "a1.cbz", Status: "queued"},
 			{ID: "2", Manga: Bookmarks{Title: "Manga A"}, Chapter: "a2.cbz", Status: "downloading", CancelFunc: cancel},
 			{ID: "3", Manga: Bookmarks{Title: "Manga A"}, Chapter: "a3.cbz", Status: "failed"},
-			{ID: "4", Manga: Bookmarks{Title: "Manga A"}, Chapter: "a4.cbz", Status: "cancelled"},
+			{ID: "4", Manga: Bookmarks{Title: "Manga B"}, Chapter: "b1.cbz", Status: "cancelled"},
+			{ID: "5", Manga: Bookmarks{Title: "Manga B"}, Chapter: "b2.cbz", Status: "waiting_cf", CancelFunc: cancel},
+			{ID: "6", Manga: Bookmarks{Title: "Manga B"}, Chapter: "b3.cbz", Status: "skipped_cf"},
+			{ID: "7", Manga: Bookmarks{Title: "Manga C"}, Chapter: "c1.cbz", Status: "completed"},
 		},
 	}
 
-	q.ClearAll()
+	q.ClearRetries()
+
+	var statuses map[string]string = make(map[string]string, len(q.tasks))
+	for _, task := range q.tasks {
+		statuses[task.ID] = task.Status
+	}
+
+	if len(q.tasks) != 3 {
+		t.Fatalf("queue should keep only non-retryable tasks after ClearRetries, got %d tasks: %v", len(q.tasks), statuses)
+	}
+	if statuses["1"] != "queued" {
+		t.Errorf("queued task should be kept, got %s", statuses["1"])
+	}
+	if statuses["2"] != "downloading" {
+		t.Errorf("downloading task should be kept, got %s", statuses["2"])
+	}
+	if statuses["7"] != "completed" {
+		t.Errorf("completed task should be kept, got %s", statuses["7"])
+	}
+	if _, ok := statuses["3"]; ok {
+		t.Error("failed task should have been removed")
+	}
+	if _, ok := statuses["4"]; ok {
+		t.Error("cancelled task should have been removed")
+	}
+	if _, ok := statuses["5"]; ok {
+		t.Error("waiting_cf task should have been removed")
+	}
+	if _, ok := statuses["6"]; ok {
+		t.Error("skipped_cf task should have been removed")
+	}
+}
+
+// TestClearRetriesAbortsWaitingCF verifies that removing a waiting_cf task
+// calls its cancel function so any CF-wait goroutine parked on it aborts.
+func TestClearRetriesAbortsWaitingCF(t *testing.T) {
+	cancelled := false
+	cancelFunc := func() {
+		cancelled = true
+	}
+
+	q := &DownloadQueue{
+		tasks: []*DownloadTask{
+			{ID: "cf", Manga: Bookmarks{Title: "Manga A"}, Chapter: "a1.cbz", Status: "waiting_cf", CancelFunc: cancelFunc},
+		},
+	}
+
+	q.ClearRetries()
 
 	if len(q.tasks) != 0 {
-		t.Fatalf("queue should be empty after ClearAll, got %d tasks", len(q.tasks))
+		t.Fatalf("queue should be empty after ClearRetries, got %d tasks", len(q.tasks))
+	}
+	if !cancelled {
+		t.Error("cancel function of a removed waiting_cf task should have been called")
 	}
 }
 

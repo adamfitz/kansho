@@ -102,22 +102,22 @@ func TestDownloadQueuePopupUsesScrollContainer(t *testing.T) {
 	if btn := findButton(border.Objects[1], "Cancel All"); btn == nil {
 		t.Error("popup header should contain a global 'Cancel All' button")
 	}
-	if btn := findButton(border.Objects[1], "Clear All"); btn == nil {
-		t.Error("popup header should contain a 'Clear All' button")
+	if btn := findButton(border.Objects[1], "Clear Retries"); btn == nil {
+		t.Error("popup header should contain a 'Clear Retries' button")
 	}
 }
 
-// TestDownloadQueueEmptyShowsInfoDialog verifies that clicking the queue button
-// with an empty queue shows an informational dialog rather than opening the
-// pop-up.
-func TestDownloadQueueEmptyShowsInfoDialog(t *testing.T) {
+// TestDownloadQueueEmptyOpensPopup verifies that clicking the queue button with
+// an empty queue opens the queue pop-up (showing the empty state) rather than
+// doing nothing or popping a dialog.
+func TestDownloadQueueEmptyOpensPopup(t *testing.T) {
 	state, _, w := newChapterListViewTest(t, "")
 	b := NewDownloadQueueButton(state)
 
 	overlaysBefore := len(w.Canvas().Overlays().List())
 	b.showSummary()
 	if len(w.Canvas().Overlays().List()) <= overlaysBefore {
-		t.Fatal("expected an info dialog when the queue is empty")
+		t.Fatal("expected the queue pop-up to open when the queue is empty")
 	}
 }
 

@@ -390,23 +390,33 @@ func (q *DownloadQueue) CancelMangaTasks(mangaTitle string) {
 	}
 }
 
-// ClearAll empties the queue entirely, cancelling any tasks that are actively
-// downloading or waiting on a CF challenge first. Unlike CancelAll, the tasks
-// are removed outright (nothing is left to retry).
-func (q *DownloadQueue) ClearAll() {
+// ClearRetries removes every task that did not finish and can be retried
+// (failed, cancelled, waiting on a CF challenge, or CF-skipped) from the queue,
+// across ALL manga titles. Active downloads and still-queued tasks are left
+// untouched. Unlike CancelAll, the tasks are removed outright, so nothing is
+// left to retry.
+func (q *DownloadQueue) ClearRetries() {
 	q.mu.Lock()
 
-	log.Printf("[Queue] Clearing all tasks (%d total)", len(q.tasks))
+	log.Printf("[Queue] Clearing retryable tasks (%d total)", len(q.tasks))
 
 	var cancelFuncs []context.CancelFunc
 	removed := make([]string, 0, len(q.tasks))
+	newTasks := make([]*DownloadTask, 0, len(q.tasks))
 	for _, task := range q.tasks {
-		if (task.Status == "downloading" || task.Status == "waiting_cf") && task.CancelFunc != nil {
+		if !isRetryableStatus(task.Status) {
+			newTasks = append(newTasks, task)
+			continue
+		}
+		// Abort any CF-wait goroutine still parked on this task before removing
+		// it, so queue processing can move on to the next queued task.
+		if task.CancelFunc != nil {
+			task.Status = "cancelled"
 			cancelFuncs = append(cancelFuncs, task.CancelFunc)
 		}
 		removed = append(removed, task.ID)
 	}
-	q.tasks = nil
+	q.tasks = newTasks
 
 	onTaskRemoved := q.onTaskRemoved
 	q.mu.Unlock()
@@ -420,6 +430,12 @@ func (q *DownloadQueue) ClearAll() {
 	for _, cancel := range cancelFuncs {
 		cancel()
 	}
+}
+
+// isRetryableStatus reports whether a task status is one the user can retry:
+// it failed, was cancelled, or is blocked on a Cloudflare challenge.
+func isRetryableStatus(status string) bool {
+	return status == "failed" || status == "cancelled" || status == "waiting_cf" || status == "skipped_cf"
 }
 
 // RemoveCompletedTasks removes all completed or cancelled tasks
