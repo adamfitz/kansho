@@ -178,6 +178,20 @@ func (h *hoverLabel) hideTooltip() {
 	}
 }
 
+// enterButton is a button that also activates when the Enter key is pressed
+// while it is focused. Fyne's default button only reacts to Space, so a custom
+// type is needed so the user can dismiss dialogs with Enter.
+type enterButton struct {
+	widget.Button
+}
+
+// TypedKey triggers the button action on both Enter and Space.
+func (b *enterButton) TypedKey(ev *fyne.KeyEvent) {
+	if ev.Name == fyne.KeySpace || ev.Name == fyne.KeyReturn {
+		b.Tapped(nil)
+	}
+}
+
 // MangaListView represents the manga list card component.
 type MangaListView struct {
 	Card fyne.CanvasObject
@@ -448,7 +462,7 @@ func (v *MangaListView) performSearch() {
 		v.currentSearchIdx = -1
 
 		if len(v.searchResults) == 0 {
-			dialog.ShowInformation("Search", fmt.Sprintf("No manga found matching \"%s\".", searchTerm), v.state.Window)
+			v.showNoSearchResults(searchTerm)
 			return
 		}
 	}
@@ -464,6 +478,35 @@ func (v *MangaListView) performSearch() {
 	resultIndex := v.searchResults[v.currentSearchIdx]
 	v.List.Select(widget.ListItemID(resultIndex))
 	v.List.ScrollTo(widget.ListItemID(resultIndex))
+}
+
+// showNoSearchResults shows a dialog when a search term matches nothing. The OK
+// button is focused so the user can dismiss it with Enter, and focus returns to
+// the search box afterwards.
+func (v *MangaListView) showNoSearchResults(searchTerm string) {
+	okButton := &enterButton{}
+	okButton.ExtendBaseWidget(okButton)
+	okButton.Button.Text = "OK"
+	okButton.Button.Importance = widget.HighImportance
+
+	content := container.NewVBox(
+		widget.NewLabel(fmt.Sprintf("No manga found matching \"%s\".", searchTerm)),
+	)
+
+	dlg := dialog.NewCustom("Search", "", content, v.state.Window)
+	dlg.SetButtons([]fyne.CanvasObject{okButton})
+
+	okButton.Button.OnTapped = func() {
+		dlg.Hide()
+	}
+	dlg.SetOnClosed(func() {
+		v.state.Window.Canvas().Focus(v.searchEntry)
+	})
+
+	dlg.Show()
+
+	// Focus the OK button so pressing Enter dismisses the dialog.
+	v.state.Window.Canvas().Focus(okButton)
 }
 
 func (v *MangaListView) onSiteButtonClicked() {

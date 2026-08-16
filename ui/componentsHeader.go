@@ -49,14 +49,13 @@ func NewHeader(rightObject fyne.CanvasObject) fyne.CanvasObject {
 		right = container.NewPadded(rightObject)
 	}
 
-	// Border layout places the optional right object at the right edge while
-	// keeping the title/subtitle centered in the remaining space
-	header := container.NewBorder(
-		nil,
-		nil,
-		nil,
-		right,
-		titleAndSubtitle,
+	// Layer the centered title over a right-aligned button using a stack so the
+	// text stays centered on the full window width. A Border layout would only
+	// center it within the space left over after the button, throwing off the
+	// center of the title and subtitle.
+	header := container.NewStack(
+		container.NewCenter(titleAndSubtitle),
+		container.NewBorder(nil, nil, nil, right),
 	)
 
 	return header
