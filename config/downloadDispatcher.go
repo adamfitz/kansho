@@ -19,6 +19,26 @@ func RegisterSite(siteName string, downloadFunc SiteDownloadFunc) {
 	log.Printf("[Queue] Registered site: %s", siteName)
 }
 
+// siteCfRequirement maps site names to whether they require a Cloudflare
+// bypass. It is populated by the sites package during initialization so the
+// download queue can tell CF-protected chapters from regular ones without
+// importing the sites package (which would be an import cycle).
+var siteCfRequirement = make(map[string]bool)
+
+// RegisterSiteCfRequirement records whether a site requires a Cloudflare
+// bypass. This is called by the sites package during initialization, right
+// next to RegisterSite.
+func RegisterSiteCfRequirement(siteName string, needsCF bool) {
+	siteCfRequirement[siteName] = needsCF
+	log.Printf("[Queue] Registered CF requirement for site %s: %t", siteName, needsCF)
+}
+
+// SiteNeedsCF returns true if the given site is known to require a Cloudflare
+// bypass. Unregistered sites are assumed not to require one.
+func SiteNeedsCF(siteName string) bool {
+	return siteCfRequirement[siteName]
+}
+
 // ExecuteSiteDownload dispatches to the appropriate site-specific download function
 func ExecuteSiteDownload(ctx context.Context, manga *Bookmarks, progressCallback func(string, float64, int, int, int)) error {
 	downloadFunc, exists := registeredSites[manga.Site]

@@ -187,12 +187,21 @@ The system SHALL display an overall download progress summary instead of a dedic
 - AND the manga title SHALL be removed from the queue once all of its queued chapters have finished successfully
 
 #### Scenario: Start or retry unfinished chapters
-- GIVEN a chapter task did not finish downloading (failed, cancelled, or waiting on a CF challenge)
+- GIVEN a chapter task did not finish downloading (failed, cancelled, waiting on a CF challenge, or skipped because no CF data was provided)
 - WHEN the task remains in the queue
 - THEN the task SHALL stay in the queue
 - AND a "Start" button SHALL be shown next to a chapter the user stopped or cancelled
-- AND a "Retry" button SHALL be shown next to a chapter that failed or is waiting on a CF challenge
+- AND a "Retry" button SHALL be shown next to a chapter that failed, is waiting on a CF challenge, or was skipped for want of CF data
 - AND clicking "Start" or "Retry" SHALL re-queue the chapter for download
+
+#### Scenario: Cloudflare challenge during download
+- GIVEN a chapter download is blocked by a Cloudflare challenge
+- WHEN the challenge is detected
+- THEN the queue SHALL pause so no other queued chapter starts
+- AND a single browser window SHALL be opened for solving the challenge
+- AND a CF dialog SHALL be shown so the user can solve the challenge and import cf data
+- AND if no data is imported within the wait timeout, chapters that do not need Cloudflare SHALL continue downloading while CF-protected chapters stay blocked (shown with a lock icon and a "Retry" button)
+- AND when the user imports cf data, every blocked chapter whose data is now available SHALL resume downloading automatically
 
 #### Scenario: Cancel all downloads for a manga
 - GIVEN the download queue pop-up is open

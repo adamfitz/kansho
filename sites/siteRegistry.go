@@ -79,6 +79,12 @@ func init() {
 	// Register the generic single-chapter download dispatcher
 	config.RegisterChapterDownload(DownloadSingleChapter)
 
+	// Register which sites require a Cloudflare bypass so the download queue
+	// can skip CF-protected chapters when no bypass data has been provided.
+	for name, ctor := range sitePlugins {
+		config.RegisterSiteCfRequirement(name, ctor().NeedsCFBypass())
+	}
+
 	// Add new sites here in the future:
 	// config.RegisterSite("newsite", NewsiteDownloadChapters)
 }

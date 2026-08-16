@@ -123,7 +123,7 @@ func TestDownloadQueueEmptyShowsInfoDialog(t *testing.T) {
 
 // TestGetStatusIcon verifies a status icon exists for every queue status.
 func TestGetStatusIcon(t *testing.T) {
-	for _, status := range []string{"queued", "downloading", "waiting_cf", "completed", "cancelled", "failed"} {
+	for _, status := range []string{"queued", "downloading", "waiting_cf", "skipped_cf", "completed", "cancelled", "failed"} {
 		if getStatusIcon(status) == "" {
 			t.Errorf("missing status icon for %q", status)
 		}
@@ -144,6 +144,10 @@ func TestUnfinishedTaskRowHasActionButton(t *testing.T) {
 	task = &config.DownloadTask{ID: "waiting_cf", Manga: config.Bookmarks{Title: "Manga A"}, Chapter: "a1.cbz", Status: "waiting_cf"}
 	if btn := findButton(b.taskSummaryRow(task), "Retry"); btn == nil {
 		t.Error("waiting_cf task row should have a Retry button")
+	}
+	task = &config.DownloadTask{ID: "skipped_cf", Manga: config.Bookmarks{Title: "Manga A"}, Chapter: "a1.cbz", Status: "skipped_cf"}
+	if btn := findButton(b.taskSummaryRow(task), "Retry"); btn == nil {
+		t.Error("skipped_cf task row should have a Retry button")
 	}
 	task = &config.DownloadTask{ID: "cancelled", Manga: config.Bookmarks{Title: "Manga A"}, Chapter: "a1.cbz", Status: "cancelled"}
 	if btn := findButton(b.taskSummaryRow(task), "Start"); btn == nil {
@@ -254,7 +258,7 @@ func TestActiveTaskRowShowsProgressAndStopButton(t *testing.T) {
 
 // TestIsRetryableTaskStatus verifies which statuses are retryable.
 func TestIsRetryableTaskStatus(t *testing.T) {
-	for _, status := range []string{"failed", "cancelled", "waiting_cf"} {
+	for _, status := range []string{"failed", "cancelled", "waiting_cf", "skipped_cf"} {
 		if !isRetryableTaskStatus(status) {
 			t.Errorf("%s should be retryable", status)
 		}
