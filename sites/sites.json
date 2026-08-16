@@ -179,6 +179,16 @@
         "title": true,
         "location": true
       }
+    },
+    {
+      "name": "kingofshojo",
+      "display_name": "kingofshojo",
+      "required_fields": {
+        "url": true,
+        "shortname": false,
+        "title": true,
+        "location": true
+      }
     }
   ]
 }
