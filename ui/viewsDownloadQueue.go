@@ -500,7 +500,7 @@ func (b *DownloadQueueButton) taskSummaryRow(task *config.DownloadTask) fyne.Can
 // isRetryableTaskStatus returns true if a task was queued for download but did
 // not finish, so it can be retried.
 func isRetryableTaskStatus(status string) bool {
-	return status == "failed" || status == "cancelled" || status == "waiting_cf"
+	return status == "failed" || status == "cancelled" || status == "waiting_cf" || status == "skipped_cf"
 }
 
 // getStatusIcon returns a unicode icon for a task status.
@@ -510,7 +510,7 @@ func getStatusIcon(status string) string {
 		return "⏳"
 	case "downloading":
 		return "⬇️"
-	case "waiting_cf":
+	case "waiting_cf", "skipped_cf":
 		return "🔒"
 	case "completed":
 		return "✅"

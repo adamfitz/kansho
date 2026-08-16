@@ -5,10 +5,29 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/url"
 	"sync"
+	"time"
 
 	"kansho/cf"
 )
+
+// cfWaitTimeout is how long the queue waits for the user to provide Cloudflare
+// bypass data after a challenge before moving on to queued chapters that do not
+// need it. It is a variable so tests can shorten it.
+var cfWaitTimeout = 5 * time.Minute
+
+// cfWaitPollInterval is how often the queue re-checks for freshly imported
+// Cloudflare bypass data while paused.
+var cfWaitPollInterval = 2 * time.Second
+
+// cfDataAvailable reports whether Cloudflare bypass data is stored for a
+// domain. It is a variable so tests can substitute a fake check without
+// touching the real config directory.
+var cfDataAvailable = func(domain string) bool {
+	_, err := cf.LoadFromFile(domain)
+	return err == nil
+}
 
 // DownloadTask represents a single download task. Since the UI refactor, a task
 // is a single chapter of a manga (previously a task was an entire manga).
@@ -17,7 +36,7 @@ type DownloadTask struct {
 	Manga         Bookmarks // Changed from pointer to value - this creates a copy!
 	Chapter       string    // CBZ filename being downloaded, e.g. "ch001.cbz" ("" for legacy manga-level tasks)
 	ChapterURL    string    // URL of the chapter to download ("" for legacy manga-level tasks)
-	Status        string    // "queued", "downloading", "completed", "cancelled", "failed", "waiting_cf"
+	Status        string    // "queued", "downloading", "completed", "cancelled", "failed", "waiting_cf", "skipped_cf"
 	Progress      float64   // 0.0 to 1.0
 	StatusMessage string
 	CancelFunc    context.CancelFunc
@@ -195,7 +214,7 @@ func (q *DownloadQueue) RetryTask(id string) error {
 
 	for _, task := range q.tasks {
 		if task.ID == id {
-			if task.Status == "waiting_cf" || task.Status == "failed" || task.Status == "cancelled" {
+			if task.Status == "waiting_cf" || task.Status == "skipped_cf" || task.Status == "failed" || task.Status == "cancelled" {
 				log.Printf("[Queue] Retrying task: %s", task.Manga.Title)
 				task.Status = "queued"
 				task.StatusMessage = "Retrying..."
@@ -284,7 +303,7 @@ func (q *DownloadQueue) CancelTask(id string) error {
 
 				// The executeTask goroutine will set the final status when it returns
 				return nil
-			} else if task.Status == "queued" {
+			} else if task.Status == "queued" || task.Status == "skipped_cf" {
 				log.Printf("[Queue] Removing queued task: %s", task.Manga.Title)
 				// Remove from queue
 				q.tasks = append(q.tasks[:i], q.tasks[i+1:]...)
@@ -315,11 +334,11 @@ func (q *DownloadQueue) CancelAll() {
 	// Step 1: Immediately mark all tasks as cancelled and notify UI
 	var cancelFuncs []context.CancelFunc
 	for _, task := range q.tasks {
-		if task.Status == "downloading" && task.CancelFunc != nil {
+		if (task.Status == "downloading" || task.Status == "waiting_cf") && task.CancelFunc != nil {
 			task.Status = "cancelled"
 			task.StatusMessage = "Cancelling..."
 			cancelFuncs = append(cancelFuncs, task.CancelFunc)
-		} else if task.Status == "queued" {
+		} else if task.Status == "queued" || task.Status == "skipped_cf" {
 			task.Status = "cancelled"
 			task.StatusMessage = "Cancelled by user"
 		}
@@ -354,7 +373,7 @@ func (q *DownloadQueue) CancelMangaTasks(mangaTitle string) {
 			task.Status = "cancelled"
 			task.StatusMessage = "Cancelling..."
 			cancelFuncs = append(cancelFuncs, task.CancelFunc)
-		} else if task.Status == "queued" {
+		} else if task.Status == "queued" || task.Status == "skipped_cf" {
 			task.Status = "cancelled"
 			task.StatusMessage = "Cancelled by user"
 		}
@@ -410,7 +429,7 @@ func (q *DownloadQueue) RemoveCompletedTasks() {
 
 	newTasks := make([]*DownloadTask, 0)
 	for _, task := range q.tasks {
-		if task.Status == "queued" || task.Status == "downloading" || task.Status == "waiting_cf" {
+		if task.Status == "queued" || task.Status == "downloading" || task.Status == "waiting_cf" || task.Status == "skipped_cf" {
 			newTasks = append(newTasks, task)
 		} else {
 			if q.onTaskRemoved != nil {
@@ -451,6 +470,18 @@ func (q *DownloadQueue) processQueue() {
 
 		log.Printf("[Queue] Processing task: %s (Location: %s)", task.Manga.Title, task.Manga.Location)
 		q.executeTask(task)
+
+		// CRITICAL: if the download was blocked by a Cloudflare challenge, the
+		// queue MUST stop here so the downloader opens a single browser window
+		// for the user to solve the challenge. Without this pause every queued
+		// CF-protected chapter would fire its own browser window (and dialog),
+		// which can crash the machine. We wait for bypass data to be imported
+		// (then re-queue this task) or, after cfWaitTimeout, skip the remaining
+		// CF-protected queued tasks so downloads that do not need Cloudflare
+		// can proceed.
+		if task.Status == "waiting_cf" {
+			q.handleCfWait(task)
+		}
 
 		// Check if we should continue
 		q.mu.RLock()
@@ -571,4 +602,149 @@ func (q *DownloadQueue) executeTask(task *DownloadTask) {
 	}
 
 	log.Printf("[Queue] Task completed: %s (status: %s)", task.Manga.Title, task.Status)
+}
+
+// handleCfWait pauses the whole queue after a Cloudflare challenge so the user
+// can provide bypass data. Only the single browser window already opened by the
+// blocked download will fire — no other queued chapter starts while we wait.
+// See openspec/specs/download-queue/spec.md ("CF Challenge Handling").
+//
+// It returns once bypass data for the blocked domain is detected (the task is
+// re-queued so it downloads normally on the next iteration), or once
+// cfWaitTimeout elapses without data (the remaining CF-protected queued tasks
+// are marked as skipped so downloads that do not need Cloudflare can proceed).
+func (q *DownloadQueue) handleCfWait(task *DownloadTask) {
+	cfErr, ok := task.Error.(*cf.CfChallengeError)
+	if !ok || cfErr == nil {
+		return
+	}
+
+	domain := domainFromURL(cfErr.URL)
+	log.Printf("[Queue] CF challenge detected - pausing queue, waiting for CF data for domain: %s", domain)
+
+	deadline := time.Now().Add(cfWaitTimeout)
+	ticker := time.NewTicker(cfWaitPollInterval)
+	defer ticker.Stop()
+
+	for time.Now().Before(deadline) {
+		// Stop waiting if the task (or the whole queue) was cancelled.
+		q.mu.RLock()
+		status := task.Status
+		q.mu.RUnlock()
+		if status != "waiting_cf" {
+			log.Printf("[Queue] CF wait aborted for %s (status: %s)", task.Manga.Title, status)
+			return
+		}
+
+		if cfDataAvailable(domain) {
+			log.Printf("[Queue] CF data received for domain %s - resuming download for %s", domain, task.Manga.Title)
+			q.mu.Lock()
+			task.Status = "queued"
+			task.StatusMessage = "CF data received - resuming download"
+			task.Error = nil
+			q.mu.Unlock()
+			if q.onTaskUpdated != nil {
+				q.onTaskUpdated(task)
+			}
+			return
+		}
+
+		<-ticker.C
+	}
+
+	log.Printf("[Queue] No CF data provided within %v for domain %s - skipping CF-protected queued tasks", cfWaitTimeout, domain)
+
+	// The task that actually hit the challenge stays as waiting_cf so the user
+	// can retry it later; the remaining CF-protected queued tasks are skipped so
+	// downloads that do not need Cloudflare can start.
+	q.skipCfBlockedTasks(task.ID)
+}
+
+// skipCfBlockedTasks marks queued tasks that require Cloudflare bypass data
+// (and have none stored) as skipped_cf, leaving them in the queue for the user
+// to retry. The task that originally hit the challenge is left as waiting_cf.
+func (q *DownloadQueue) skipCfBlockedTasks(blockedTaskID string) {
+	q.mu.Lock()
+	var updated []*DownloadTask
+	for _, t := range q.tasks {
+		if t.ID == blockedTaskID || t.Status != "queued" {
+			continue
+		}
+		if taskNeedsCF(t) {
+			t.Status = "skipped_cf"
+			t.StatusMessage = "No Cloudflare data provided - skipped"
+			updated = append(updated, t)
+		}
+	}
+	q.mu.Unlock()
+
+	for _, t := range updated {
+		if q.onTaskUpdated != nil {
+			q.onTaskUpdated(t)
+		}
+	}
+}
+
+// ResumeCfTasks re-queues every task that is blocked on a Cloudflare challenge
+// (waiting_cf or skipped_cf) and whose bypass data is now available, then
+// restarts queue processing so those downloads resume automatically. Tasks that
+// still have no data for their domain stay blocked.
+//
+// This is called by the UI after the user imports Cloudflare bypass data, so
+// CF-protected downloads that were paused or skipped resume as soon as the data
+// is provided instead of waiting for a manual retry.
+// See openspec/specs/download-queue/spec.md ("CF Challenge Handling").
+func (q *DownloadQueue) ResumeCfTasks() {
+	q.mu.Lock()
+	var resumed []*DownloadTask
+	for _, t := range q.tasks {
+		if t.Status != "waiting_cf" && t.Status != "skipped_cf" {
+			continue
+		}
+		if taskNeedsCF(t) {
+			continue
+		}
+		t.Status = "queued"
+		t.StatusMessage = "CF data received - resuming download"
+		t.Error = nil
+		resumed = append(resumed, t)
+	}
+	q.mu.Unlock()
+
+	for _, t := range resumed {
+		if q.onTaskUpdated != nil {
+			q.onTaskUpdated(t)
+		}
+	}
+
+	if len(resumed) > 0 {
+		log.Printf("[Queue] Resumed %d CF-blocked tasks with fresh bypass data", len(resumed))
+		go q.processQueue()
+	}
+}
+
+// taskNeedsCF reports whether a queued task would need Cloudflare bypass data
+// to download: its site is registered as CF-protected AND no bypass data is
+// currently stored for the manga's domain.
+func taskNeedsCF(task *DownloadTask) bool {
+	if !SiteNeedsCF(task.Manga.Site) {
+		return false
+	}
+	if task.Manga.Url != "" {
+		if cfDataAvailable(domainFromURL(task.Manga.Url)) {
+			return false
+		}
+	}
+	return true
+}
+
+// domainFromURL returns the hostname portion of a URL, or the raw string when
+// it cannot be parsed. This matches the domain key under which Cloudflare
+// bypass data is stored by the downloader.
+func domainFromURL(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Hostname() == "" {
+		return rawURL
+	}
+	return parsed.Hostname()
 }

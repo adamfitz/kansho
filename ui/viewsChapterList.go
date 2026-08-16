@@ -527,9 +527,11 @@ func (v *ChapterListView) updateChapterRow(id widget.ListItemID, item fyne.Canva
 }
 
 // isActiveTaskStatus returns true if the task status represents a download
-// that is currently active (queued, downloading, or waiting on a CF challenge).
+// that is currently active (queued, downloading, waiting on a CF challenge, or
+// skipped because no CF data was provided). Stale (finished) statuses are the
+// only ones a chapter re-download may remove from the queue.
 func isActiveTaskStatus(status string) bool {
-	return status == "queued" || status == "downloading" || status == "waiting_cf"
+	return status == "queued" || status == "downloading" || status == "waiting_cf" || status == "skipped_cf"
 }
 
 // startChapterDownload queues a single chapter for download via the download
@@ -717,7 +719,7 @@ func (v *ChapterListView) refreshAfterTaskChange() {
 		case "downloading":
 			ch.State = chapterDownloading
 			ch.Progress = task.Progress
-		case "waiting_cf":
+		case "waiting_cf", "skipped_cf":
 			ch.State = chapterWaitingCF
 		case "failed":
 			ch.State = chapterFailed
@@ -795,11 +797,11 @@ func (v *ChapterListView) showCFDialog(task *config.DownloadTask) {
 	}
 
 	ShowcfDialog(v.state.Window, cfErr.URL, func() {
-		queue := config.GetDownloadQueue()
 		delete(v.cfDialogShown, task.ID)
-		if err := queue.RetryTask(task.ID); err != nil {
-			dialog.ShowError(err, v.state.Window)
-		}
+		// Resume every CF-blocked task (including this one) whose bypass data
+		// is now available, so downloads that were paused on a CF challenge
+		// start again automatically after the data is imported.
+		config.GetDownloadQueue().ResumeCfTasks()
 	})
 }
 

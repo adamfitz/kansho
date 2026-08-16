@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sort"
 	"strings"
 
 	"fyne.io/fyne/v2"
@@ -77,6 +78,9 @@ func NewEditMangaView(State *KanshoAppState) *EditMangaView {
 	for i, site := range view.SitesConfig.Sites {
 		siteNames[i] = site.DisplayName
 	}
+
+	// Show the sites alphabetically in the dropdown
+	sort.Strings(siteNames)
 
 	// Create the site selection dropdown
 	view.SiteSelect = widget.NewSelect(siteNames, func(selected string) {

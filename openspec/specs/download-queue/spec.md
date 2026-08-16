@@ -1,7 +1,7 @@
 # download-queue Specification
 
 ## Purpose
-Provide a FIFO download queue that manages single-chapter download tasks with lifecycle tracking, cancellation, and retry support. Each task represents one chapter of a manga (since the UI refactor, tasks are no longer whole-manga downloads).
+Provide a FIFO download queue that manages single-chapter download tasks with lifecycle tracking, cancellation, and retry support. Each task represents one chapter of a manga (since the UI refactor, tasks are no longer whole-manga downloads). The queue pauses entirely when a task hits a Cloudflare challenge so only one browser window opens, waits for the user to import bypass data (up to a timeout), skips CF-protected tasks on timeout so non-CF downloads proceed, and resumes CF downloads automatically once the data is imported.
 
 ## Requirements
 
@@ -31,6 +31,8 @@ The queue SHALL manage download tasks through defined states.
 - THEN its status SHALL be "failed"
 - WHEN a CF challenge is detected
 - THEN its status SHALL be "waiting_cf"
+- WHEN a queued task requires Cloudflare bypass data but none was provided within the wait timeout
+- THEN its status SHALL be "skipped_cf" and it SHALL stay in the queue for a later retry
 
 #### Scenario: Add chapter task to queue
 - GIVEN the queue is empty
@@ -61,12 +63,13 @@ The queue SHALL process chapter tasks in first-in-first-out order.
 - THEN tasks SHALL be executed in the order they were added
 - AND only one task SHALL be processed at a time
 - AND processing SHALL continue until all queued tasks are complete
+- AND processing SHALL pause entirely when a task becomes "waiting_cf" so no other queued chapter starts while a Cloudflare challenge is being resolved
 
 ### Requirement: Task Cancellation
 The queue SHALL support cancelling individual tasks or all tasks with immediate status feedback.
 
 #### Scenario: Cancel queued task
-- GIVEN a task is in "queued" status
+- GIVEN a task is in "queued" or "skipped_cf" status (no download is running)
 - WHEN `CancelTask` is called with the task ID
 - THEN the task SHALL be removed from the queue entirely
 - AND a removal callback SHALL be triggered
@@ -82,29 +85,52 @@ The queue SHALL support cancelling individual tasks or all tasks with immediate 
 #### Scenario: Cancel all tasks
 - GIVEN multiple tasks exist in the queue
 - WHEN `CancelAll` is called
-- THEN all downloading tasks SHALL have their status set to "cancelled" and StatusMessage to "Cancelling..." immediately
-- AND all queued tasks SHALL be marked as "cancelled" with StatusMessage "Cancelled by user"
+- THEN all downloading and waiting_cf tasks SHALL have their status set to "cancelled" and StatusMessage to "Cancelling..." immediately
+- AND all queued and skipped_cf tasks SHALL be marked as "cancelled" with StatusMessage "Cancelled by user"
 - AND the UI callback SHALL be notified for all tasks BEFORE any cancel functions are invoked
 - THEN all cancel functions SHALL be called (after releasing the queue lock to prevent UI freezing)
 
 ### Requirement: CF Challenge Handling
-The queue SHALL detect CF challenges and pause affected tasks for manual resolution.
+The queue SHALL pause on a Cloudflare challenge so only a single browser window opens, wait for the user to provide bypass data (up to `cfWaitTimeout`, default 5 minutes), skip CF-protected queued tasks on timeout so downloads that do not need Cloudflare proceed, and resume CF downloads automatically once the data is imported.
 
-#### Scenario: CF challenge detected
+#### Scenario: CF challenge pauses the queue
 - GIVEN a task encounters a CF challenge during download
 - WHEN the `cf.CfChallengeError` is returned
 - THEN the task status SHALL be set to "waiting_cf"
-- AND the browser SHALL be opened for manual challenge solving
+- AND the browser SHALL be opened exactly once for manual challenge solving
+- AND queue processing SHALL pause so no other queued task starts (preventing a new browser window per queued chapter)
 - AND the task SHALL remain in the queue for later retry
 
+#### Scenario: CF data received during wait
+- GIVEN the queue is paused on a "waiting_cf" task for a domain
+- WHEN Cloudflare bypass data for that domain becomes available (imported via the CF dialog)
+- THEN the paused task SHALL be reset to "queued" with its error cleared
+- AND queue processing SHALL resume
+- AND the download SHALL proceed using the freshly imported bypass data
+
+#### Scenario: CF wait timeout skips protected tasks
+- GIVEN the queue is paused on a "waiting_cf" task and no bypass data is provided within `cfWaitTimeout`
+- WHEN the timeout elapses
+- THEN the task that hit the challenge SHALL remain "waiting_cf"
+- AND every other queued task whose site requires Cloudflare bypass data (with none stored for its domain) SHALL be marked "skipped_cf"
+- AND queued tasks that do not require Cloudflare SHALL be processed normally
+- AND the skipped tasks SHALL stay in the queue so the user can retry them later
+
+#### Scenario: Resume CF tasks after data import
+- GIVEN the queue contains "waiting_cf" or "skipped_cf" tasks and the user imports Cloudflare bypass data
+- WHEN `ResumeCfTasks` is called
+- THEN every blocked task whose domain now has stored bypass data SHALL be reset to "queued" with its error cleared
+- AND queue processing SHALL restart automatically
+- AND tasks whose domain still has no bypass data SHALL remain blocked
+
 #### Scenario: Retry CF task
-- GIVEN a task is in "waiting_cf" or "failed" status
+- GIVEN a task is in "waiting_cf", "skipped_cf", or "failed" status
 - WHEN `RetryTask` is called
 - THEN the task status SHALL be reset to "queued"
 - AND queue processing SHALL restart
 
 ### Requirement: Retry Unfinished Tasks
-The queue SHALL support retrying tasks that did not complete, including failed, cancelled, and CF-blocked tasks.
+The queue SHALL support retrying tasks that did not complete, including failed, cancelled, CF-blocked, and CF-skipped tasks.
 
 #### Scenario: Retry failed task
 - GIVEN a task is in "failed" status
@@ -131,10 +157,10 @@ The queue SHALL support retrying tasks that did not complete, including failed, 
 The queue SHALL support removing all completed and cancelled tasks.
 
 #### Scenario: Remove non-active tasks
-- GIVEN the queue has completed, cancelled, queued, downloading, and waiting_cf tasks
+- GIVEN the queue has completed, cancelled, queued, downloading, waiting_cf, and skipped_cf tasks
 - WHEN `RemoveCompletedTasks` is called
 - THEN all tasks with status "completed" or "cancelled" or "failed" SHALL be removed
-- AND tasks with status "queued", "downloading", or "waiting_cf" SHALL be kept
+- AND tasks with status "queued", "downloading", "waiting_cf", or "skipped_cf" SHALL be kept
 - AND removal callbacks SHALL be triggered for each removed task
 
 ### Requirement: UI Callbacks
@@ -149,7 +175,7 @@ The queue SHALL notify the UI of state changes through registered callbacks.
 #### Scenario: Clean up completed tasks
 - GIVEN there are completed or cancelled tasks in the queue
 - WHEN `RemoveCompletedTasks` is called
-- THEN all non-active tasks (not queued, downloading, or waiting_cf) SHALL be removed
+- THEN all non-active tasks (not queued, downloading, waiting_cf, or skipped_cf) SHALL be removed
 - AND removal callbacks SHALL be triggered for each removed task
 
 ### Requirement: Context-Bound Task Execution
