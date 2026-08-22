@@ -102,6 +102,19 @@ The system SHALL support multiple chapter and image extraction strategies.
 - THEN non-chapter assets such as thumbnails, covers, logos, icons, banners, and promo images SHALL be filtered out and de-duplicated
 - AND the CBZ SHALL be packaged with only the actual chapter page images
 
+#### Scenario: Full server-rendered chapter list on the manga page (arenascan)
+- GIVEN arenascan.com (served from arenascan.com), whose manga pages (/manga/{slug}/) contain the complete chapter list server-rendered inside `<div class="eplister" id="chapterlist">`, one `<li data-num="...">` per chapter
+- WHEN chapters are extracted with a custom parser from the static manga page HTML
+- THEN every chapter SHALL be found via `#chapterlist li` (href, `.chapternum` text, `data-num`)
+- AND the paginated category pages (/category/{slug}/page/N/) SHALL NOT be fetched
+
+#### Scenario: Chapter images inside a noscript fallback (arenascan)
+- GIVEN an arenascan.com chapter page where the static HTML embeds the page images inside `<div id="readerarea"><noscript>...<img src="...">...</noscript></div>`
+- WHEN the x/net/html parser keeps the noscript content as a single raw-text node (so `#readerarea img` matches nothing)
+- THEN the custom image parser SHALL re-parse the noscript text as an HTML fragment and extract the `<img src>` values in order
+- AND when the page is browser-rendered instead, direct `<img>` descendants of `#readerarea` SHALL be preferred
+- AND image URLs SHALL be de-duplicated preserving order
+
 #### Scenario: API extraction type
 - GIVEN a site configured with `extraction.Type = "api"`
 - WHEN the downloader processes chapters or images

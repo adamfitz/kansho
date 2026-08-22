@@ -189,6 +189,16 @@
         "title": true,
         "location": true
       }
+    },
+    {
+      "name": "arenascan",
+      "display_name": "arenascan",
+      "required_fields": {
+        "url": true,
+        "shortname": false,
+        "title": true,
+        "location": true
+      }
     }
   ]
 }
