@@ -3,7 +3,6 @@ package ui
 import (
 	"bufio"
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -12,18 +11,20 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/widget"
+
+	"gopkg.in/yaml.v3"
 )
 
 // SiteConfig represents a single site configuration block
 type SiteConfig struct {
-	Name           string          `json:"name"`
-	DisplayName    string          `json:"display_name"`
-	RequiredFields map[string]bool `json:"required_fields"`
+	Name           string          `yaml:"name"`
+	DisplayName    string          `yaml:"display_name"`
+	RequiredFields map[string]bool `yaml:"required_fields"`
 }
 
-// SitesConfig represents the full sites.json structure
+// SitesConfig represents the full sites.yml structure
 type SitesConfigFile struct {
-	Sites []SiteConfig `json:"sites"`
+	Sites []SiteConfig `yaml:"sites"`
 }
 
 func ShowConfigWindow(kanshoApp fyne.App) {
@@ -58,35 +59,26 @@ func ShowConfigWindow(kanshoApp fyne.App) {
 		return nil
 	}
 
-	// Find the line range for a site block in the JSON
+	// Find the line range for a site block in the YAML
 	findSiteBlockLines := func(siteName string) (startLine, endLine int) {
-		inSiteBlock := false
-		braceCount := 0
-
 		for i, line := range allLines {
-			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(strings.TrimSpace(line), fmt.Sprintf("name: %s", siteName)) {
+				startLine = i
+				indent := len(line) - len(strings.TrimLeft(line, " "))
 
-			// Check if this line contains the site name
-			if strings.Contains(line, fmt.Sprintf(`"name": "%s"`, siteName)) {
-				// Walk backwards to find the opening brace of this block
-				for j := i; j >= 0; j-- {
-					if strings.Contains(allLines[j], "{") && !strings.Contains(allLines[j], `"required_fields"`) {
-						startLine = j
-						inSiteBlock = true
+				endLine = i
+				for j := i + 1; j < len(allLines); j++ {
+					nextLine := allLines[j]
+					if strings.TrimSpace(nextLine) == "" {
+						continue
+					}
+					nextIndent := len(nextLine) - len(strings.TrimLeft(nextLine, " "))
+					if nextIndent <= indent {
 						break
 					}
+					endLine = j
 				}
-			}
-
-			// If we're in the site block, count braces to find the end
-			if inSiteBlock {
-				braceCount += strings.Count(trimmed, "{")
-				braceCount -= strings.Count(trimmed, "}")
-
-				if braceCount == 0 && strings.Contains(trimmed, "}") {
-					endLine = i
-					return startLine, endLine
-				}
+				return startLine, endLine
 			}
 		}
 
@@ -181,7 +173,7 @@ func ShowConfigWindow(kanshoApp fyne.App) {
 	configWindow.Show()
 
 	go func() {
-		fileData, err := sites.GetEmbeddedSitesJSON()
+		fileData, err := sites.GetEmbeddedSitesYAML()
 		if err != nil {
 			fyne.Do(func() {
 				configLabel.SetText(fmt.Sprintf("Failed to load embedded configuration: %v", err))
@@ -189,8 +181,8 @@ func ShowConfigWindow(kanshoApp fyne.App) {
 			return
 		}
 
-		// Parse the JSON structure for exact matching
-		if err := json.Unmarshal(fileData, &sitesConfig); err != nil {
+		// Parse the YAML structure for exact matching
+		if err := yaml.Unmarshal(fileData, &sitesConfig); err != nil {
 			fyne.Do(func() {
 				configLabel.SetText(fmt.Sprintf("Failed to parse configuration: %v", err))
 			})

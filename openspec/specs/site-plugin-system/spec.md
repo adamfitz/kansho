@@ -176,7 +176,7 @@ The system SHALL embed a site configuration file that specifies which fields are
 
 #### Scenario: Load sites config
 - GIVEN the application starts
-- WHEN the embedded `sites.json` is loaded
+- WHEN the embedded `sites.yml` is loaded
 - THEN each site entry SHALL provide name, display_name, and required_fields
 - AND required_fields SHALL specify whether URL, shortname, title, and location are mandatory
 
