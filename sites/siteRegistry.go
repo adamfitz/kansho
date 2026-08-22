@@ -28,6 +28,7 @@ var sitePlugins = map[string]func() downloader.SitePlugin{
 	"philiascans": func() downloader.SitePlugin { return &PhiliaScansSite{} },
 	"comix":       func() downloader.SitePlugin { return &ComixSite{} },
 	"kingofshojo": func() downloader.SitePlugin { return &KingOfShojoSite{} },
+	"arenascan":   func() downloader.SitePlugin { return &ArenascanSite{} },
 }
 
 // GetSitePlugin returns a new SitePlugin instance for the given site name,
@@ -77,6 +78,7 @@ func init() {
 	config.RegisterSite("philiascans", PhiliaScansDownloadChapters)
 	config.RegisterSite("comix", ComixDownloadChapters)
 	config.RegisterSite("kingofshojo", KingOfShojoDownloadChapters)
+	config.RegisterSite("arenascan", ArenascanDownloadChapters)
 
 	// Register the generic single-chapter download dispatcher
 	config.RegisterChapterDownload(DownloadSingleChapter)
