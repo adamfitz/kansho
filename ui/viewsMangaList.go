@@ -6,177 +6,13 @@ import (
 	"runtime"
 	"sort"
 	"strings"
-	"time"
 
 	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
-	"fyne.io/fyne/v2/driver/desktop"
 	//"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
-
-	"image/color"
 )
-
-// hoverLabel is a custom label that shows a tooltip on hover
-type hoverLabel struct {
-	widget.Label
-	hovered          bool
-	tooltipText      string
-	tooltipLabel     *canvas.Text
-	tooltipBg        *canvas.Rectangle
-	tooltipContainer *fyne.Container
-	window           fyne.Window
-	hoverTimer       *time.Timer
-	overlayShown     bool
-}
-
-func newHoverLabel(text, tooltip string, window fyne.Window) *hoverLabel {
-	h := &hoverLabel{
-		tooltipText: tooltip,
-		window:      window,
-	}
-	h.ExtendBaseWidget(h)
-	h.SetText(text)
-	h.Truncation = fyne.TextTruncateEllipsis
-	return h
-}
-
-func (h *hoverLabel) MouseIn(event *desktop.MouseEvent) {
-	h.hovered = true
-	if h.hoverTimer != nil {
-		h.hoverTimer.Stop()
-	}
-
-	h.hoverTimer = time.AfterFunc(500*time.Millisecond, func() {
-		if h.hovered && h.window != nil {
-			abs := fyne.CurrentApp().Driver().AbsolutePositionForObject(h)
-			canvasPos := fyne.NewPos(abs.X+event.Position.X, abs.Y+event.Position.Y)
-			h.showTooltip(canvasPos)
-		}
-	})
-}
-
-func (h *hoverLabel) MouseOut() {
-	h.hovered = false
-	if h.hoverTimer != nil {
-		h.hoverTimer.Stop()
-	}
-	h.hideTooltip()
-}
-
-func (h *hoverLabel) MouseMoved(event *desktop.MouseEvent) {
-	if h.overlayShown {
-		abs := fyne.CurrentApp().Driver().AbsolutePositionForObject(h)
-		canvasPos := fyne.NewPos(abs.X+event.Position.X, abs.Y+event.Position.Y)
-		h.updateTooltipPosition(canvasPos)
-	}
-}
-
-func (h *hoverLabel) showTooltip(pos fyne.Position) {
-	if h.tooltipText == "" {
-		return
-	}
-
-	h.tooltipLabel = canvas.NewText(h.tooltipText, color.White)
-	h.tooltipLabel.TextSize = 14
-	h.tooltipLabel.TextStyle = fyne.TextStyle{Bold: true}
-
-	h.tooltipBg = canvas.NewRectangle(color.Black)
-	h.tooltipBg.CornerRadius = 6 // optional: makes it look way nicer
-
-	padding := float32(8)
-
-	// Let Fyne calculate the real text size
-	textSize := h.tooltipLabel.MinSize()
-
-	tooltipSize := fyne.NewSize(
-		textSize.Width+padding*2,
-		textSize.Height+padding*2,
-	)
-
-	h.tooltipBg.Resize(tooltipSize)
-	h.tooltipLabel.Resize(textSize)
-
-	tooltipX := pos.X + 15
-	tooltipY := pos.Y + 15
-
-	canvasSize := h.window.Canvas().Size()
-
-	if tooltipX+tooltipSize.Width > canvasSize.Width {
-		tooltipX = pos.X - tooltipSize.Width - 5
-	}
-	if tooltipY+tooltipSize.Height > canvasSize.Height {
-		tooltipY = pos.Y - tooltipSize.Height - 5
-	}
-
-	h.tooltipContainer = container.NewWithoutLayout(h.tooltipBg, h.tooltipLabel)
-	h.tooltipBg.Move(fyne.NewPos(tooltipX, tooltipY))
-	h.tooltipLabel.Move(fyne.NewPos(tooltipX+padding, tooltipY+padding))
-
-	h.window.Canvas().Overlays().Add(h.tooltipContainer)
-	h.overlayShown = true
-}
-
-func (h *hoverLabel) updateTooltipPosition(pos fyne.Position) {
-	if h.tooltipBg == nil || h.tooltipLabel == nil {
-		return
-	}
-
-	padding := float32(8)
-	tooltipX := pos.X + 15
-	tooltipY := pos.Y + 15
-
-	canvasSize := h.window.Canvas().Size()
-	tooltipWidth := h.tooltipBg.Size().Width
-	tooltipHeight := h.tooltipBg.Size().Height
-
-	if tooltipX+tooltipWidth > canvasSize.Width {
-		tooltipX = pos.X - tooltipWidth - 5
-	}
-	if tooltipY+tooltipHeight > canvasSize.Height {
-		tooltipY = pos.Y - tooltipHeight - 5
-	}
-
-	h.tooltipBg.Move(fyne.NewPos(tooltipX, tooltipY))
-	h.tooltipLabel.Move(fyne.NewPos(tooltipX+padding, tooltipY+padding))
-	h.window.Canvas().Refresh(h.tooltipContainer)
-}
-
-func (h *hoverLabel) hideTooltip() {
-	if h.overlayShown && h.tooltipContainer != nil {
-		overlays := h.window.Canvas().Overlays()
-
-		// Preserve any overlays that are above the tooltip before removing it.
-		// Fyne's OverlayStack.Remove removes the given overlay AND everything
-		// above it, so removing a tooltip that sits below an open modal dialog
-		// (e.g. the cf Challenge dialog) would silently destroy that dialog.
-		var above []fyne.CanvasObject
-		found := false
-		for _, o := range overlays.List() {
-			if o == h.tooltipContainer {
-				found = true
-				continue
-			}
-			if found {
-				above = append(above, o)
-			}
-		}
-
-		overlays.Remove(h.tooltipContainer)
-
-		// Restore the overlays that were above the tooltip, keeping their order.
-		for _, o := range above {
-			overlays.Add(o)
-		}
-
-		h.overlayShown = false
-		h.tooltipContainer = nil
-		h.tooltipLabel = nil
-		h.tooltipBg = nil
-	}
-}
 
 // enterButton is a button that also activates when the Enter key is pressed
 // while it is focused. Fyne's default button only reacts to Space, so a custom
@@ -276,13 +112,13 @@ func NewMangaListView(state *KanshoAppState) *MangaListView {
 			return len(view.state.MangaData.Manga)
 		},
 		func() fyne.CanvasObject {
-			return newHoverLabel("template", "", view.state.Window)
+			label := widget.NewLabel("template")
+			label.Truncation = fyne.TextTruncateEllipsis
+			return label
 		},
 		func(id widget.ListItemID, item fyne.CanvasObject) {
-			hoverLabel := item.(*hoverLabel)
-			manga := view.state.MangaData.Manga[id]
-			hoverLabel.SetText(manga.Title)
-			hoverLabel.tooltipText = fmt.Sprintf("%s", manga.Site)
+			label := item.(*widget.Label)
+			label.SetText(view.state.MangaData.Manga[id].Title)
 		},
 	)
 

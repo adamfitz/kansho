@@ -381,3 +381,89 @@ func TestDeleteChapterFileOnDisk(t *testing.T) {
 		t.Fatalf("deleting a missing file should succeed, got: %v", err)
 	}
 }
+
+// TestSelectedMangaTitleIsBold verifies that the chapter list pane shows the
+// selected manga's title in bold.
+func TestSelectedMangaTitleIsBold(t *testing.T) {
+	_, view, _ := newChapterListViewTest(t, "")
+
+	view.onMangaSelected(0)
+
+	if view.selectedMangaLabel.Text != "Test Manga" {
+		t.Fatalf("selected title should be shown in the chapter list pane, got %q", view.selectedMangaLabel.Text)
+	}
+	if !view.selectedMangaLabel.TextStyle.Bold {
+		t.Error("selected manga title should be bold")
+	}
+}
+
+// TestStatusBarShowsSiteAndDownloadedCountOnlyUntilRefresh verifies that the
+// main status bar starts idle, then shows the download site and downloaded
+// chapter count on selection, and only includes the not-downloaded count once
+// the manga's chapter list has been refreshed.
+func TestStatusBarShowsSiteAndDownloadedCountOnlyUntilRefresh(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "ch001.cbz"), []byte("cbz"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "ch002.cbz"), []byte("cbz"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, view, _ := newChapterListViewTest(t, dir)
+
+	bar := NewMainStatusBar()
+	view.SetStatusBar(bar)
+	if bar.message.Text != "No manga selected" || bar.badge.Text != "" {
+		t.Fatalf("status bar should start idle, got badge=%q message=%q", bar.badge.Text, bar.message.Text)
+	}
+
+	// Selecting the manga shows site + downloaded count; the not-downloaded
+	// count is hidden until the user presses Refresh.
+	view.onMangaSelected(0)
+	if bar.badge.Text != "test" {
+		t.Errorf("badge should show the manga's site, got %q", bar.badge.Text)
+	}
+	if bar.message.Text != "2 chapters downloaded" {
+		t.Errorf("before a refresh the bar should show only the downloaded count, got %q", bar.message.Text)
+	}
+
+	// A refresh fetches remote chapters: afterwards the not-downloaded count
+	// is shown as well (simulated here via the per-manga remote cache).
+	view.remoteChapters["Test Manga"] = map[string]string{
+		"ch003.cbz": "http://example.com/ch3",
+		"ch004.cbz": "http://example.com/ch4",
+	}
+	view.onMangaSelected(0)
+	if bar.message.Text != "2 chapters downloaded · 2 to download" {
+		t.Errorf("after a refresh the bar should include the not-downloaded count, got %q", bar.message.Text)
+	}
+}
+
+// TestStatusBarUpdatesOnTaskChange verifies that the status bar counts stay in
+// sync when the queue state changes (e.g. a chapter finishes downloading).
+func TestStatusBarUpdatesOnTaskChange(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "ch001.cbz"), []byte("cbz"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, view, _ := newChapterListViewTest(t, dir)
+	bar := NewMainStatusBar()
+	view.SetStatusBar(bar)
+	view.onMangaSelected(0)
+	if bar.message.Text != "1 chapters downloaded" {
+		t.Fatalf("unexpected initial message: %q", bar.message.Text)
+	}
+
+	// Simulate a second chapter appearing on disk (a finished download).
+	if err := os.WriteFile(filepath.Join(dir, "ch002.cbz"), []byte("cbz"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	view.chapters = append(view.chapters, &ChapterItem{Name: "ch002.cbz"})
+	view.refreshAfterTaskChange()
+
+	if bar.message.Text != "2 chapters downloaded" {
+		t.Errorf("bar should reflect the newly downloaded chapter, got %q", bar.message.Text)
+	}
+}

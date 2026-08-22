@@ -31,9 +31,6 @@ const (
 	// SubtitleTextSize is used for descriptive text below titles
 	SubtitleTextSize = 16
 
-	// FooterTextSize is used for footer text
-	FooterTextSize = 14
-
 	// CardTitleTextSize can be used for card headers (currently using default bold labels)
 	CardTitleTextSize = 16
 )

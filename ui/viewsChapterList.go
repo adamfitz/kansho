@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"kansho/cf"
@@ -82,6 +84,11 @@ type ChapterListView struct {
 	// of the application so refreshed chapters stay visible across manga
 	// switches.
 	remoteChapters map[string]map[string]string
+
+	// statusBar is the main window's status bar. It is optional (nil in
+	// tests); when attached, it shows the selected manga's site and chapter
+	// counts.
+	statusBar *MainStatusBar
 }
 
 func NewChapterListView(state *KanshoAppState, downloadQueueButton *DownloadQueueButton) *ChapterListView {
@@ -95,6 +102,7 @@ func NewChapterListView(state *KanshoAppState, downloadQueueButton *DownloadQueu
 
 	view.selectedMangaLabel = widget.NewLabel("")
 	view.selectedMangaLabel.Truncation = fyne.TextTruncateEllipsis
+	view.selectedMangaLabel.TextStyle = fyne.TextStyle{Bold: true}
 
 	// Download All button - adds all missing chapters for the selected manga
 	// to the download queue
@@ -204,6 +212,50 @@ func NewChapterListView(state *KanshoAppState, downloadQueueButton *DownloadQueu
 	return view
 }
 
+// SetStatusBar attaches the main window's status bar to this view. The view
+// keeps it up to date as the selection, chapter list, and download queue
+// change. The bar is optional; without it the view works exactly as before.
+func (v *ChapterListView) SetStatusBar(bar *MainStatusBar) {
+	v.statusBar = bar
+	bar.SetIdle()
+}
+
+// updateStatusBar refreshes the main window status bar for the currently
+// selected manga. The site and the number of downloaded chapters are always
+// shown. The number of not-downloaded chapters is only shown once remote
+// chapters have been fetched for this manga — i.e. after the user pressed
+// Refresh on the chapter list (the per-manga remote cache is only populated by
+// a successful refresh).
+func (v *ChapterListView) updateStatusBar() {
+	if v.statusBar == nil {
+		return
+	}
+
+	manga := v.state.GetSelectedManga()
+	if manga == nil {
+		v.statusBar.SetIdle()
+		return
+	}
+
+	downloaded := 0
+	for _, ch := range v.chapters {
+		if ch.Downloaded {
+			downloaded++
+		}
+	}
+	notDownloaded := len(v.chapters) - downloaded
+
+	site := manga.Site
+	if site == "" && manga.Url != "" {
+		if host, err := url.Parse(manga.Url); err == nil && host.Hostname() != "" {
+			site = strings.TrimPrefix(host.Hostname(), "www.")
+		}
+	}
+
+	_, refreshed := v.remoteChapters[manga.Title]
+	v.statusBar.ShowManga(site, downloaded, notDownloaded, refreshed)
+}
+
 // onMangaSelected rebuilds the chapter list for the newly selected manga from
 // the chapters that exist on disk merged with any remote chapters previously
 // fetched for this manga via the Refresh button. It does NOT contact the target
@@ -231,6 +283,8 @@ func (v *ChapterListView) onMangaSelected(id int) {
 	v.refreshAfterTaskChange()
 	v.refreshButton.Enable()
 	v.stopLoading()
+
+	v.updateStatusBar()
 }
 
 // presentChapters builds the displayed chapter list for the selected manga from
@@ -392,6 +446,7 @@ func (v *ChapterListView) refreshRemoteChapters(gen int, manga *config.Bookmarks
 		v.contentContainer.Objects = []fyne.CanvasObject{v.chapterList}
 		v.contentContainer.Refresh()
 		v.refreshAfterTaskChange()
+		v.updateStatusBar()
 
 		v.refreshing = false
 		v.refreshButton.Enable()
@@ -734,6 +789,7 @@ func (v *ChapterListView) refreshAfterTaskChange() {
 
 	v.chapterList.Refresh()
 	v.updateDownloadAllButton()
+	v.updateStatusBar()
 }
 
 // reconcileDownloadedChapters marks every chapter in the list as downloaded when
@@ -827,4 +883,5 @@ func (v *ChapterListView) showNoSelection() {
 	}
 	v.contentContainer.Refresh()
 	v.stopLoading()
+	v.updateStatusBar()
 }
