@@ -8,6 +8,7 @@ import (
 	"kansho/config"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/widget"
@@ -67,9 +68,69 @@ func findProgressBar(root fyne.CanvasObject) (*widget.ProgressBar, bool) {
 	return nil, false
 }
 
-// TestDownloadQueuePopupUsesScrollContainer verifies that the queue pop-up is a
-// Border layout with a scrollable centre (so the list is constrained and gets a
-// scrollbar when too long) and a global "Cancel All" button in the header.
+// findScroll walks a canvas object tree looking for a scroll container.
+func findScroll(root fyne.CanvasObject) (*container.Scroll, bool) {
+	switch obj := root.(type) {
+	case *container.Scroll:
+		return obj, true
+	case *fyne.Container:
+		for _, child := range obj.Objects {
+			if s, ok := findScroll(child); ok {
+				return s, true
+			}
+		}
+	}
+	return nil, false
+}
+
+// findGradient walks a canvas object tree looking for a linear gradient.
+func findGradient(root fyne.CanvasObject) (*canvas.LinearGradient, bool) {
+	switch obj := root.(type) {
+	case *canvas.LinearGradient:
+		return obj, true
+	case *fyne.Container:
+		for _, child := range obj.Objects {
+			if g, ok := findGradient(child); ok {
+				return g, true
+			}
+		}
+	}
+	return nil, false
+}
+
+// findAllTexts collects every canvas.Text object in a canvas object tree.
+func findAllTexts(root fyne.CanvasObject) []*canvas.Text {
+	var texts []*canvas.Text
+	switch obj := root.(type) {
+	case *canvas.Text:
+		texts = append(texts, obj)
+	case *fyne.Container:
+		for _, child := range obj.Objects {
+			texts = append(texts, findAllTexts(child)...)
+		}
+	}
+	return texts
+}
+
+// containsObject reports whether the target object is part of the tree rooted
+// at root (compared by pointer identity).
+func containsObject(root, target fyne.CanvasObject) bool {
+	if root == target {
+		return true
+	}
+	if c, ok := root.(*fyne.Container); ok {
+		for _, child := range c.Objects {
+			if containsObject(child, target) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// TestDownloadQueuePopupUsesScrollContainer verifies that the queue pop-up
+// contains a scrollable list (so it is constrained and gets a scrollbar when
+// too long) and a global "Cancel All" button in the header.
 func TestDownloadQueuePopupUsesScrollContainer(t *testing.T) {
 	app := test.NewApp()
 	w := test.NewWindow(nil)
@@ -81,29 +142,27 @@ func TestDownloadQueuePopupUsesScrollContainer(t *testing.T) {
 	b := NewDownloadQueueButton(&KanshoAppState{Window: w})
 	content := b.buildPopup()
 
-	border, ok := content.(*fyne.Container)
-	if !ok {
-		t.Fatal("popup content should be a container")
-	}
-	if border.Layout == nil {
-		t.Fatal("popup content should have a layout")
-	}
-	layoutType := fmt.Sprintf("%T", border.Layout)
-	if !strings.Contains(strings.ToLower(layoutType), "borderlayout") {
-		t.Fatalf("popup should use a Border layout, got %s", layoutType)
+	if _, ok := findScroll(content); !ok {
+		t.Fatal("popup should contain a scroll container to constrain the queue list")
 	}
 
-	// container.NewBorder stores the centre object first, then the top.
-	center := border.Objects[0]
-	if _, ok := center.(*container.Scroll); !ok {
-		t.Fatalf("popup centre should be a scroll container to constrain the list, got %T", center)
-	}
-
-	if btn := findButton(border.Objects[1], "Cancel All"); btn == nil {
+	if btn := findButton(content, "Cancel All"); btn == nil {
 		t.Error("popup header should contain a global 'Cancel All' button")
+	} else if btn.Importance != widget.MediumImportance {
+		t.Error("'Cancel All' should use the default styling like the main Kansho window buttons")
 	}
-	if btn := findButton(border.Objects[1], "Clear Retries"); btn == nil {
+	if btn := findButton(content, "Clear Retries"); btn == nil {
 		t.Error("popup header should contain a 'Clear Retries' button")
+	} else if btn.Importance != widget.MediumImportance {
+		t.Error("'Clear Retries' should use the default styling like the main Kansho window buttons")
+	}
+
+	closeQueue := findButton(content, "Close\nQueue")
+	if closeQueue == nil {
+		t.Fatal("popup header should contain a 'Close Queue' button with stacked words")
+	}
+	if closeQueue.Importance != widget.MediumImportance {
+		t.Error("'Close\\nQueue' button should use the default styling like the main Kansho window buttons")
 	}
 }
 
@@ -426,8 +485,9 @@ func TestUpdateStatusBar(t *testing.T) {
 	}
 }
 
-// TestDownloadQueuePopupHasStatusBar verifies the pop-up is a Border layout with
-// a footer status bar (bottom) holding the status badge and message labels.
+// TestDownloadQueuePopupHasStatusBar verifies the pop-up wires the footer
+// status badge and message labels into its layout and that the status bar
+// reflects the current download.
 func TestDownloadQueuePopupHasStatusBar(t *testing.T) {
 	app := test.NewApp()
 	w := test.NewWindow(nil)
@@ -439,23 +499,11 @@ func TestDownloadQueuePopupHasStatusBar(t *testing.T) {
 	b := NewDownloadQueueButton(&KanshoAppState{Window: w})
 	content := b.buildPopup()
 
-	border, ok := content.(*fyne.Container)
-	if !ok {
-		t.Fatal("popup content should be a container")
+	if b.statusBadge == nil || b.statusMessage == nil {
+		t.Fatal("popup should create the footer status badge and message labels")
 	}
-	if len(border.Objects) < 3 {
-		t.Fatalf("popup should have center, header and footer, got %d objects", len(border.Objects))
-	}
-
-	// container.NewBorder stores the centre first, then top, then bottom.
-	footer := border.Objects[2]
-	vbox, ok := footer.(*fyne.Container)
-	if !ok {
-		t.Fatalf("popup footer should be a container, got %T", footer)
-	}
-	row := vbox.Objects[len(vbox.Objects)-1]
-	if _, ok := row.(*fyne.Container); !ok {
-		t.Fatalf("footer status row should be a border container, got %T", row)
+	if !containsObject(content, b.statusBadge) || !containsObject(content, b.statusMessage) {
+		t.Fatal("status bar labels should be part of the popup layout")
 	}
 
 	// The status bar should reflect the current download once the popup refreshes.
@@ -464,5 +512,51 @@ func TestDownloadQueuePopupHasStatusBar(t *testing.T) {
 	})
 	if b.statusBadge.Text == "" || b.statusMessage.Text == "" {
 		t.Error("status bar labels should be populated after updateStatusBar")
+	}
+}
+
+// TestDownloadQueueHeaderMatchesKanshoStyle verifies the pop-up header mirrors
+// the main Kansho header: a large, bold, centred "Download Queue" title with an
+// initialised overall-counts subtitle and the same purple gradient background
+// as the main window.
+func TestDownloadQueueHeaderMatchesKanshoStyle(t *testing.T) {
+	app := test.NewApp()
+	w := test.NewWindow(nil)
+	t.Cleanup(func() {
+		w.Close()
+		app.Quit()
+	})
+
+	b := NewDownloadQueueButton(&KanshoAppState{Window: w})
+	content := b.buildPopup()
+
+	var title *canvas.Text
+	for _, txt := range findAllTexts(content) {
+		if txt.Text == "Download Queue" {
+			title = txt
+			break
+		}
+	}
+	if title == nil {
+		t.Fatal("popup header should contain a 'Download Queue' title text")
+	}
+	if title.TextSize != TitleTextSize {
+		t.Errorf("header title should use the main header title size (%d), got %v", TitleTextSize, title.TextSize)
+	}
+	if !title.TextStyle.Bold {
+		t.Error("header title should be bold like the main Kansho header")
+	}
+	if title.Alignment != fyne.TextAlignCenter {
+		t.Error("header title should be centered like the main Kansho header")
+	}
+
+	if b.subtitleText == nil || b.subtitleText.Text == "" {
+		t.Error("header subtitle with overall queue counts should be initialised")
+	} else if b.subtitleText.TextSize != SubtitleTextSize {
+		t.Errorf("header subtitle should use the main header subtitle size (%d), got %v", SubtitleTextSize, b.subtitleText.TextSize)
+	}
+
+	if _, ok := findGradient(content); !ok {
+		t.Error("popup should have the purple gradient background like the main window")
 	}
 }

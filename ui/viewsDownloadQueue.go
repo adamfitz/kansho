@@ -10,6 +10,7 @@ import (
 	"kansho/config"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/theme"
@@ -45,7 +46,7 @@ type DownloadQueueButton struct {
 
 	popup        *widget.PopUp
 	listBox      *fyne.Container
-	overallLabel *widget.Label
+	subtitleText *canvas.Text
 
 	// Footer status bar: a compact live readout of what the current download is
 	// doing (downloading, stalled, waiting to retry, packaging the CBZ, ...).
@@ -132,20 +133,29 @@ func (b *DownloadQueueButton) showSummary() {
 	b.popup.Show()
 }
 
-// buildPopup constructs the stable pop-up structure: a fixed header (title,
-// overall progress + global "Cancel All", and a Close button) above a
-// scrollable list of the queue contents, with a live status bar pinned to the
-// bottom.
+// buildPopup constructs the stable pop-up structure with the same look as the
+// main Kansho window: a purple gradient background, a large centred bold title
+// ("Download Queue") above a subtitle showing the live overall queue counts,
+// queue controls on the right of the header, and below that a white card
+// holding the scrollable list of the queue contents and a live status bar.
 func (b *DownloadQueueButton) buildPopup() fyne.CanvasObject {
-	titleLabel := NewBoldLabel("Download Queue")
+	// Create the main title text in the same style as the main application
+	// header: large, bold and centred.
+	titleText := canvas.NewText("Download Queue", TextColorLight)
+	titleText.TextSize = TitleTextSize               // Large font (48pt)
+	titleText.TextStyle = fyne.TextStyle{Bold: true} // Bold for emphasis
+	titleText.Alignment = fyne.TextAlignCenter       // Centered
 
-	closeButton := widget.NewButtonWithIcon("Close", theme.CancelIcon(), func() {
+	// Subtitle describing the overall queue contents, matching the main
+	// header's subtitle typography. It is kept up to date by rebuildPopup so
+	// the counts change live as downloads are queued or removed.
+	b.subtitleText = canvas.NewText("0 manga · 0 chapters in queue", TextColorLight)
+	b.subtitleText.TextSize = SubtitleTextSize      // Smaller font (16pt)
+	b.subtitleText.Alignment = fyne.TextAlignCenter // Centered to match title
+
+	closeButton := widget.NewButtonWithIcon("Close\nQueue", theme.CancelIcon(), func() {
 		b.popup.Hide()
 	})
-	closeButton.Importance = widget.LowImportance
-	titleRow := container.NewBorder(nil, nil, nil, closeButton, titleLabel)
-
-	b.overallLabel = widget.NewLabel("")
 
 	// Clear Retries removes only the tasks that did not finish and can be
 	// retried (failed, cancelled, or CF-blocked), across all manga titles.
@@ -164,21 +174,31 @@ func (b *DownloadQueueButton) buildPopup() fyne.CanvasObject {
 			b.state.Window,
 		)
 	})
-	clearRetriesButton.Importance = widget.HighImportance
 	cancelAllButton := widget.NewButtonWithIcon("Cancel All", theme.CancelIcon(), func() {
 		config.GetDownloadQueue().CancelAll()
 	})
-	cancelAllButton.Importance = widget.HighImportance
 
-	controls := container.NewHBox(clearRetriesButton, cancelAllButton)
-	overallRow := container.NewBorder(nil, nil, nil, controls, b.overallLabel)
+	// All header buttons keep their default styling so they look identical to
+	// the standard buttons used across the application (e.g. the download
+	// queue summary button in the main Kansho window) and stay clearly visible
+	// on top of the gradient.
+	//
+	// The queue-wide controls sit on the right of the header, mirroring how
+	// the download queue summary button is placed in the main Kansho header.
+	// They are centered vertically because the large title makes the header
+	// tall, and a border layout would otherwise stretch the controls along its
+	// full height.
+	rightControls := container.NewPadded(container.NewCenter(
+		container.NewHBox(clearRetriesButton, cancelAllButton, closeButton),
+	))
 
-	header := container.NewVBox(titleRow, overallRow, widget.NewSeparator())
-
-	// The scroll container constrains the list to the pop-up's size and shows a
-	// scrollbar when the queue is too long to fit.
-	b.listBox = container.NewVBox()
-	scroll := container.NewVScroll(b.listBox)
+	// Layer the centered title over the right-aligned controls using a stack so
+	// the text stays centered on the full pop-up width — the same layout the
+	// main Kansho header uses.
+	header := container.NewStack(
+		container.NewCenter(container.NewVBox(titleText, b.subtitleText)),
+		container.NewBorder(nil, nil, nil, rightControls),
+	)
 
 	// Footer status bar: a short bold state badge on the left and the current
 	// download's status message on the right (truncating so it never wraps).
@@ -186,12 +206,27 @@ func (b *DownloadQueueButton) buildPopup() fyne.CanvasObject {
 	b.statusBadge.TextStyle = fyne.TextStyle{Bold: true}
 	b.statusMessage = widget.NewLabel("")
 	b.statusMessage.Truncation = fyne.TextTruncateEllipsis
-	footer := container.NewVBox(
-		widget.NewSeparator(),
-		container.NewBorder(nil, nil, b.statusBadge, nil, b.statusMessage),
+	statusBar := container.NewBorder(nil, nil, b.statusBadge, nil, b.statusMessage)
+
+	// The scroll container constrains the list to the card's size and shows a
+	// scrollbar when the queue is too long to fit. The white card keeps the
+	// list readable against the purple gradient, like the cards in the main
+	// window.
+	b.listBox = container.NewVBox()
+	bodyCard := NewCard(container.NewBorder(nil, statusBar, nil, nil, container.NewVScroll(b.listBox)))
+
+	// Create the same gradient background as the main window: a smooth 45°
+	// transition from light purple to dark purple stacked behind all content.
+	gradient := canvas.NewLinearGradient(
+		GradientStartColor, // Light purple (top-left)
+		GradientEndColor,   // Dark purple (bottom-right)
+		GradientAngle,      // 45 degree angle
 	)
 
-	return container.NewBorder(header, footer, nil, nil, scroll)
+	return container.NewStack(
+		gradient, // Background
+		container.NewBorder(header, nil, nil, nil, bodyCard), // Header on top, card fills the rest
+	)
 }
 
 // refreshPopup reconciles the pop-up with the current queue state.
@@ -261,7 +296,8 @@ func structureKey(tasks []*config.DownloadTask) string {
 // section sits at the top of the list whenever a download is active, showing
 // the in-progress chapter next to a live progress bar and a Stop button.
 func (b *DownloadQueueButton) rebuildPopup(tasks []*config.DownloadTask, active *config.DownloadTask) {
-	b.overallLabel.SetText(fmt.Sprintf("Overall: %d manga · %d chapters in queue", len(taskTitles(tasks)), len(tasks)))
+	b.subtitleText.Text = fmt.Sprintf("%d manga · %d chapters in queue", len(taskTitles(tasks)), len(tasks))
+	b.subtitleText.Refresh()
 
 	// Track which task owns the active row, so progress ticks can update it in
 	// place. Stale widgets from a previous build are dropped.
