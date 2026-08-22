@@ -19,7 +19,7 @@ import (
 //   - Left Column: Manga list (fills the column; Edit Manga form unfolds on demand)
 //   - Right Column: Chapter list (100%)
 //
-// - Footer: Attribution text (bottom)
+// - Status bar: Selected manga's download state (bottom)
 //
 // Parameters:
 //   - window: The main application window (needed for dialogs and state)
@@ -67,6 +67,14 @@ func BuildMainLayout(window fyne.Window) fyne.CanvasObject {
 	// Displays chapters for the currently selected manga with per-chapter
 	// progress bars and download controls
 	chapterListView := NewChapterListView(state, downloadQueueButton)
+
+	// Status bar (bottom of the window, above the footer)
+	// Mirrors the download queue page's status bar: it shows the selected
+	// manga's download site and downloaded chapter count; after a chapter list
+	// refresh it also shows how many chapters are not downloaded. The chapter
+	// list view keeps it up to date.
+	statusBar := NewMainStatusBar()
+	chapterListView.SetStatusBar(statusBar)
 
 	// Assemble the left column
 	// The manga list fills the whole column by default; the edit manga form
@@ -127,19 +135,17 @@ func BuildMainLayout(window fyne.Window) fyne.CanvasObject {
 		container.NewPadded(chapterListView.Card), // Right 50%
 	)
 
-	// Create the footer component
-	// Shows attribution text
-	footer := NewFooter()
-
 	// Assemble the main layout using border container
 	// Border container places items at edges (top, bottom, left, right)
 	// and fills the center with remaining space
+	// The layout mirrors the download queue page: header on top, status bar at
+	// the bottom, and no footer.
 	mainLayout := container.NewBorder(
-		container.NewPadded(header), // Top: Header with padding
-		container.NewPadded(footer), // Bottom: Footer with padding
-		nil,                         // Left: None
-		nil,                         // Right: None
-		contentArea,                 // Center: Main content fills remaining space
+		container.NewPadded(header),        // Top: Header with padding
+		container.NewPadded(statusBar.Bar), // Bottom: Status bar with padding
+		nil,                                // Left: None
+		nil,                                // Right: None
+		contentArea,                        // Center: Main content fills remaining space
 	)
 
 	// Stack the gradient behind all content
