@@ -16,6 +16,7 @@ import (
 	"kansho/config"
 	"kansho/downloader"
 	"kansho/parser"
+	"kansho/refreshpool"
 	"kansho/sites"
 
 	"fyne.io/fyne/v2"
@@ -362,8 +363,16 @@ func buildChapterItems(localNames []string, remote map[string]string) []*Chapter
 	return items
 }
 
-// onRefreshClicked fetches the remote chapter list from the target site and
-// merges any new (not downloaded) chapters into the list.
+// refreshAttemptTimeout bounds a single chapter-list scrape attempt. The
+// refresh pool owns retries and backoff, so each attempt simply needs enough
+// time for one full navigation/pagination pass.
+const refreshAttemptTimeout = 90 * time.Second
+
+// onRefreshClicked submits a chapter-list refresh job to the dedicated
+// refresh worker pool (refreshpool) instead of spawning its own goroutine.
+// The pool serializes scrapes per site, caps global parallelism and applies
+// exponential backoff with retries, so rate-limited or slow sites are handled
+// without blocking downloads or the UI.
 func (v *ChapterListView) onRefreshClicked() {
 	if v.refreshing {
 		return
@@ -373,85 +382,95 @@ func (v *ChapterListView) onRefreshClicked() {
 		return
 	}
 
+	site := sites.GetSitePlugin(manga.Site)
+	if site == nil || manga.Url == "" {
+		log.Printf("[UI] No site plugin or URL for %s - nothing to refresh", manga.Title)
+		return
+	}
+
 	v.refreshing = true
 	v.refreshButton.Disable()
 	v.startLoading()
 
 	gen := v.loadGeneration
-	go v.refreshRemoteChapters(gen, manga)
+	title, siteName, targetURL := manga.Title, manga.Site, manga.Url
+
+	submitted := refreshpool.Get().Submit(&refreshpool.Task{
+		Site: siteName,
+		Desc: title,
+		// Reject duplicate submissions while this manga's fetch is already
+		// pending or running somewhere in the pool.
+		DedupeKey: "chapters:" + targetURL,
+		// A CF challenge waits for the user to import bypass data; retrying
+		// would just keep reopening the browser, so fail immediately and let
+		// OnError show the import dialog.
+		NoRetry: func(err error) bool {
+			var cfErr *cf.CfChallengeError
+			return errors.As(err, &cfErr)
+		},
+		Run: func(ctx context.Context) error {
+			fetchCtx, cancel := context.WithTimeout(ctx, refreshAttemptTimeout)
+			defer cancel()
+
+			remote, err := downloader.FetchChapterURLsSingle(fetchCtx, targetURL, site)
+			if err != nil {
+				return err
+			}
+			fyne.Do(func() {
+				if v.loadGeneration != gen || v.state.SelectedMangaID < 0 {
+					return // user navigated away; discard stale result
+				}
+
+				// Persist the fetched remote chapters in the per-manga cache
+				// and merge them into the displayed list. The cache keeps them
+				// visible whenever the user switches back to this manga.
+				v.mergeRemoteChapters(title, remote)
+
+				v.contentContainer.Objects = []fyne.CanvasObject{v.chapterList}
+				v.contentContainer.Refresh()
+				v.refreshAfterTaskChange()
+				v.updateStatusBar()
+			})
+			return nil
+		},
+		OnSuccess: func() {
+			fyne.Do(func() { v.finishRefresh(gen, "") })
+		},
+		OnError: func(err error) {
+			var cfErr *cf.CfChallengeError
+			if errors.As(err, &cfErr) {
+				url := cfErr.URL
+				fyne.Do(func() { v.finishRefresh(gen, url) })
+				return
+			}
+			log.Printf("[UI] Failed to fetch remote chapters for %s: %v", title, err)
+			fyne.Do(func() { v.finishRefresh(gen, "") })
+		},
+	})
+	if !submitted {
+		// Either this manga's fetch is already pending in the pool or the
+		// submission was rejected - either way restore the button immediately.
+		log.Printf("[UI] Refresh for %s not submitted (duplicate or rejected)", title)
+		v.finishRefresh(gen, "")
+	}
 }
 
-// refreshRemoteChapters queries the target site for the manga's chapters and
-// appends any that are not already listed and not downloaded. Runs off the UI
-// goroutine.
-func (v *ChapterListView) refreshRemoteChapters(gen int, manga *config.Bookmarks) {
-	site := sites.GetSitePlugin(manga.Site)
-	if site == nil || manga.Url == "" {
-		fyne.Do(func() {
-			if v.loadGeneration != gen {
-				return
-			}
-			v.refreshing = false
-			v.refreshButton.Enable()
-			v.stopLoading()
-		})
+// finishRefresh ends a refresh run: restores the refresh button and loading
+// indicator, and shows the CF import dialog when the failure was a Cloudflare
+// challenge (re-triggering the refresh once fresh CF data is imported).
+// Must be called on the UI goroutine; does nothing when gen is stale.
+func (v *ChapterListView) finishRefresh(gen int, cfURL string) {
+	if v.loadGeneration != gen {
 		return
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-	remote, err := downloader.FetchChapterURLs(ctx, manga.Url, site)
-	cancel()
-
-	if err != nil {
-		var cfErr *cf.CfChallengeError
-		if errors.As(err, &cfErr) {
-			url := cfErr.URL
-			fyne.Do(func() {
-				if v.loadGeneration != gen {
-					return
-				}
-				v.refreshing = false
-				v.refreshButton.Enable()
-				v.stopLoading()
-				// CF dialog behaves exactly as before; on success re-trigger the
-				// refresh so the freshly imported CF data is used to fetch chapters.
-				ShowcfDialog(v.state.Window, url, func() {
-					v.onRefreshClicked()
-				})
-			})
-			return
-		}
-		log.Printf("[UI] Failed to fetch remote chapters for %s: %v", manga.Title, err)
-		fyne.Do(func() {
-			if v.loadGeneration != gen {
-				return
-			}
-			v.refreshing = false
-			v.refreshButton.Enable()
-			v.stopLoading()
+	v.refreshing = false
+	v.refreshButton.Enable()
+	v.stopLoading()
+	if cfURL != "" {
+		ShowcfDialog(v.state.Window, cfURL, func() {
+			v.onRefreshClicked()
 		})
-		return
 	}
-
-	fyne.Do(func() {
-		if v.loadGeneration != gen {
-			return
-		}
-
-		// Persist the fetched remote chapters in the per-manga cache and merge
-		// them into the displayed list. The cache keeps them visible whenever
-		// the user switches back to this manga.
-		v.mergeRemoteChapters(manga.Title, remote)
-
-		v.contentContainer.Objects = []fyne.CanvasObject{v.chapterList}
-		v.contentContainer.Refresh()
-		v.refreshAfterTaskChange()
-		v.updateStatusBar()
-
-		v.refreshing = false
-		v.refreshButton.Enable()
-		v.stopLoading()
-	})
 }
 
 // mergeRemoteChapters stores fetched remote chapters in the per-manga cache

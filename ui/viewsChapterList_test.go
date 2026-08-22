@@ -4,10 +4,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"kansho/config"
+	"kansho/refreshpool"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
@@ -465,5 +467,46 @@ func TestStatusBarUpdatesOnTaskChange(t *testing.T) {
 
 	if bar.message.Text != "2 chapters downloaded" {
 		t.Errorf("bar should reflect the newly downloaded chapter, got %q", bar.message.Text)
+	}
+}
+
+// TestStatusBarShowsRefreshPoolStatus verifies the right edge of the main
+// status bar reflects the chapter-list refresh worker pool: an idle readout
+// initially, then a bash-style spinner plus running/queued counts while the
+// pool is busy, and back to idle once it drains.
+func TestStatusBarShowsRefreshPoolStatus(t *testing.T) {
+	bar := NewMainStatusBar()
+	if bar.poolStatus.Text != "⟳ Refreshes: idle" {
+		t.Fatalf("pool readout should start idle, got %q", bar.poolStatus.Text)
+	}
+	if bar.spinner.Text != "" || bar.spinTicker != nil {
+		t.Fatalf("spinner should be off initially, got %q ticker=%v", bar.spinner.Text, bar.spinTicker)
+	}
+
+	busy := refreshpool.Status{Running: 2, Queued: 3}
+	bar.SetRefreshPoolStatus(busy)
+	if bar.poolStatus.Text != "Refreshes: 2 running · 3 queued" {
+		t.Errorf("unexpected busy pool readout: %q", bar.poolStatus.Text)
+	}
+
+	// The spinner must show exactly one of the bash-style frames.
+	frame := bar.spinner.Text
+	if !slices.Contains([]string{"|", "/", "-", "\\"}, frame) {
+		t.Errorf("expected a spinner frame glyph, got %q", frame)
+	}
+
+	// Repeated busy updates reuse the same ticker instead of stacking more.
+	first := bar.spinTicker
+	bar.SetRefreshPoolStatus(busy)
+	if bar.spinTicker != first {
+		t.Error("busy updates must not restart the spinner")
+	}
+
+	bar.SetRefreshPoolStatus(refreshpool.Status{})
+	if bar.poolStatus.Text != "⟳ Refreshes: idle" {
+		t.Errorf("pool readout should return to idle, got %q", bar.poolStatus.Text)
+	}
+	if bar.spinner.Text != "" || bar.spinTicker != nil {
+		t.Errorf("spinner should stop and clear when idle, got %q ticker=%v", bar.spinner.Text, bar.spinTicker)
 	}
 }

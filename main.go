@@ -10,6 +10,8 @@ package main
 // - ui/            : UI state management and theme constants, reusable UI components (cards, header, footer,
 // 						manga list, add manga, chapter list)
 // - bookmarks/     : Manga data loading (existing package)
+// - refreshpool/   : Dedicated worker pool for chapter-list refreshes (one
+//                    worker per site, global parallelism cap, exponential backoff)
 
 import (
 	"log"

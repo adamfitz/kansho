@@ -153,6 +153,19 @@ The downloader implements **exponential backoff** for all network operations:
 - Attempt 3: Wait 4s (2^2)
 - Attempt 4: Fail after total ~6s of backoff
 
+### Chapter-List Refreshes vs Downloads
+
+The table above applies to **download-queue** operations. Chapter-list
+refreshes triggered from the UI ("Refresh" on the chapter list) are handled by
+the dedicated `refreshpool` package instead, which has its own, much more
+patient policy (one worker per site, 10 parallel scrapes max, 5s base backoff
+doubling per failure up to 10 retries, reset on success). Those refreshes call
+`FetchChapterURLsSingle` — the single-attempt variant of `FetchChapterURLs` —
+so only one retry/backoff layer is ever active. CF challenge errors remain
+terminal in both paths (never retried internally): the pool marks them
+non-retryable so the UI can show its import dialog immediately instead of
+reopening the browser for every retry.
+
 ## Cloudflare Bypass Workflow
 
 ### For Sites with `NeedsCFBypass() = true`

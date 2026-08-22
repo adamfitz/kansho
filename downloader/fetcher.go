@@ -71,6 +71,23 @@ func FetchChapterURLs(ctx context.Context, mangaURL string, site SitePlugin) (ma
 	return nil, fmt.Errorf("failed after %d retries: %w", maxRetries, lastErr)
 }
 
+// FetchChapterURLsSingle fetches chapter URLs exactly once with no built-in
+// retries. The UI's chapter-list refresh pool owns its own retry and backoff
+// policy (see refreshpool), so it uses this variant to avoid stacking two
+// independent retry loops on top of each other. CF challenge errors are still
+// returned unwrapped so callers can react to them.
+func FetchChapterURLsSingle(ctx context.Context, mangaURL string, site SitePlugin) (map[string]string, error) {
+	chapterMap, err := extractChapters(ctx, mangaURL, site)
+	if err != nil {
+		var cfErr *cf.CfChallengeError
+		if errors.As(err, &cfErr) {
+			log.Printf("[Downloader] ⚠️ CF challenge detected - returning error to caller")
+		}
+		return nil, err
+	}
+	return chapterMap, nil
+}
+
 // FetchChapterImages fetches image URLs using site's extraction method
 func FetchChapterImages(ctx context.Context, chapterURL string, site SitePlugin) ([]string, error) {
 	imageURLs, err := extractImages(ctx, chapterURL, site)
