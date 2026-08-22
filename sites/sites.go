@@ -2,42 +2,43 @@ package sites
 
 import (
 	"embed"
-	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
 
 	"kansho/models"
+
+	"gopkg.in/yaml.v3"
 )
 
-//go:embed sites.json
+//go:embed sites.yml
 var embeddedFS embed.FS
 
-// GetEmbeddedSitesJSON returns the raw content of the embedded sites.json file
+// GetEmbeddedSitesYAML returns the raw content of the embedded sites.yml file
 // This allows other packages to access the embedded configuration
-func GetEmbeddedSitesJSON() ([]byte, error) {
-	return embeddedFS.ReadFile("sites.json")
+func GetEmbeddedSitesYAML() ([]byte, error) {
+	return embeddedFS.ReadFile("sites.yml")
 }
 
-// LoadSitesConfig loads the manga site configuration from the embedded sites.json
+// LoadSitesConfig loads the manga site configuration from the embedded sites.yml
 // This configuration determines which manga sites are supported and what information
 // is required when adding manga from each site
 //
 // Returns:
 //   - models.SitesConfig: The loaded configuration, or an empty config if loading fails
 //
-// The sites.json file is embedded into the binary at compile time
+// The sites.yml file is embedded into the binary at compile time
 func LoadSitesConfig() models.SitesConfig {
-	// Get the embedded sites.json content
-	byteValues, err := GetEmbeddedSitesJSON()
+	// Get the embedded sites.yml content
+	byteValues, err := GetEmbeddedSitesYAML()
 	if err != nil {
 		fmt.Printf("error loading embedded sites config: %v\n", err)
 		return models.SitesConfig{}
 	}
 
-	// Parse the JSON content into our SitesConfig struct
+	// Parse the YAML content into our SitesConfig struct
 	var sitesConfig models.SitesConfig
-	if err := json.Unmarshal(byteValues, &sitesConfig); err != nil {
+	if err := yaml.Unmarshal(byteValues, &sitesConfig); err != nil {
 		fmt.Printf("error unmarshalling sites config: %v\n", err)
 		return models.SitesConfig{}
 	}

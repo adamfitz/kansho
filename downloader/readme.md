@@ -288,23 +288,17 @@ func init() {
 
 The chapter download function is registered once per site so the queue can dispatch single-chapter tasks for it.
 
-### Step 4: Add to sites.json
+### Step 4: Add to sites.yml
 
-```json
-{
-  "sites": [
-    {
-      "name": "mysite",
-      "display_name": "My Site",
-      "required_fields": {
-        "url": true,
-        "shortname": false,
-        "title": true,
-        "location": true
-      }
-    }
-  ]
-}
+```yaml
+sites:
+  - name: mysite
+    display_name: My Site
+    required_fields:
+      url: true
+      shortname: false
+      title: true
+      location: true
 ```
 
 ## Example: Stonescape Plugin
