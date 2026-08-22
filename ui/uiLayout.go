@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"kansho/refreshpool"
+
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
@@ -12,14 +14,20 @@ import (
 // with a gradient background.
 //
 // The layout structure is:
+//
 //   - Background: Purple gradient (45° angle)
+//
 //   - Header: Application title and subtitle (top) with the download queue
 //     summary button on the right
+//
 //   - Content Area: Two-column layout
+//
 //   - Left Column: Manga list (fills the column; Edit Manga form unfolds on demand)
+//
 //   - Right Column: Chapter list (100%)
 //
-// - Status bar: Selected manga's download state (bottom)
+//   - Status bar: Selected manga's download state (bottom), with the
+//     chapter-list refresh pool status on the right edge
 //
 // Parameters:
 //   - window: The main application window (needed for dialogs and state)
@@ -68,13 +76,22 @@ func BuildMainLayout(window fyne.Window) fyne.CanvasObject {
 	// progress bars and download controls
 	chapterListView := NewChapterListView(state, downloadQueueButton)
 
-	// Status bar (bottom of the window, above the footer)
+	// Status bar (bottom of the window)
 	// Mirrors the download queue page's status bar: it shows the selected
 	// manga's download site and downloaded chapter count; after a chapter list
 	// refresh it also shows how many chapters are not downloaded. The chapter
-	// list view keeps it up to date.
+	// list view keeps it up to date. The right edge carries the single
+	// representation of the chapter-list refresh worker pool.
 	statusBar := NewMainStatusBar()
 	chapterListView.SetStatusBar(statusBar)
+
+	// Feed live refresh-pool status into the status bar. Pool callbacks fire
+	// on pool goroutines, so hop back to the UI thread before touching widgets.
+	refreshpool.Get().SetListener(func(s refreshpool.Status) {
+		fyne.Do(func() {
+			statusBar.SetRefreshPoolStatus(s)
+		})
+	})
 
 	// Assemble the left column
 	// The manga list fills the whole column by default; the edit manga form
