@@ -12,7 +12,6 @@ import (
 	"kansho/refreshpool"
 
 	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/widget"
 )
@@ -255,45 +254,49 @@ func TestChapterListPersistsRemoteChaptersAcrossSelection(t *testing.T) {
 	}
 }
 
-// TestLoadingIndicatorIsAJAXSpinner verifies that the loading indicator is the
-// custom AJAX-style rotating spinner rather than a progress bar.
-func TestLoadingIndicatorIsAJAXSpinner(t *testing.T) {
+// TestLoadingIndicatorIsBashSpinner verifies that the loading indicator is the
+// bash-style |/-\ spinner (the same animation as the main status bar) rather
+// than a progress bar.
+func TestLoadingIndicatorIsBashSpinner(t *testing.T) {
 	_, view, _ := newChapterListViewTest(t, "")
 	if view.loadingIndicator == nil {
 		t.Fatal("loading indicator should be set")
 	}
-	if _, ok := interface{}(view.loadingIndicator).(*ajaxSpinner); !ok {
-		t.Fatalf("loading indicator should be an ajaxSpinner, got %T", view.loadingIndicator)
+	if _, ok := interface{}(view.loadingIndicator).(*bashSpinner); !ok {
+		t.Fatalf("loading indicator should be a bashSpinner, got %T", view.loadingIndicator)
 	}
 }
 
-// TestAJAXSpinnerRendersRing verifies that the AJAX spinner creates a full ring
-// of radial ticks when it is laid out.
-func TestAJAXSpinnerRendersRing(t *testing.T) {
+// TestBashSpinnerStartStopCyclesFrames verifies the spinner shows a frame
+// glyph while running and clears it again when stopped, matching the status
+// bar's spinner behaviour.
+func TestBashSpinnerStartStopCyclesFrames(t *testing.T) {
 	_, view, _ := newChapterListViewTest(t, "")
 	spinner := view.loadingIndicator
 
-	renderer := test.WidgetRenderer(spinner)
-	segments := renderer.Objects()
-	if len(segments) != spinnerSegments {
-		t.Fatalf("expected %d spinner segments, got %d", spinnerSegments, len(segments))
+	if spinner.ticker != nil {
+		t.Fatal("spinner should be off initially")
 	}
-
-	// Layout the spinner and check every tick is drawn within bounds.
-	spinner.Resize(fyne.NewSize(40, 40))
-	renderer.Layout(fyne.NewSize(40, 40))
-	for _, obj := range segments {
-		line, ok := obj.(*canvas.Line)
-		if !ok {
-			t.Fatalf("expected canvas.Line segment, got %T", obj)
-		}
-		if line.Position1.X == 0 && line.Position1.Y == 0 && line.Position2.X == 0 && line.Position2.Y == 0 {
-			t.Error("a spinner segment was not positioned")
-		}
+	if got := spinner.label.Text; got != "" {
+		t.Fatalf("spinner label should be empty initially, got %q", got)
 	}
 
 	spinner.Start()
+	defer spinner.Stop()
+	if spinner.ticker == nil {
+		t.Fatal("spinner should run after Start")
+	}
+	if got := spinner.label.Text; got != refreshSpinnerFrames[0] {
+		t.Fatalf("spinner should show the first frame immediately, got %q", got)
+	}
+
 	spinner.Stop()
+	if spinner.ticker != nil {
+		t.Error("spinner ticker should be cleared after Stop")
+	}
+	if got := spinner.label.Text; got != "" {
+		t.Errorf("spinner should clear its glyph when stopped, got %q", got)
+	}
 }
 
 // TestChapterListDoesNotShowRemoteForNeverRefreshedManga verifies that a manga
@@ -476,7 +479,7 @@ func TestStatusBarUpdatesOnTaskChange(t *testing.T) {
 // pool is busy, and back to idle once it drains.
 func TestStatusBarShowsRefreshPoolStatus(t *testing.T) {
 	bar := NewMainStatusBar()
-	if bar.poolStatus.Text != "⟳ Refreshes: idle" {
+	if bar.poolStatus.Text != "⟳ Chapter Refresh: idle" {
 		t.Fatalf("pool readout should start idle, got %q", bar.poolStatus.Text)
 	}
 	if bar.spinner.Text != "" || bar.spinTicker != nil {
@@ -485,7 +488,7 @@ func TestStatusBarShowsRefreshPoolStatus(t *testing.T) {
 
 	busy := refreshpool.Status{Running: 2, Queued: 3}
 	bar.SetRefreshPoolStatus(busy)
-	if bar.poolStatus.Text != "Refreshes: 2 running · 3 queued" {
+	if bar.poolStatus.Text != "Chapter Refresh: 2 running · 3 queued" {
 		t.Errorf("unexpected busy pool readout: %q", bar.poolStatus.Text)
 	}
 
@@ -503,7 +506,7 @@ func TestStatusBarShowsRefreshPoolStatus(t *testing.T) {
 	}
 
 	bar.SetRefreshPoolStatus(refreshpool.Status{})
-	if bar.poolStatus.Text != "⟳ Refreshes: idle" {
+	if bar.poolStatus.Text != "⟳ Chapter Refresh: idle" {
 		t.Errorf("pool readout should return to idle, got %q", bar.poolStatus.Text)
 	}
 	if bar.spinner.Text != "" || bar.spinTicker != nil {

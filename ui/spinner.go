@@ -1,172 +1,87 @@
 package ui
 
 import (
-	"image/color"
-	"math"
 	"time"
 
 	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/canvas"
-	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 )
 
-// Number of radial ticks that make up the spinner ring.
-const spinnerSegments = 24
-
-// Number of ticks in the rotating bright arc.
-const spinnerArcTicks = 7
-
-// ajaxSpinner is a custom AJAX-style loading spinner: a ring of short radial
-// ticks with a bright arc that rotates around the ring, like the classic web
-// "loading" spinner.
-type ajaxSpinner struct {
+// bashSpinner is a monospace label cycling through the classic bash-style
+// |/-\ frames - the same animation the main window status bar shows while the
+// chapter-list refresh pool has work in flight (see MainStatusBar).
+//
+// It reuses the status bar's frame sequence (refreshSpinnerFrames) and tick
+// rate (poolSpinnerInterval) so both spinners look and feel identical.
+type bashSpinner struct {
 	widget.BaseWidget
-	segments []*canvas.Line
-	started  bool
-	anim     *fyne.Animation
-	col      color.NRGBA
+	label *widget.Label
+
+	// Animation state; mutations happen on the UI goroutine (ticker ticks are
+	// marshalled back via fyne.Do), exactly like the status bar's spinner.
+	ticker *time.Ticker
+	done   chan struct{}
+	frame  int
 }
 
-// newAJAXSpinner creates a new AJAX-style loading spinner.
-func newAJAXSpinner() *ajaxSpinner {
-	s := &ajaxSpinner{}
+// newBashSpinner creates the spinner in its stopped state.
+func newBashSpinner() *bashSpinner {
+	s := &bashSpinner{}
 	s.ExtendBaseWidget(s)
+	s.label = widget.NewLabel("")
+	s.label.TextStyle = fyne.TextStyle{Monospace: true}
 	return s
 }
 
-// Start begins the spinner animation.
-func (s *ajaxSpinner) Start() {
-	if s.started {
+// Start begins cycling the |/-\ frames. A no-op if already running. Must be
+// called on the UI goroutine.
+func (s *bashSpinner) Start() {
+	if s.ticker != nil {
 		return
 	}
-	s.started = true
-	s.Refresh()
-}
 
-// Stop halts the spinner animation.
-func (s *ajaxSpinner) Stop() {
-	if !s.started {
-		return
-	}
-	s.started = false
-	s.Refresh()
-}
+	// Show the first frame immediately instead of waiting for the first tick.
+	s.frame = 0
+	s.label.SetText(refreshSpinnerFrames[0])
 
-// CreateRenderer builds the radial ticks that form the spinner ring.
-func (s *ajaxSpinner) CreateRenderer() fyne.WidgetRenderer {
-	v := fyne.CurrentApp().Settings().ThemeVariant()
-	s.col = color.NRGBAModel.Convert(s.Theme().Color(theme.ColorNameForeground, v)).(color.NRGBA)
+	ticker := time.NewTicker(poolSpinnerInterval)
+	done := make(chan struct{})
+	s.ticker = ticker
+	s.done = done
 
-	segments := make([]*canvas.Line, spinnerSegments)
-	for i := range segments {
-		line := canvas.NewLine(color.NRGBA{R: s.col.R, G: s.col.G, B: s.col.B, A: 24})
-		line.StrokeWidth = 4
-		segments[i] = line
-	}
-	s.segments = segments
-
-	r := &ajaxSpinnerRenderer{spinner: s}
-	s.anim = &fyne.Animation{
-		Duration:    time.Second,
-		RepeatCount: fyne.AnimationRepeatForever,
-		Tick:        r.animate,
-	}
-
-	if s.started {
-		r.animStart()
-	}
-
-	return r
-}
-
-var _ fyne.WidgetRenderer = (*ajaxSpinnerRenderer)(nil)
-
-type ajaxSpinnerRenderer struct {
-	spinner   *ajaxSpinner
-	animating bool
-}
-
-// Layout positions every radial tick so they form a ring around the centre.
-func (r *ajaxSpinnerRenderer) Layout(size fyne.Size) {
-	radius := float32(fyne.Min(size.Width, size.Height))
-	centre := fyne.NewPos(size.Width/2, size.Height/2)
-	inner := radius * 0.3
-	outer := radius * 0.46
-
-	for i, seg := range r.spinner.segments {
-		angle := float64(i) * 2 * math.Pi / spinnerSegments
-		cos, sin := float32(math.Cos(angle)), float32(math.Sin(angle))
-		seg.Position1 = centre.Add(fyne.NewPos(cos*inner, sin*inner))
-		seg.Position2 = centre.Add(fyne.NewPos(cos*outer, sin*outer))
-	}
-}
-
-// MinSize keeps the spinner a small, clearly visible square.
-func (r *ajaxSpinnerRenderer) MinSize() fyne.Size {
-	return fyne.NewSquareSize(30)
-}
-
-func (r *ajaxSpinnerRenderer) Objects() []fyne.CanvasObject {
-	out := make([]fyne.CanvasObject, len(r.spinner.segments))
-	for i, seg := range r.spinner.segments {
-		out[i] = seg
-	}
-	return out
-}
-
-func (r *ajaxSpinnerRenderer) Refresh() {
-	if r.spinner.started {
-		r.animStart()
-	} else {
-		r.animStop()
-	}
-}
-
-func (r *ajaxSpinnerRenderer) Destroy() {
-	r.spinner.started = false
-	r.animStop()
-}
-
-// animate rotates the bright arc around the ring. The head tick is brightest and
-// the ticks behind it fade out to the faint ring colour.
-func (r *ajaxSpinnerRenderer) animate(done float32) {
-	head := int(done * spinnerSegments)
-	for i, seg := range r.spinner.segments {
-		dist := head - i
-		if dist < 0 {
-			dist += spinnerSegments
+	go func() {
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				// Widget updates must happen on the UI thread; frame state is
+				// only ever mutated inside fyne.Do, keeping it race-free.
+				fyne.Do(func() {
+					if s.ticker == nil { // stopped between tick and callback
+						return
+					}
+					s.frame = (s.frame + 1) % len(refreshSpinnerFrames)
+					s.label.SetText(refreshSpinnerFrames[s.frame])
+				})
+			}
 		}
-
-		var alpha uint8
-		switch {
-		case dist == 0:
-			alpha = 255
-		case dist < spinnerArcTicks:
-			alpha = 230 - uint8(dist)*32
-		default:
-			alpha = 24
-		}
-
-		col := r.spinner.col
-		col.A = alpha
-		seg.StrokeColor = col
-		seg.Refresh()
-	}
+	}()
 }
 
-func (r *ajaxSpinnerRenderer) animStart() {
-	if r.animating {
+// Stop halts the animation and clears the glyph. Must be called on the UI
+// goroutine.
+func (s *bashSpinner) Stop() {
+	if s.ticker == nil {
 		return
 	}
-	r.animating = true
-	r.spinner.anim.Start()
+	close(s.done)
+	s.ticker.Stop()
+	s.ticker = nil
+	s.done = nil
+	s.label.SetText("")
 }
 
-func (r *ajaxSpinnerRenderer) animStop() {
-	if !r.animating {
-		return
-	}
-	r.animating = false
-	r.spinner.anim.Stop()
+func (s *bashSpinner) CreateRenderer() fyne.WidgetRenderer {
+	return widget.NewSimpleRenderer(s.label)
 }

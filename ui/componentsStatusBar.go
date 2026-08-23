@@ -9,6 +9,7 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/widget"
 )
 
@@ -20,7 +21,9 @@ import (
 // (fetching remote chapters) it also shows how many chapters are not
 // downloaded. The right edge carries the single representation of the
 // chapter-list refresh worker pool (see refreshpool): an ASCII spinner while
-// scrapes are in flight plus the running/queued counts.
+// scrapes are in flight plus the running/queued counts. While the pool has
+// work the readout is clickable and opens a dialog listing every domain
+// currently being refreshed.
 type MainStatusBar struct {
 	Bar        fyne.CanvasObject
 	badge      *widget.Label
@@ -33,6 +36,26 @@ type MainStatusBar struct {
 	spinTicker *time.Ticker
 	spinDone   chan struct{}
 	spinFrame  int
+
+	// Refresh dialog state; mutations happen on the UI goroutine.
+	window        fyne.Window // needed to show the refresh dialog
+	curStatus     refreshpool.Status
+	refreshArea   *tapArea // wraps spinner+poolStatus; clickable while busy
+	refreshDialog *dialog.CustomDialog
+	domainLabels  []*widget.Label // one row per site, in display order
+	dotsLabels    []*widget.Label // dots indicator of the matching row
+	rowsBox       *fyne.Container
+	dialogSize    fyne.Size // last size applied to refreshDialog
+	dotsTicker    *time.Ticker
+	dotsDone      chan struct{}
+	dotsFrame     int
+}
+
+// SetWindow provides the window used for the refresh-status dialog. Must be
+// called before taps should open dialogs; without it the click target stays
+// inert.
+func (s *MainStatusBar) SetWindow(w fyne.Window) {
+	s.window = w
 }
 
 // NewMainStatusBar creates the main window status bar in its idle state.
@@ -59,8 +82,13 @@ func NewMainStatusBar() *MainStatusBar {
 	s.spinner = widget.NewLabel("")
 	s.spinner.TextStyle = fyne.TextStyle{Monospace: true}
 
+	// While the pool is busy the whole readout becomes a click target that
+	// opens the refresh dialog; idle it is inert (no cursor, no dialog).
+	right := container.NewHBox(s.spinner, s.poolStatus)
+	s.refreshArea = newTapArea(right, s.showRefreshDialog)
+
 	statusRow := container.NewBorder(nil, nil, s.badge,
-		container.NewHBox(s.spinner, s.poolStatus), s.message)
+		s.refreshArea, s.message)
 
 	// A slim white strip keeps the bar readable against the purple gradient
 	// and matches the look of the download queue page. It is built by hand
@@ -93,7 +121,7 @@ func (s *MainStatusBar) SetIdle() {
 
 // refreshPoolIdleText is shown on the right edge while the chapter-list
 // refresh pool has nothing queued or running.
-const refreshPoolIdleText = "⟳ Refreshes: idle"
+const refreshPoolIdleText = "⟳ Chapter Refresh: idle"
 
 // refreshSpinnerFrames is the classic bash-style spinner sequence, cycled
 // while the refresh pool has work in flight.
@@ -103,17 +131,27 @@ var refreshSpinnerFrames = []string{"|", "/", "-", "\\"}
 const poolSpinnerInterval = 120 * time.Millisecond
 
 // SetRefreshPoolStatus shows the single representation of the chapter-list
-// refresh worker pool: an animated spinner while scrapes are in flight plus
+// refresh pool: an animated spinner while scrapes are in flight plus
 // how many are running across sites and how many tasks are still queued.
-// Must be called on the UI goroutine.
+// While busy the readout is clickable; when idle any open refresh dialog is
+// closed again. Must be called on the UI goroutine.
 func (s *MainStatusBar) SetRefreshPoolStatus(status refreshpool.Status) {
+	s.curStatus = status
 	if status.IsIdle() {
+		s.refreshArea.SetClickable(false)
 		s.stopPoolSpinner()
 		s.poolStatus.SetText(refreshPoolIdleText)
+		s.closeRefreshDialog()
 		return
 	}
+	s.refreshArea.SetClickable(true)
 	s.startPoolSpinner()
-	s.poolStatus.SetText(fmt.Sprintf("Refreshes: %d running · %d queued", status.Running, status.Queued))
+	s.poolStatus.SetText(fmt.Sprintf("Chapter Refresh: %d running · %d queued", status.Running, status.Queued))
+
+	// Keep an already open dialog current as sites start and finish.
+	if s.refreshDialog != nil {
+		s.rebuildDomainRows(status.Sites)
+	}
 }
 
 // startPoolSpinner begins cycling the |/-\ frames next to the counts. It is a
@@ -163,4 +201,159 @@ func (s *MainStatusBar) stopPoolSpinner() {
 	s.spinTicker = nil
 	s.spinDone = nil
 	s.spinner.SetText("")
+}
+
+// refreshDotsFrames is the animated "ongoing" indicator shown in the refresh
+// dialog, cycling one to three dots.
+var refreshDotsFrames = []string{".", "..", "..."}
+
+// dotsInterval is how often the dialog's dot indicator advances its frame.
+const dotsInterval = 400 * time.Millisecond
+
+// showRefreshDialog opens a dialog listing every domain that currently has a
+// chapter-list refresh in flight, each row showing the domain on the left and
+// its animated dot indicator on the right. The dialog is sized to fit its
+// content (capped to the window). It is a no-op while idle or if the dialog
+// is already open. Must be called on the UI goroutine (the tapArea callback).
+func (s *MainStatusBar) showRefreshDialog() {
+	if s.window == nil || s.curStatus.IsIdle() || s.refreshDialog != nil {
+		return
+	}
+
+	s.rowsBox = container.NewVBox()
+	s.rebuildDomainRows(s.curStatus.Sites)
+
+	content := container.NewVBox(
+		widget.NewLabel("Refreshing chapter lists for:"),
+		s.rowsBox,
+	)
+
+	d := dialog.NewCustom("Chapter Refresh", "Close", content, s.window)
+	d.SetOnClosed(func() {
+		s.stopDots()
+		s.refreshDialog = nil
+		s.domainLabels = nil
+		s.dotsLabels = nil
+	})
+	s.refreshDialog = d
+
+	s.startDots()
+	d.Show()
+	s.sizeRefreshDialog()
+}
+
+// rebuildDomainRows replaces the dialog's domain rows: one line per site with
+// the domain name on the left and that domain's dot indicator on the right.
+func (s *MainStatusBar) rebuildDomainRows(sites []string) {
+	s.domainLabels = nil
+	s.dotsLabels = nil
+	s.rowsBox.Objects = nil
+	for _, site := range sites {
+		domain := widget.NewLabel(site)
+		dots := widget.NewLabel(refreshDotsFrames[0])
+		dots.TextStyle = fyne.TextStyle{Monospace: true}
+		s.domainLabels = append(s.domainLabels, domain)
+		s.dotsLabels = append(s.dotsLabels, dots)
+		s.rowsBox.Add(container.NewBorder(nil, nil, nil, dots, domain))
+	}
+	s.rowsBox.Refresh()
+
+	if s.refreshDialog != nil {
+		s.sizeRefreshDialog()
+	}
+}
+
+// sizeRefreshDialog grows the dialog so the longest domain and every row fit
+// without truncation, capped to the window size so an unusually long list
+// cannot overflow the screen.
+func (s *MainStatusBar) sizeRefreshDialog() {
+	if s.refreshDialog == nil || s.rowsBox == nil {
+		return
+	}
+
+	canvasSize := s.window.Canvas().Size()
+	canvasW, canvasH := canvasSize.Width, canvasSize.Height
+	if canvasW <= 0 { // not laid out yet (e.g. in tests)
+		canvasW, canvasH = 900, 700
+	}
+
+	rowsMin := s.rowsBox.MinSize()
+	w := rowsMin.Width + 96   // dialog padding, title bar margins
+	h := rowsMin.Height + 170 // title bar, dismiss button, header label, padding
+	if maxW := canvasW * 0.95; w > maxW {
+		w = maxW
+	}
+	if maxH := canvasH * 0.9; h > maxH {
+		h = maxH
+	}
+	if w < 380 {
+		w = 380
+	}
+	s.dialogSize = fyne.NewSize(w, h)
+	s.refreshDialog.Resize(s.dialogSize)
+}
+
+// closeRefreshDialog hides the open refresh dialog, if any; the SetOnClosed
+// callback stops the animation and clears the reference.
+func (s *MainStatusBar) closeRefreshDialog() {
+	if s.refreshDialog == nil {
+		return
+	}
+	s.refreshDialog.Hide()
+}
+
+// startDots begins cycling the . / .. / ... frames on every domain row's
+// indicator. Must be called on the UI goroutine.
+func (s *MainStatusBar) startDots() {
+	if s.dotsTicker != nil {
+		return
+	}
+
+	// Show the first frame immediately instead of waiting for the first tick.
+	s.dotsFrame = 0
+	s.setDotsFrames(refreshDotsFrames[0])
+
+	ticker := time.NewTicker(dotsInterval)
+	done := make(chan struct{})
+	s.dotsTicker = ticker
+	s.dotsDone = done
+
+	go func() {
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				// Widget updates must happen on the UI thread; frame state is
+				// only ever mutated inside fyne.Do, keeping it race-free.
+				fyne.Do(func() {
+					if s.dotsTicker == nil { // stopped between tick and callback
+						return
+					}
+					s.dotsFrame = (s.dotsFrame + 1) % len(refreshDotsFrames)
+					s.setDotsFrames(refreshDotsFrames[s.dotsFrame])
+				})
+			}
+		}
+	}()
+}
+
+// setDotsFrames shows frame on every current domain row's dot indicator.
+// Must be called on the UI goroutine.
+func (s *MainStatusBar) setDotsFrames(frame string) {
+	for _, dots := range s.dotsLabels {
+		dots.SetText(frame)
+	}
+}
+
+// stopDots halts the dialog's dot animation. Must be called on the UI
+// goroutine.
+func (s *MainStatusBar) stopDots() {
+	if s.dotsTicker == nil {
+		return
+	}
+	close(s.dotsDone)
+	s.dotsTicker.Stop()
+	s.dotsTicker = nil
+	s.dotsDone = nil
 }

@@ -412,3 +412,37 @@ func TestPanicInRunBecomesError(t *testing.T) {
 		t.Fatal("OnError was not called after panic")
 	}
 }
+
+func TestStatusReportsActiveSites(t *testing.T) {
+	p := newTestPool(1, time.Millisecond, 0)
+	defer p.Close()
+
+	release := make(chan struct{})
+	started := make(chan struct{})
+	p.Submit(&Task{
+		Site: "zeta",
+		Run: func(ctx context.Context) error {
+			close(started)
+			<-release
+			return nil
+		},
+	})
+	<-started
+
+	p.Submit(&Task{Site: "alpha", Run: func(ctx context.Context) error { return nil }})
+	waitFor(t, 2*time.Second, func() bool { return p.Status().Queued == 1 })
+
+	st := p.Status()
+	if st.Running != 1 || st.Queued != 1 {
+		t.Fatalf("counts = %+v, want Running=1 Queued=1", st)
+	}
+	if len(st.Sites) != 2 || st.Sites[0] != "alpha" || st.Sites[1] != "zeta" {
+		t.Fatalf("Sites = %v, want [alpha zeta]", st.Sites)
+	}
+
+	close(release)
+	waitFor(t, 2*time.Second, func() bool { return p.Status().IsIdle() })
+	if st := p.Status(); len(st.Sites) != 0 {
+		t.Fatalf("Sites after drain = %v, want empty", st.Sites)
+	}
+}

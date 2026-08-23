@@ -83,6 +83,7 @@ func BuildMainLayout(window fyne.Window) fyne.CanvasObject {
 	// list view keeps it up to date. The right edge carries the single
 	// representation of the chapter-list refresh worker pool.
 	statusBar := NewMainStatusBar()
+	statusBar.SetWindow(window) // enables the clickable refresh-status dialog
 	chapterListView.SetStatusBar(statusBar)
 
 	// Feed live refresh-pool status into the status bar. Pool callbacks fire

@@ -25,6 +25,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sort"
 	"sync"
 	"time"
 
@@ -57,6 +58,10 @@ const (
 type Status struct {
 	Running int // scrapes currently executing
 	Queued  int // tasks waiting for their site worker or a free slot
+
+	// Sites lists, sorted alphabetically, every site that currently has work
+	// in flight (running or queued). Empty while the pool is idle.
+	Sites []string
 }
 
 // IsIdle reports whether nothing is queued or running.
@@ -122,6 +127,11 @@ type Pool struct {
 	sites  map[string]*siteWorker
 	dedupe map[string]bool
 
+	// activeSites counts each site's outstanding tasks (queued plus running);
+	// entries are removed when a site drops back to zero. Read by
+	// snapshotLocked to build Status.Sites.
+	activeSites map[string]int
+
 	sem     chan struct{} // global cap of MaxWorkers parallel scrapes
 	queued  int
 	running int
@@ -171,6 +181,7 @@ func NewPool(workers int, baseBackoff, maxBackoff time.Duration, maxRetries int)
 	return &Pool{
 		sites:       make(map[string]*siteWorker),
 		dedupe:      make(map[string]bool),
+		activeSites: make(map[string]int),
 		sem:         make(chan struct{}, workers),
 		ctx:         ctx,
 		cancel:      cancel,
@@ -241,6 +252,7 @@ func (p *Pool) Submit(task *Task) bool {
 		p.dedupe[task.DedupeKey] = true
 	}
 	p.queued++
+	p.activeSites[task.Site]++
 	log.Printf("[RefreshPool] Queued %s/%s", task.Site, task.describe())
 	p.notifyLocked()
 	p.mu.Unlock()
@@ -257,7 +269,12 @@ func (p *Pool) Close() {
 
 // snapshotLocked must be called with p.mu held.
 func (p *Pool) snapshotLocked() Status {
-	return Status{Running: p.running, Queued: p.queued}
+	sites := make([]string, 0, len(p.activeSites))
+	for site := range p.activeSites {
+		sites = append(sites, site)
+	}
+	sort.Strings(sites)
+	return Status{Running: p.running, Queued: p.queued, Sites: sites}
 }
 
 // notifyLocked forwards the current status to the listener, if any. Must be
@@ -274,6 +291,16 @@ func (p *Pool) removeDedupeLocked(task *Task) {
 	if task.DedupeKey != "" {
 		delete(p.dedupe, task.DedupeKey)
 	}
+}
+
+// releaseSiteLocked drops one outstanding task for site and forgets the site
+// entirely once it has none left. Must be called with p.mu held.
+func (p *Pool) releaseSiteLocked(site string) {
+	if p.activeSites[site] <= 1 {
+		delete(p.activeSites, site)
+		return
+	}
+	p.activeSites[site]--
 }
 
 // runWorker is the body of one site's dedicated worker goroutine. It executes
@@ -308,7 +335,9 @@ func (p *Pool) runTask(w *siteWorker, task *Task) {
 	select {
 	case p.sem <- struct{}{}:
 	case <-p.ctx.Done():
-		p.finish(task, context.Canceled, false)
+		// Still counted as queued (never became running), so abandon
+		// rather than finish to keep the status counters consistent.
+		p.abandon(task)
 		return
 	}
 	defer func() { <-p.sem }()
@@ -370,6 +399,7 @@ func (p *Pool) runTask(w *siteWorker, task *Task) {
 func (p *Pool) abandon(task *Task) {
 	p.mu.Lock()
 	p.queued--
+	p.releaseSiteLocked(task.Site)
 	p.removeDedupeLocked(task)
 	p.notifyLocked()
 	p.mu.Unlock()
@@ -381,6 +411,7 @@ func (p *Pool) abandon(task *Task) {
 func (p *Pool) finish(task *Task, err error, success bool) {
 	p.mu.Lock()
 	p.running--
+	p.releaseSiteLocked(task.Site)
 	p.removeDedupeLocked(task)
 	p.notifyLocked()
 	p.mu.Unlock()
