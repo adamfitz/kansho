@@ -74,7 +74,7 @@ type ChapterListView struct {
 	downloadAllButton   *widget.Button
 	refreshButton       *widget.Button
 	downloadQueueButton *DownloadQueueButton
-	loadingIndicator    *ajaxSpinner
+	loadingIndicator    *bashSpinner
 	state               *KanshoAppState
 	chapters            []*ChapterItem
 	cfDialogShown       map[string]bool
@@ -120,9 +120,9 @@ func NewChapterListView(state *KanshoAppState, downloadQueueButton *DownloadQueu
 	})
 	view.refreshButton.Disable()
 
-	// AJAX-style spinner wheel shown while the chapter list is loading (from
-	// disk or the site)
-	view.loadingIndicator = newAJAXSpinner()
+	// Bash-style spinner (same animation as the main status bar) shown while
+	// the chapter list is loading (from disk or the site)
+	view.loadingIndicator = newBashSpinner()
 	view.loadingIndicator.Hide()
 
 	// The chapter list, split into 3 panes per row:

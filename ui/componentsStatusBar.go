@@ -93,7 +93,7 @@ func (s *MainStatusBar) SetIdle() {
 
 // refreshPoolIdleText is shown on the right edge while the chapter-list
 // refresh pool has nothing queued or running.
-const refreshPoolIdleText = "⟳ Refreshes: idle"
+const refreshPoolIdleText = "⟳ Chapter Refresh: idle"
 
 // refreshSpinnerFrames is the classic bash-style spinner sequence, cycled
 // while the refresh pool has work in flight.
@@ -113,7 +113,7 @@ func (s *MainStatusBar) SetRefreshPoolStatus(status refreshpool.Status) {
 		return
 	}
 	s.startPoolSpinner()
-	s.poolStatus.SetText(fmt.Sprintf("Refreshes: %d running · %d queued", status.Running, status.Queued))
+	s.poolStatus.SetText(fmt.Sprintf("Chapter Refresh: %d running · %d queued", status.Running, status.Queued))
 }
 
 // startPoolSpinner begins cycling the |/-\ frames next to the counts. It is a

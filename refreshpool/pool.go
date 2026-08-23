@@ -308,7 +308,9 @@ func (p *Pool) runTask(w *siteWorker, task *Task) {
 	select {
 	case p.sem <- struct{}{}:
 	case <-p.ctx.Done():
-		p.finish(task, context.Canceled, false)
+		// Still counted as queued (never became running), so abandon
+		// rather than finish to keep the status counters consistent.
+		p.abandon(task)
 		return
 	}
 	defer func() { <-p.sem }()

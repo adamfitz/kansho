@@ -108,9 +108,9 @@ The system SHALL display the chapters of the currently selected manga with per-c
 #### Scenario: Load feedback
 - GIVEN a manga is selected or the user clicks "Refresh"
 - WHEN the chapter list is loading chapters from disk or the site
-- THEN a custom AJAX-style loading spinner SHALL be displayed at the bottom-left of the chapter pane
-- AND the spinner SHALL be a rotating ring of radial ticks with a bright arc sweeping around it
-- AND the spinner SHALL be removed once loading completes
+- THEN a bash-style loading spinner SHALL be displayed at the bottom-left of the chapter pane
+- AND the spinner SHALL cycle the same "|/-\" frames and tick rate as the main window status bar's refresh pool spinner
+- AND the spinner SHALL be cleared once loading completes
 
 #### Scenario: Start a single chapter download
 - GIVEN a chapter is not downloaded, idle, and has a download URL
