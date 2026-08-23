@@ -19,6 +19,56 @@ import (
 type Manager struct {
 	config *DownloadConfig
 	domain string
+
+	// imageTimer is the adaptive per-image attempt deadline for this manga's
+	// download. It starts at imageAttemptBase, grows by imageAttemptStep after
+	// every failed image download and resets to the base after a success.
+	// Only touched by the manager's own goroutine (chapters and images are
+	// downloaded sequentially), so no locking is needed.
+	imageTimer adaptiveTimeout
+}
+
+// Adaptive attempt-timeout policy for image downloads: the first try of every
+// image gets imageAttemptBase; each failure of that manga's download adds
+// imageAttemptStep to the next attempt's context deadline (capped at
+// imageAttemptMax) so slow or struggling sites get progressively longer; any
+// success snaps the deadline back to the base.
+const (
+	imageAttemptBase = 2 * time.Minute
+	imageAttemptStep = 10 * time.Second
+	imageAttemptMax  = 30 * time.Minute
+)
+
+// adaptiveTimeout implements that grow-on-failure / reset-on-success policy.
+type adaptiveTimeout struct {
+	base    time.Duration // deadline for the first attempt
+	step    time.Duration // added to the deadline after every failure
+	max     time.Duration // ceiling for the growth
+	current time.Duration // 0 means "at base"
+}
+
+// next returns the deadline to use for the upcoming attempt.
+func (a *adaptiveTimeout) next() time.Duration {
+	if a.current < a.base {
+		return a.base
+	}
+	return a.current
+}
+
+// fail records a failed attempt: the next deadline grows by one step.
+func (a *adaptiveTimeout) fail() {
+	if a.current < a.base { // seed from the base on the first failure
+		a.current = a.base
+	}
+	a.current += a.step
+	if a.current > a.max {
+		a.current = a.max
+	}
+}
+
+// succeed records a successful attempt: the deadline resets to the base.
+func (a *adaptiveTimeout) succeed() {
+	a.current = 0
 }
 
 // NewManager creates a new download manager
@@ -459,34 +509,32 @@ func (m *Manager) downloadImageWithRetry(ctx context.Context, imageURL, targetDi
 
 		notify(fmt.Sprintf("%s (attempt %d/%d)", status, attempt+1, maxRetries))
 
+		// Adaptive deadline for this attempt: starts at imageAttemptBase,
+		// grows by imageAttemptStep after every failed image download of this
+		// manga and resets to the base after any success. The parser helpers
+		// apply the deadline to the request themselves.
+		deadline := m.imageTimer.next()
+
 		// Use parser's download function with CF support if needed.
 		// FlameComics gets the shared keep-alive client with stall detection;
 		// every other site keeps its legacy per-image download path.
+		var err error
 		if m.config.Site.GetSiteName() == "flamecomics" {
-			err := parser.DownloadFlameComicsImage(ctx, filename, imageURL, targetDir, m.domain)
-			if err == nil {
-				return nil
-			}
-			lastErr = err
+			err = parser.DownloadFlameComicsImageTimeout(ctx, filename, imageURL, targetDir, m.domain, deadline)
 		} else if m.config.Site.GetSiteName() == "comix" {
-			err := parser.DownloadConvertToJPGRenameWithReferer(ctx, filename, imageURL, targetDir, "https://comix.to/")
-			if err == nil {
-				return nil
-			}
-			lastErr = err
+			err = parser.DownloadConvertToJPGRenameWithRefererTimeout(ctx, filename, imageURL, targetDir, "https://comix.to/", deadline)
 		} else if m.config.Site.NeedsCFBypass() {
-			err := parser.DownloadConvertToJPGRenameCf(ctx, filename, imageURL, targetDir, m.domain)
-			if err == nil {
-				return nil
-			}
-			lastErr = err
+			err = parser.DownloadConvertToJPGRenameCfTimeout(ctx, filename, imageURL, targetDir, m.domain, deadline)
 		} else {
-			err := parser.DownloadConvertToJPGRename(ctx, filename, imageURL, targetDir)
-			if err == nil {
-				return nil
-			}
-			lastErr = err
+			err = parser.DownloadConvertToJPGRenameTimeout(ctx, filename, imageURL, targetDir, deadline)
 		}
+
+		if err == nil {
+			m.imageTimer.succeed()
+			return nil
+		}
+		lastErr = err
+		m.imageTimer.fail()
 
 		// FlameComics stall detection surfaces a StalledError; report it clearly
 		// so the status bar shows the stall instead of sitting on "downloading".
