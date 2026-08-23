@@ -73,7 +73,7 @@ The pool SHALL reject a submission whose dedupe key matches a task that is still
 - THEN the submission SHALL be accepted
 
 ### Requirement: Status Reporting
-The pool SHALL report a single snapshot of its state (running count and queued count) through a listener callback whenever the state changes, and once immediately upon registration.
+The pool SHALL report a single snapshot of its state (running count, queued count, and the sorted list of sites with work in flight) through a listener callback whenever the state changes, and once immediately upon registration.
 
 #### Scenario: Status bar shows pool state
 - GIVEN the listener is wired to the main window status bar
@@ -85,6 +85,26 @@ The pool SHALL report a single snapshot of its state (running count and queued c
 - GIVEN pool callbacks fire on pool goroutines
 - WHEN the UI receives a status update
 - THEN it SHALL marshal the widget update onto the UI thread before applying it
+
+### Requirement: Ongoing Refresh Dialog
+While the pool has work in flight, the status bar's refresh readout SHALL be a click target that opens a dialog listing every domain currently being refreshed; when idle the readout SHALL be inert.
+
+#### Scenario: Open the dialog while busy
+- GIVEN the pool has at least one task running or queued
+- WHEN the user clicks the refresh readout in the bottom-right of the status bar
+- THEN a dialog SHALL open listing each site with outstanding work
+- AND the dialog SHALL show an animated dot indicator cycling ".", "..", "..." while the refresh is ongoing
+
+#### Scenario: Dialog tracks live changes and drains
+- GIVEN the refresh dialog is open
+- WHEN further statuses arrive or the pool becomes idle
+- THEN the domain list SHALL track sites starting and finishing
+- AND the dialog SHALL close automatically and stop its animation once the pool is idle
+
+#### Scenario: No stacking
+- GIVEN the refresh dialog is already open
+- WHEN the user clicks the refresh readout again
+- THEN no second dialog SHALL be opened
 
 ### Requirement: UI Refresh Routing
 The chapter list's Refresh action SHALL submit its fetch to the pool instead of spawning ad-hoc goroutines, preserving existing behaviour for Cloudflare challenges, stale results and button state.
