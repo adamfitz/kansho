@@ -364,9 +364,14 @@ func buildChapterItems(localNames []string, remote map[string]string) []*Chapter
 }
 
 // refreshAttemptTimeout bounds a single chapter-list scrape attempt. The
-// refresh pool owns retries and backoff, so each attempt simply needs enough
-// time for one full navigation/pagination pass.
+// refresh pool owns retries and backoff; it also grows this deadline by
+// refreshAttemptTimeoutStep after every failed attempt on the site (adaptive
+// timeout) and resets it back here after a success.
 const refreshAttemptTimeout = 90 * time.Second
+
+// refreshAttemptTimeoutStep is added to the site's attempt deadline after
+// every failed scrape of that site.
+const refreshAttemptTimeoutStep = 10 * time.Second
 
 // onRefreshClicked submits a chapter-list refresh job to the dedicated
 // refresh worker pool (refreshpool) instead of spawning its own goroutine.
@@ -408,11 +413,12 @@ func (v *ChapterListView) onRefreshClicked() {
 			var cfErr *cf.CfChallengeError
 			return errors.As(err, &cfErr)
 		},
+		// Adaptive attempt timeout: starts at refreshAttemptTimeout and grows
+		// by TimeoutStep after every failed attempt until a scrape succeeds.
+		AttemptTimeout: refreshAttemptTimeout,
+		TimeoutStep:    refreshAttemptTimeoutStep,
 		Run: func(ctx context.Context) error {
-			fetchCtx, cancel := context.WithTimeout(ctx, refreshAttemptTimeout)
-			defer cancel()
-
-			remote, err := downloader.FetchChapterURLsSingle(fetchCtx, targetURL, site)
+			remote, err := downloader.FetchChapterURLsSingle(ctx, targetURL, site)
 			if err != nil {
 				return err
 			}

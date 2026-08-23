@@ -48,6 +48,16 @@ A failed scrape attempt SHALL be retried up to 10 times with a delay that double
 - WHEN any scrape for that site succeeds
 - THEN the site's backoff delay SHALL reset to the base value for future failures
 
+#### Scenario: Adaptive attempt timeout grows across failures
+- GIVEN a task that declares an attempt deadline and a step (the chapter list refresh: 90s + 10s)
+- WHEN attempts of that site keep failing
+- THEN each attempt's context SHALL expire TimeoutStep later than the previous one (90s, 100s, 110s, ... capped at 30 minutes)
+
+#### Scenario: Adaptive attempt timeout resets after success
+- GIVEN a site whose adaptive attempt deadline has grown due to failures
+- WHEN any scrape for that site succeeds
+- THEN future attempts on that site SHALL start again at the declared base deadline
+
 #### Scenario: Rate limiting tolerated
 - GIVEN a site responding with rate-limit errors or timeouts (`context deadline exceeded`)
 - WHEN the retries exhaust their backoff delays
