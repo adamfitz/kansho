@@ -94,6 +94,12 @@ The system SHALL automatically retry failed downloads with exponential backoff.
 - AND all other sites SHALL keep their legacy retry behavior unchanged
 - AND every attempt, stall, and backoff phase SHALL be pushed through the progress callback and logged, so the status bar indicator updates live for all downloads
 
+#### Scenario: Adaptive image attempt timeout
+- GIVEN an image attempt carries a context deadline (base: 2 minutes)
+- WHEN an image attempt of that manga's download fails
+- THEN the next image attempt's deadline SHALL grow by 10 seconds (capped at 30 minutes), so a struggling site gets progressively longer per request
+- AND any successful image download SHALL reset the deadline to the 2 minute base
+
 #### Scenario: Referer-protected image download (comix)
 - GIVEN a comix.to chapter download
 - WHEN each image is downloaded

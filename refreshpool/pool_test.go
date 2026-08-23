@@ -446,3 +446,91 @@ func TestStatusReportsActiveSites(t *testing.T) {
 		t.Fatalf("Sites after drain = %v, want empty", st.Sites)
 	}
 }
+
+// TestAdaptiveAttemptTimeoutGrowsAndResets verifies that each failed attempt
+// gets a context deadline TimeoutStep longer than the previous one, that the
+// deadline returns to the base once a scrape succeeds, and that tasks without
+// AttemptTimeout never receive a deadline.
+func TestAdaptiveAttemptTimeoutGrowsAndResets(t *testing.T) {
+	p := newTestPool(1, time.Millisecond, 5)
+	defer p.Close()
+
+	const base = 250 * time.Millisecond
+	const step = 200 * time.Millisecond
+	tolerance := 90 * time.Millisecond
+
+	var mu sync.Mutex
+	var deadlines []time.Duration
+
+	recordDeadline := func(ctx context.Context) {
+		dl, ok := ctx.Deadline()
+		if !ok {
+			t.Error("attempt context should carry an adaptive deadline")
+			return
+		}
+		mu.Lock()
+		deadlines = append(deadlines, time.Until(dl))
+		mu.Unlock()
+	}
+
+	// Task A: fail twice, succeed on the third attempt.
+	var aAttempts atomic.Int32
+	p.Submit(&Task{
+		Site:           "slow",
+		AttemptTimeout: base,
+		TimeoutStep:    step,
+		Run: func(ctx context.Context) error {
+			recordDeadline(ctx)
+			if aAttempts.Add(1) <= 2 {
+				return errors.New("boom")
+			}
+			return nil
+		},
+	})
+	waitFor(t, 2*time.Second, func() bool { return p.Status().IsIdle() })
+
+	// Task B on the same site: must see the reset (base) deadline again.
+	p.Submit(&Task{
+		Site:           "slow",
+		AttemptTimeout: base,
+		TimeoutStep:    step,
+		Run: func(ctx context.Context) error {
+			recordDeadline(ctx)
+			return nil
+		},
+	})
+	waitFor(t, 2*time.Second, func() bool { return p.Status().IsIdle() })
+
+	mu.Lock()
+	got := append([]time.Duration(nil), deadlines...)
+	mu.Unlock()
+	want := []time.Duration{base, base + step, base + 2*step, base}
+	if len(got) != len(want) {
+		t.Fatalf("recorded %d attempt deadlines (%v), want %d", len(got), got, len(want))
+	}
+	for i := range want {
+		if diff := got[i] - want[i]; diff > tolerance || diff < -tolerance {
+			t.Errorf("attempt %d deadline = %v, want ~%v", i+1, got[i], want[i])
+		}
+	}
+
+	// A task without AttemptTimeout gets the bare pool context: no deadline,
+	// even though this site's adaptive timeout has been seeded and grown.
+	errCh := make(chan error, 1)
+	p.Submit(&Task{
+		Site: "slow",
+		Run: func(ctx context.Context) error {
+			if _, ok := ctx.Deadline(); ok {
+				t.Error("task without AttemptTimeout should have no attempt deadline")
+			}
+			return nil
+		},
+		OnError: func(err error) { errCh <- err },
+	})
+	waitFor(t, 2*time.Second, func() bool { return p.Status().IsIdle() })
+	select {
+	case err := <-errCh:
+		t.Fatalf("unexpected OnError: %v", err)
+	default:
+	}
+}

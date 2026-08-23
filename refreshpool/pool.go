@@ -12,6 +12,11 @@
 //   - Each site tracks its own exponential backoff: after a failed scrape the
 //     next retry waits BaseBackoff doubled on every further failure (capped at
 //     MaxBackoff), and the delay resets to the base once a scrape succeeds.
+//   - Sites can also carry an adaptive attempt timeout (Task.AttemptTimeout):
+//     each attempt's context deadline starts at the task's base, grows by
+//     Task.TimeoutStep after every failed attempt (capped at MaxBackoff) so a
+//     struggling site gets progressively longer to answer, and resets to the
+//     base after a success.
 //   - Tasks are retried up to MaxRetries times; scraping is slow and flaky by
 //     nature, so the pool tolerates long waits ("it does not matter how long
 //     these take").
@@ -87,6 +92,19 @@ type Task struct {
 	// handling are owned by the pool. Required.
 	Run func(ctx context.Context) error
 
+	// AttemptTimeout optionally bounds ONE scrape attempt: the pool gives
+	// Run a context whose deadline is the site's current adaptive timeout,
+	// which starts at AttemptTimeout. Optional; zero means attempts are
+	// bounded only by the pool's lifetime.
+	AttemptTimeout time.Duration
+
+	// TimeoutStep optionally grows the site's adaptive attempt timeout by
+	// this much after every failed attempt, so a slow or struggling site gets
+	// progressively longer to answer. It has no effect without
+	// AttemptTimeout, never grows past MaxBackoff, and the site's timeout
+	// resets to AttemptTimeout once any scrape for that site succeeds.
+	TimeoutStep time.Duration
+
 	// NoRetry optionally reports whether err is terminal, i.e. retrying
 	// cannot help and the task must fail immediately (e.g. a Cloudflare
 	// challenge that waits for the user to import bypass data). When it
@@ -118,6 +136,12 @@ type siteWorker struct {
 	// exponentially while scrapes keep failing and resets to the base value
 	// on success, so a rate-limited site cools down across consecutive tasks.
 	backoff time.Duration
+
+	// timeout is the site's adaptive attempt deadline (see Task.AttemptTimeout):
+	// it starts at the task's base, grows by TimeoutStep after each failed
+	// attempt and resets to the base after a success. Owned by the site's
+	// worker goroutine; no other goroutine touches it.
+	timeout time.Duration
 }
 
 // Pool is the chapter-list refresh worker pool. Create it via NewPool or use
@@ -350,11 +374,18 @@ func (p *Pool) runTask(w *siteWorker, task *Task) {
 
 	attempt := 0
 	for {
-		err := p.safeRun(task)
+		attemptCtx, cancel := p.attemptContext(w, task)
+		err := p.safeRun(task, attemptCtx)
+		if cancel != nil {
+			cancel()
+		}
 		if err == nil {
 			p.mu.Lock()
 			w.backoff = p.baseBackoff
 			p.mu.Unlock()
+			if task.AttemptTimeout > 0 {
+				w.timeout = task.AttemptTimeout // back to the default after success
+			}
 			log.Printf("[RefreshPool] ✓ Fetched chapters for %s/%s", task.Site, task.describe())
 			p.finish(task, nil, true)
 			return
@@ -384,6 +415,13 @@ func (p *Pool) runTask(w *siteWorker, task *Task) {
 			w.backoff = p.maxBackoff
 		}
 		p.mu.Unlock()
+
+		if task.AttemptTimeout > 0 && task.TimeoutStep > 0 {
+			w.timeout += task.TimeoutStep
+			if w.timeout > p.maxBackoff {
+				w.timeout = p.maxBackoff
+			}
+		}
 
 		if !parser.SleepCtx(p.ctx, wait) {
 			log.Printf("[RefreshPool] Cancelled during backoff - dropping fetch for %s/%s",
@@ -423,15 +461,28 @@ func (p *Pool) finish(task *Task, err error, success bool) {
 	}
 }
 
+// attemptContext wraps the pool context with the site's adaptive timeout for
+// one scrape attempt, if the task opted into one (Task.AttemptTimeout). Runs
+// on the site worker goroutine, which owns w.timeout (like w.backoff).
+func (p *Pool) attemptContext(w *siteWorker, task *Task) (context.Context, context.CancelFunc) {
+	if task.AttemptTimeout <= 0 {
+		return p.ctx, nil
+	}
+	if w.timeout < task.AttemptTimeout {
+		w.timeout = task.AttemptTimeout // first use: seed with the base
+	}
+	return context.WithTimeout(p.ctx, w.timeout)
+}
+
 // safeRun invokes Run once, converting panics into errors so a broken task
 // cannot take down its site worker.
-func (p *Pool) safeRun(task *Task) (err error) {
+func (p *Pool) safeRun(task *Task, ctx context.Context) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("panic in refresh task for %s/%s: %v", task.Site, task.describe(), r)
 		}
 	}()
-	return task.Run(p.ctx)
+	return task.Run(ctx)
 }
 
 // OnSuccessSafe invokes OnSuccess if set.

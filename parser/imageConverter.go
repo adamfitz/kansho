@@ -24,6 +24,12 @@ import (
 	"golang.org/x/image/webp"
 )
 
+// DefaultImageAttemptTimeout is the per-attempt deadline used by the image
+// download helpers unless the caller passes an explicit timeout (the
+// ...Timeout variants). The downloader's manager escalates this deadline
+// adaptively after failures while keeping this value as the base.
+const DefaultImageAttemptTimeout = 2 * time.Minute
+
 // detectImageFormat reads the magic bytes and returns the current image format string
 func detectImageFormat(data []byte) (string, error) {
 	if len(data) < 12 {
@@ -150,6 +156,13 @@ func DownloadAndConvertToJPG(imageURL, targetDir string) error {
 // DownloadConvertToJPGRename downloads an image, converts to JPEG, and saves it.
 // Uses the provided context for cancellation support.
 func DownloadConvertToJPGRename(ctx context.Context, filename, imageURL, targetDir string) error {
+	return DownloadConvertToJPGRenameTimeout(ctx, filename, imageURL, targetDir, DefaultImageAttemptTimeout)
+}
+
+// DownloadConvertToJPGRenameTimeout behaves like DownloadConvertToJPGRename
+// but bounds every attempt with an explicit timeout instead of the default,
+// letting callers implement adaptive deadlines that grow after failures.
+func DownloadConvertToJPGRenameTimeout(ctx context.Context, filename, imageURL, targetDir string, timeout time.Duration) error {
 	var lastErr error
 	maxRetries := 3
 
@@ -158,7 +171,7 @@ func DownloadConvertToJPGRename(ctx context.Context, filename, imageURL, targetD
 			log.Printf("Retry attempt %d/%d for: %s", attempt, maxRetries, imageURL)
 		}
 
-		err := downloadConvertToJPGRenameCtx(ctx, filename, imageURL, targetDir)
+		err := downloadConvertToJPGRenameCtx(ctx, filename, imageURL, targetDir, timeout)
 		if err == nil {
 			return nil
 		}
@@ -176,6 +189,13 @@ func DownloadConvertToJPGRename(ctx context.Context, filename, imageURL, targetD
 // a Referer from the reading page. Uses a shared keep-alive client so a batch
 // of images reuses connections instead of opening fresh ones per image.
 func DownloadConvertToJPGRenameWithReferer(ctx context.Context, filename, imageURL, targetDir, referer string) error {
+	return DownloadConvertToJPGRenameWithRefererTimeout(ctx, filename, imageURL, targetDir, referer, DefaultImageAttemptTimeout)
+}
+
+// DownloadConvertToJPGRenameWithRefererTimeout behaves like
+// DownloadConvertToJPGRenameWithReferer but bounds every attempt with an
+// explicit timeout instead of the default.
+func DownloadConvertToJPGRenameWithRefererTimeout(ctx context.Context, filename, imageURL, targetDir, referer string, timeout time.Duration) error {
 	var lastErr error
 	maxRetries := 3
 
@@ -184,7 +204,7 @@ func DownloadConvertToJPGRenameWithReferer(ctx context.Context, filename, imageU
 			log.Printf("Retry attempt %d/%d for: %s", attempt, maxRetries, imageURL)
 		}
 
-		err := downloadConvertToJPGRenameWithRefererCtx(ctx, filename, imageURL, targetDir, referer)
+		err := downloadConvertToJPGRenameWithRefererCtx(ctx, filename, imageURL, targetDir, referer, timeout)
 		if err == nil {
 			return nil
 		}
@@ -198,8 +218,8 @@ func DownloadConvertToJPGRenameWithReferer(ctx context.Context, filename, imageU
 
 // downloadConvertToJPGRenameWithRefererCtx is the context-aware internal
 // function without retry logic.
-func downloadConvertToJPGRenameWithRefererCtx(ctx context.Context, filename, imageURL, targetDir, referer string) error {
-	reqCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+func downloadConvertToJPGRenameWithRefererCtx(ctx context.Context, filename, imageURL, targetDir, referer string, timeout time.Duration) error {
+	reqCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(reqCtx, "GET", imageURL, nil)
@@ -267,8 +287,11 @@ var (
 )
 
 // downloadConvertToJPGRenameCtx is the context-aware internal function without retry
-func downloadConvertToJPGRenameCtx(ctx context.Context, filename, imageURL, targetDir string) error {
-	req, err := http.NewRequestWithContext(ctx, "GET", imageURL, nil)
+func downloadConvertToJPGRenameCtx(ctx context.Context, filename, imageURL, targetDir string, timeout time.Duration) error {
+	reqCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(reqCtx, "GET", imageURL, nil)
 	if err != nil {
 		return err
 	}
@@ -326,7 +349,18 @@ func saveRawBytes(data []byte, outputPath string) error {
 // 2. Download the image using the collector
 // 3. Convert to JPEG if needed (reuses ConvertImageToJPEG)
 // 4. Save with padded filename (reuses padFileName)
+// cfImageTimeout is the per-attempt request timeout of the legacy Colly-based
+// CF-bypass download path when no explicit timeout is given.
+const cfImageTimeout = 60 * time.Second
+
 func DownloadConvertToJPGRenameCf(ctx context.Context, filename, imageURL, targetDir, domain string) error {
+	return DownloadConvertToJPGRenameCfTimeout(ctx, filename, imageURL, targetDir, domain, cfImageTimeout)
+}
+
+// DownloadConvertToJPGRenameCfTimeout behaves like
+// DownloadConvertToJPGRenameCf but bounds every attempt with an explicit
+// request timeout instead of the default.
+func DownloadConvertToJPGRenameCfTimeout(ctx context.Context, filename, imageURL, targetDir, domain string, timeout time.Duration) error {
 	var lastErr error
 	maxRetries := 3
 
@@ -335,7 +369,7 @@ func DownloadConvertToJPGRenameCf(ctx context.Context, filename, imageURL, targe
 			log.Printf("Retry attempt %d/%d for: %s", attempt, maxRetries, imageURL)
 		}
 
-		err := downloadConvertToJPGRenameCfCtx(ctx, filename, imageURL, targetDir, domain)
+		err := downloadConvertToJPGRenameCfCtx(ctx, filename, imageURL, targetDir, domain, timeout)
 		if err == nil {
 			return nil
 		}
@@ -348,15 +382,15 @@ func DownloadConvertToJPGRenameCf(ctx context.Context, filename, imageURL, targe
 }
 
 // downloadConvertToJPGRenameCfCtx is the context-aware internal function without retry logic
-func downloadConvertToJPGRenameCfCtx(ctx context.Context, filename, imageURL, targetDir, domain string) error {
+func downloadConvertToJPGRenameCfCtx(ctx context.Context, filename, imageURL, targetDir, domain string, timeout time.Duration) error {
 	// Create a new Colly collector for this download with extended timeout for large images
 	c := colly.NewCollector(
 		colly.UserAgent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"),
 		colly.MaxBodySize(0), // CRITICAL: Remove body size limit (default is 10MB which truncates large images)
 	)
 
-	// Set longer timeout for large image downloads (60 seconds to handle slow connections)
-	c.SetRequestTimeout(60 * time.Second)
+	// Set the per-attempt request timeout for large image downloads
+	c.SetRequestTimeout(timeout)
 
 	// Load CF bypass data for the provided domain
 	bypassData, err := cf.LoadFromFile(domain)
@@ -686,7 +720,15 @@ func readBodyWithStallDetect(ctx context.Context, cancel context.CancelFunc, bod
 // into targetDir. It is FlameComics-only: every other site keeps the legacy
 // per-image download paths.
 func DownloadFlameComicsImage(ctx context.Context, filename, imageURL, targetDir, domain string) error {
-	reqCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	return DownloadFlameComicsImageTimeout(ctx, filename, imageURL, targetDir, domain, DefaultImageAttemptTimeout)
+}
+
+// DownloadFlameComicsImageTimeout behaves like DownloadFlameComicsImage but
+// bounds the single attempt with an explicit timeout instead of the default.
+// Like its sibling it performs exactly one HTTP request — retries are owned
+// by the caller.
+func DownloadFlameComicsImageTimeout(ctx context.Context, filename, imageURL, targetDir, domain string, timeout time.Duration) error {
+	reqCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(reqCtx, "GET", imageURL, nil)
