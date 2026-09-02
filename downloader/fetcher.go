@@ -28,10 +28,21 @@ func DomainFromURL(rawURL, hint string) string {
 	return parsed.Hostname()
 }
 
-// FetchChapterURLs fetches chapter URLs using site's extraction method
-func FetchChapterURLs(ctx context.Context, mangaURL string, site SitePlugin) (map[string]string, error) {
+// FetchChapterURLs fetches chapter URLs using site's extraction method.
+// An optional *decayBackoff controller (enabled by the site's SiteRetryPolicy)
+// is passed through by the manager so the effective backoff rises across
+// failing chapters and only trickles back down once fetches succeed again.
+func FetchChapterURLs(ctx context.Context, mangaURL string, site SitePlugin, backoff ...*decayBackoff) (map[string]string, error) {
+	var decay *decayBackoff
+	if len(backoff) > 0 {
+		decay = backoff[0]
+	}
+
 	chapterMap, err := extractChapters(ctx, mangaURL, site)
 	if err == nil {
+		if decay != nil {
+			decay.succeed()
+		}
 		return chapterMap, nil
 	}
 
@@ -41,20 +52,29 @@ func FetchChapterURLs(ctx context.Context, mangaURL string, site SitePlugin) (ma
 		return nil, cfErr
 	}
 
-	maxRetries := 3
+	policy := siteRetryPolicy(site)
+	maxRetries := policy.MaxFetchRetries
 	lastErr := err
 
 	for attempt := 1; attempt < maxRetries; attempt++ {
-		backoff := time.Duration(math.Pow(2, float64(attempt))) * time.Second
-		log.Printf("[Downloader] Retry %d/%d for chapter list after %v", attempt+1, maxRetries, backoff)
+		var backoffWait time.Duration
+		if decay != nil {
+			backoffWait = decay.delay(attempt)
+		} else {
+			backoffWait = time.Duration(math.Pow(2, float64(attempt))) * policy.FetchBackoff
+		}
+		log.Printf("[Downloader] Retry %d/%d for chapter list after %v", attempt+1, maxRetries, backoffWait)
 
-		if !parser.SleepCtx(ctx, backoff) {
+		if !parser.SleepCtx(ctx, backoffWait) {
 			log.Printf("[Downloader] Chapter fetch cancelled during retry backoff")
 			return nil, ctx.Err()
 		}
 
 		chapterMap, err := extractChapters(ctx, mangaURL, site)
 		if err == nil {
+			if decay != nil {
+				decay.succeed()
+			}
 			log.Printf("[Downloader] ✓ Success fetching chapters after %d retries", attempt+1)
 			return chapterMap, nil
 		}
@@ -68,6 +88,9 @@ func FetchChapterURLs(ctx context.Context, mangaURL string, site SitePlugin) (ma
 		log.Printf("[Downloader] Failed to fetch chapters (attempt %d/%d): %v", attempt+1, maxRetries, err)
 	}
 
+	if decay != nil {
+		decay.fail()
+	}
 	return nil, fmt.Errorf("failed after %d retries: %w", maxRetries, lastErr)
 }
 
@@ -88,10 +111,21 @@ func FetchChapterURLsSingle(ctx context.Context, mangaURL string, site SitePlugi
 	return chapterMap, nil
 }
 
-// FetchChapterImages fetches image URLs using site's extraction method
-func FetchChapterImages(ctx context.Context, chapterURL string, site SitePlugin) ([]string, error) {
+// FetchChapterImages fetches image URLs using site's extraction method.
+// An optional *decayBackoff controller (enabled by the site's SiteRetryPolicy)
+// is passed through by the manager so the effective backoff rises across
+// failing chapters and only trickles back down once fetches succeed again.
+func FetchChapterImages(ctx context.Context, chapterURL string, site SitePlugin, backoff ...*decayBackoff) ([]string, error) {
+	var decay *decayBackoff
+	if len(backoff) > 0 {
+		decay = backoff[0]
+	}
+
 	imageURLs, err := extractImages(ctx, chapterURL, site)
 	if err == nil {
+		if decay != nil {
+			decay.succeed()
+		}
 		return imageURLs, nil
 	}
 
@@ -101,20 +135,29 @@ func FetchChapterImages(ctx context.Context, chapterURL string, site SitePlugin)
 		return nil, cfErr
 	}
 
-	maxRetries := 3
+	policy := siteRetryPolicy(site)
+	maxRetries := policy.MaxFetchRetries
 	lastErr := err
 
 	for attempt := 1; attempt < maxRetries; attempt++ {
-		backoff := time.Duration(math.Pow(2, float64(attempt))) * time.Second
-		log.Printf("[Downloader] Retry %d/%d for chapter images after %v", attempt+1, maxRetries, backoff)
+		var backoffWait time.Duration
+		if decay != nil {
+			backoffWait = decay.delay(attempt)
+		} else {
+			backoffWait = time.Duration(math.Pow(2, float64(attempt))) * policy.FetchBackoff
+		}
+		log.Printf("[Downloader] Retry %d/%d for chapter images after %v", attempt+1, maxRetries, backoffWait)
 
-		if !parser.SleepCtx(ctx, backoff) {
+		if !parser.SleepCtx(ctx, backoffWait) {
 			log.Printf("[Downloader] Chapter images fetch cancelled during retry backoff")
 			return nil, ctx.Err()
 		}
 
 		imageURLs, err := extractImages(ctx, chapterURL, site)
 		if err == nil {
+			if decay != nil {
+				decay.succeed()
+			}
 			log.Printf("[Downloader] ✓ Success fetching images after %d retries", attempt+1)
 			return imageURLs, nil
 		}
@@ -128,6 +171,9 @@ func FetchChapterImages(ctx context.Context, chapterURL string, site SitePlugin)
 		log.Printf("[Downloader] Failed to fetch images (attempt %d/%d): %v", attempt+1, maxRetries, err)
 	}
 
+	if decay != nil {
+		decay.fail()
+	}
 	return nil, fmt.Errorf("failed after %d retries: %w", maxRetries, lastErr)
 }
 

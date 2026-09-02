@@ -124,6 +124,9 @@ const (
 	defaultChapterBackoff    = 1 * time.Second
 	defaultMaxImageRetries   = 3
 	defaultImageBackoff      = 1 * time.Second
+	defaultMaxFetchRetries   = 3
+	defaultFetchBackoff      = 1 * time.Second
+	defaultDecayMax          = 30 * time.Second
 )
 
 // DefaultRetryPolicy returns the stock retry/backoff policy applied to sites
@@ -134,6 +137,9 @@ func DefaultRetryPolicy() SiteRetryPolicy {
 		ChapterBackoff:    defaultChapterBackoff,
 		MaxImageRetries:   defaultMaxImageRetries,
 		ImageBackoff:      defaultImageBackoff,
+		MaxFetchRetries:   defaultMaxFetchRetries,
+		FetchBackoff:      defaultFetchBackoff,
+		DecayMax:          defaultDecayMax,
 	}
 }
 
@@ -155,6 +161,19 @@ func siteRetryPolicy(site SitePlugin) SiteRetryPolicy {
 		if custom.ImageBackoff > 0 {
 			policy.ImageBackoff = custom.ImageBackoff
 		}
+		if custom.MaxFetchRetries > 0 {
+			policy.MaxFetchRetries = custom.MaxFetchRetries
+		}
+		if custom.FetchBackoff > 0 {
+			policy.FetchBackoff = custom.FetchBackoff
+		}
+		if custom.DecayStep > 0 {
+			policy.DecayStep = custom.DecayStep
+		}
+		if custom.DecayMax > 0 {
+			policy.DecayMax = custom.DecayMax
+		}
+		policy.DecayBackoff = custom.DecayBackoff
 	}
 	return policy
 }
@@ -187,6 +206,35 @@ type SiteRetryPolicy struct {
 	// wait grows exponentially from this base (base * 2^attempt).
 	// Zero means use the default.
 	ImageBackoff time.Duration
+
+	// MaxFetchRetries is the number of retries attempted when the chapter list
+	// or chapter image-list fetch fails (FetchChapterURLs / FetchChapterImages).
+	// Zero means use the default.
+	MaxFetchRetries int
+
+	// FetchBackoff is the base time between chapter-list / image-list fetch
+	// retries. The actual wait grows exponentially from this base.
+	// Zero means use the default.
+	FetchBackoff time.Duration
+
+	// DecayBackoff switches the backoff from "reset to base after every
+	// success" to "decrement toward base after every success". While a site
+	// keeps failing the effective base rises (doubles on each fully-failed
+	// attempt set); once it starts answering again the effective base only
+	// comes back down one DecayStep per success instead of snapping to base,
+	// so a recovering site keeps getting breathing room for a while.
+	DecayBackoff bool
+
+	// DecayStep is how much the effective backoff base is reduced on every
+	// successful attempt when DecayBackoff is enabled. Zero means the base
+	// backoff itself is used as one step.
+	DecayStep time.Duration
+
+	// DecayMax is the ceiling for the effective backoff base when DecayBackoff
+	// is enabled. It also caps how long any single retry wait can grow, so a
+	// fully-down site can never stall the download for hours. Zero means use
+	// the default ceiling.
+	DecayMax time.Duration
 }
 
 // RetryPolicySite is implemented by sites that override the default

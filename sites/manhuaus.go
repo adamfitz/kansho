@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	"kansho/config"
 	"kansho/downloader"
@@ -15,6 +16,25 @@ type ManhuausSite struct{}
 
 // Ensure ManhuausSite implements SitePlugin
 var _ downloader.SitePlugin = (*ManhuausSite)(nil)
+
+// GetRetryPolicy configures manhuaus's unusually tricky retry behavior: the
+// site frequently stops answering for short stretches, so the fetch and image
+// loops get a high retry budget with a doubled backoff, and DecayBackoff makes
+// that backoff build up across failing chapters and step back down gradually
+// once the site starts answering again.
+func (m *ManhuausSite) GetRetryPolicy() downloader.SiteRetryPolicy {
+	return downloader.SiteRetryPolicy{
+		MaxChapterRetries: 5,
+		ChapterBackoff:    2 * time.Second,
+		MaxImageRetries:   8,
+		ImageBackoff:      2 * time.Second,
+		MaxFetchRetries:   8,
+		FetchBackoff:      2 * time.Second,
+		DecayBackoff:      true,
+		DecayStep:         2 * time.Second,
+		DecayMax:          60 * time.Second,
+	}
+}
 
 // GetSiteName returns the site identifier
 func (m *ManhuausSite) GetSiteName() string {
@@ -37,6 +57,9 @@ func (m *ManhuausSite) GetChapterExtractionMethod() *downloader.ChapterExtractio
 	return &downloader.ChapterExtractionMethod{
 		Type:         "javascript",
 		WaitSelector: "li.wp-manga-chapter a",
+		// Manhuaus is CF-protected and JS-heavy; the chapter-list page regularly
+		// takes longer than the 45 s default to finish navigating.
+		Timeout: 90 * time.Second,
 		JavaScript: `
 			[...document.querySelectorAll('li.wp-manga-chapter a')]
 			.map(a => {
@@ -61,6 +84,7 @@ func (m *ManhuausSite) GetImageExtractionMethod() *downloader.ImageExtractionMet
 	return &downloader.ImageExtractionMethod{
 		Type:         "javascript",
 		WaitSelector: "div.reading-content img",
+		Timeout:      90 * time.Second,
 		JavaScript: `
 			[...document.querySelectorAll('div.reading-content img')]
 			.map(img => {
