@@ -47,6 +47,17 @@ func (s *ComixSite) NeedsCFBypass() bool {
 	return true
 }
 
+// GetRetryPolicy overrides the default retry/backoff behavior. Comix's CDN
+// reliably fails the first connection attempt per image (context deadline
+// exceeded) and needs several more opportunities with extra time between tries
+// to ride out the throttling. Other values fall back to the package defaults.
+func (s *ComixSite) GetRetryPolicy() downloader.SiteRetryPolicy {
+	return downloader.SiteRetryPolicy{
+		MaxImageRetries: 9,
+		ImageBackoff:    3 * time.Second,
+	}
+}
+
 func (s *ComixSite) Debugger() *downloader.Debugger {
 	return &downloader.Debugger{
 		SaveHTML: false,
