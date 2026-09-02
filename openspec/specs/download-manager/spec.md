@@ -72,13 +72,15 @@ Each chapter download SHALL fetch page images, convert them to JPEG, and package
 - THEN the download SHALL return an error indicating no images found
 
 ### Requirement: Retry Logic
-The system SHALL automatically retry failed downloads with exponential backoff.
+The system SHALL automatically retry failed downloads with exponential backoff, governed by a per-site retry policy. The default policy retries each operation up to 3 times with a 1 second base backoff. A site opts into custom behavior by implementing the `RetryPolicySite` interface (a `GetRetryPolicy() SiteRetryPolicy` method); zero-valued fields in a site's policy fall back to the package defaults.
+
+`SiteRetryPolicy` exposes `MaxChapterRetries`/`ChapterBackoff` (chapter downloads), `MaxImageRetries`/`ImageBackoff` (image downloads), `MaxFetchRetries`/`FetchBackoff` (chapter-list and image-list fetches), and the decay knobs `DecayBackoff`, `DecayStep`, `DecayMax`.
 
 #### Scenario: Retry failed chapter download
 - GIVEN a chapter download fails
 - WHEN the error is not a CF challenge
-- THEN the system SHALL retry up to 3 times
-- AND SHALL wait 2, 4, and 8 seconds between retries (exponential backoff)
+- THEN the system SHALL retry up to `MaxChapterRetries` times (default 3)
+- AND SHALL wait `2^attempt * ChapterBackoff` between retries (default base 1s → 2, 4, 8 seconds)
 - AND SHALL use `SleepCtx(ctx, backoff)` so the wait is cancelled immediately if the context is cancelled
 - WHEN all retries are exhausted
 - THEN the system SHALL log the failure and continue to the next chapter
@@ -86,13 +88,38 @@ The system SHALL automatically retry failed downloads with exponential backoff.
 #### Scenario: Retry failed image download
 - GIVEN an image download fails
 - WHEN retrying
-- THEN the system SHALL retry up to 3 times for all sites
-- AND SHALL use 2, 4, and 8 second exponential backoff
+- THEN the system SHALL retry up to `MaxImageRetries` times (default 3)
+- AND SHALL use an exponential backoff of `2^attempt * ImageBackoff` between retries
 - AND SHALL use `SleepCtx(ctx, backoff)` so the wait is cancelled immediately if the context is cancelled
-- AND FlameComics SHALL retry up to 5 times (2, 4, 8, 16, and 32 second backoff) to ride out CDN throttling
-- AND for the FlameComics path, each attempt SHALL be a single HTTP request — `DownloadFlameComicsImage` SHALL NOT retry internally, avoiding nested retries that could stall on one image for minutes
-- AND all other sites SHALL keep their legacy retry behavior unchanged
+- AND each attempt SHALL be a single HTTP request at the download layer — the parser helpers SHALL NOT retry internally, avoiding nested retries that could stall on one image for minutes
 - AND every attempt, stall, and backoff phase SHALL be pushed through the progress callback and logged, so the status bar indicator updates live for all downloads
+
+#### Scenario: Retry failed chapter-list or image-list fetch
+- GIVEN `FetchChapterURLs` or `FetchChapterImages` fails to extract from the site
+- WHEN the error is not a CF challenge
+- THEN the system SHALL retry up to `MaxFetchRetries` times (default 3)
+- AND SHALL use an exponential backoff of `2^attempt * FetchBackoff` between retries, or the decay controller's effective base when the site enables decay
+- AND SHALL use `SleepCtx(ctx, backoff)` so the wait is cancelled immediately if the context is cancelled
+- WHEN a CF challenge is detected at any attempt
+- THEN the fetch SHALL return the CF challenge error immediately to the queue with no further retries
+
+#### Scenario: Per-site retry policy overrides
+- GIVEN a site implements `RetryPolicySite`
+- WHEN its `GetRetryPolicy()` is resolved, with zero-valued fields replaced by the package defaults
+- THEN comix SHALL be configured with `MaxImageRetries` 9 and `ImageBackoff` 3s (legacy per-image path)
+- AND FlameComics SHALL be configured with `MaxImageRetries` 9 and `ImageBackoff` 3s (single-request attempts)
+- AND manhuaus SHALL be configured with `MaxChapterRetries` 5 / `ChapterBackoff` 2s, `MaxImageRetries` 8 / `ImageBackoff` 2s, `MaxFetchRetries` 8 / `FetchBackoff` 2s, plus `DecayBackoff` enabled with `DecayStep` 2s and `DecayMax` 60s
+- AND all other sites SHALL keep the default policy
+
+#### Scenario: Decaying backoff (recovery without resetting to scratch)
+- GIVEN a site has `DecayBackoff` enabled
+- AND the manager SHALL build one decay controller per manga download at construction time, resting on the site's `ImageBackoff` (so a site enabling decay SHALL set `FetchBackoff` equal to `ImageBackoff` for consistent fetch waits), with `DecayStep` defaulting to the image backoff and `DecayMax` defaulting to 30s
+- WHEN `FetchChapterURLs` or `FetchChapterImages` exhausts all of its retries for a chapter
+- THEN the effective backoff base SHALL double (capped at `DecayMax`), applying to subsequent fetch retries
+- WHEN a fetch later succeeds
+- THEN the effective base SHALL decrement by one `DecayStep` instead of resetting to the configured base, draining back to the base over successive successful chapters like a queue
+- AND no individual retry wait SHALL exceed `DecayMax`, so a fully-down site can never stall the download indefinitely
+- AND while the effective base is elevated, each retry wait SHALL still grow exponentially from it (`2^attempt * effectiveBase`, capped at `DecayMax`)
 
 #### Scenario: Adaptive image attempt timeout
 - GIVEN an image attempt carries a context deadline (base: 2 minutes)
@@ -113,7 +140,7 @@ The system SHALL automatically retry failed downloads with exponential backoff.
 - WHEN a FlameComics image download stalls
 - THEN `DownloadFlameComicsImage` SHALL abort the request after 20 seconds of no data and return a `parser.StalledError`
 - AND a STALLED log line SHALL be emitted identifying the URL
-- AND the manager's `downloadImageWithRetry` SHALL retry the image with exponential backoff (up to 5 attempts)
+- AND the manager's `downloadImageWithRetry` SHALL retry the image with exponential backoff up to the site's `MaxImageRetries` (FlameComics configures 9)
 - AND the stall SHALL never block the download for more than the no-data timeout plus the retry backoff
 
 ### Requirement: Cancellation

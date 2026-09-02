@@ -26,6 +26,11 @@ type Manager struct {
 	// Only touched by the manager's own goroutine (chapters and images are
 	// downloaded sequentially), so no locking is needed.
 	imageTimer adaptiveTimeout
+
+	// retryBackoff is the decaying backoff controller fed to the chapter-list
+	// and chapter-image fetch retry loops when the site's SiteRetryPolicy has
+	// DecayBackoff enabled. It is nil for sites that keep the static backoff.
+	retryBackoff *decayBackoff
 }
 
 // Adaptive attempt-timeout policy for image downloads: the first try of every
@@ -77,9 +82,26 @@ func NewManager(config *DownloadConfig) *Manager {
 	parsedURL, _ := url.Parse(config.Manga.Url)
 	domain := parsedURL.Hostname()
 
+	// Only build the decaying backoff controller for sites that opted in. The
+	// effective base rides on the image backoff; a site that enables DecayBackoff
+	// typically sets the fetch backoff to the same value.
+	var retryBackoff *decayBackoff
+	if policy := siteRetryPolicy(config.Site); policy.DecayBackoff {
+		step := policy.DecayStep
+		if step <= 0 {
+			step = policy.ImageBackoff
+		}
+		retryBackoff = &decayBackoff{
+			base: policy.ImageBackoff,
+			step: step,
+			max:  policy.DecayMax,
+		}
+	}
+
 	return &Manager{
-		config: config,
-		domain: domain,
+		config:       config,
+		domain:       domain,
+		retryBackoff: retryBackoff,
 	}
 }
 
@@ -96,7 +118,7 @@ func (m *Manager) Download(ctx context.Context) error {
 		callback("Fetching chapter list...", 0, 0, 0, 0)
 	}
 
-	chapterMap, err := FetchChapterURLs(ctx, manga.Url, site)
+	chapterMap, err := FetchChapterURLs(ctx, manga.Url, site, m.retryBackoff)
 	if err != nil {
 		return fmt.Errorf("failed to get chapter URLs: %w", err)
 	}
@@ -377,7 +399,7 @@ func (m *Manager) downloadChapter(ctx context.Context, chapterURL, cbzName strin
 	// Fallback to standard flow for non-CF sites or non-JS extraction methods
 	if successCount == 0 {
 		var err error
-		imageURLs, err = FetchChapterImages(ctx, chapterURL, site)
+		imageURLs, err = FetchChapterImages(ctx, chapterURL, site, m.retryBackoff)
 		if err != nil {
 			return fmt.Errorf("failed to get chapter images: %w", err)
 		}
