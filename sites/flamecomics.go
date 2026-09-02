@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"kansho/config"
 	"kansho/downloader"
@@ -28,6 +29,17 @@ func (s *FlameComicsSite) GetDomain() string {
 
 func (s *FlameComicsSite) NeedsCFBypass() bool {
 	return true
+}
+
+// GetRetryPolicy overrides the default retry/backoff behavior. FlameComics'
+// CDN throttles bursts of fresh connections and chapters frequently time out,
+// so it is allowed more attempts with extra time between tries. The chapter
+// retry values fall back to the package defaults.
+func (s *FlameComicsSite) GetRetryPolicy() downloader.SiteRetryPolicy {
+	return downloader.SiteRetryPolicy{
+		MaxImageRetries: 9,
+		ImageBackoff:    3 * time.Second,
+	}
 }
 
 func (s *FlameComicsSite) NormalizeChapterURL(rawURL, baseURL string) string {

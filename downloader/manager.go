@@ -222,12 +222,14 @@ func (m *Manager) DownloadSingleChapter(ctx context.Context, chapterURL, cbzName
 
 // downloadChapterWithRetry downloads a single chapter with retry logic
 func (m *Manager) downloadChapterWithRetry(ctx context.Context, chapterURL, cbzName string, actualChapterNum, currentDownload, totalChaptersFound, newChaptersToDownload int, progress float64) error {
-	maxRetries := 3
+	policy := siteRetryPolicy(m.config.Site)
+	maxRetries := policy.MaxChapterRetries
+	baseBackoff := policy.ChapterBackoff
 	var lastErr error
 
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		if attempt > 0 {
-			backoff := time.Duration(math.Pow(2, float64(attempt))) * time.Second
+			backoff := time.Duration(math.Pow(2, float64(attempt))) * baseBackoff
 
 			if cb := m.config.ProgressCallback; cb != nil {
 				cb(fmt.Sprintf("Retrying chapter %d in %v (attempt %d/%d)...", actualChapterNum, backoff, attempt+1, maxRetries), progress, actualChapterNum, currentDownload, totalChaptersFound)
@@ -479,13 +481,9 @@ func guessExtension(data []byte) string {
 
 // downloadImageWithRetry downloads a single image with retry logic
 func (m *Manager) downloadImageWithRetry(ctx context.Context, imageURL, targetDir, filename, status string, callback ProgressCallback, progress float64, actualChapter, currentDownload, totalChaptersFound int) error {
-	// FlameComics is allowed more attempts because its CDN throttles bursts of
-	// fresh connections and needs longer to ride the throttle out; every other
-	// site keeps its previous retry count.
-	maxRetries := 3
-	if m.config.Site.GetSiteName() == "flamecomics" {
-		maxRetries = 5
-	}
+	policy := siteRetryPolicy(m.config.Site)
+	maxRetries := policy.MaxImageRetries
+	baseBackoff := policy.ImageBackoff
 	var lastErr error
 
 	// notify logs each phase and pushes it through the progress callback so the
@@ -499,7 +497,7 @@ func (m *Manager) downloadImageWithRetry(ctx context.Context, imageURL, targetDi
 
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		if attempt > 0 {
-			backoff := time.Duration(math.Pow(2, float64(attempt))) * time.Second
+			backoff := time.Duration(math.Pow(2, float64(attempt))) * baseBackoff
 			notify(fmt.Sprintf("%s — retry %d/%d in %v (last error: %v)", status, attempt, maxRetries, backoff, lastErr))
 			if !parser.SleepCtx(ctx, backoff) {
 				log.Printf("[Downloader:%s] Retry cancelled for: %s", filename, imageURL)

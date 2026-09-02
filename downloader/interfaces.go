@@ -117,12 +117,83 @@ type DownloadConfig struct {
 	ProgressCallback ProgressCallback
 }
 
+// Default retry/backoff values used by every site that does not override them
+// via the RetryPolicySite interface.
+const (
+	defaultMaxChapterRetries = 3
+	defaultChapterBackoff    = 1 * time.Second
+	defaultMaxImageRetries   = 3
+	defaultImageBackoff      = 1 * time.Second
+)
+
+// DefaultRetryPolicy returns the stock retry/backoff policy applied to sites
+// that do not implement RetryPolicySite.
+func DefaultRetryPolicy() SiteRetryPolicy {
+	return SiteRetryPolicy{
+		MaxChapterRetries: defaultMaxChapterRetries,
+		ChapterBackoff:    defaultChapterBackoff,
+		MaxImageRetries:   defaultMaxImageRetries,
+		ImageBackoff:      defaultImageBackoff,
+	}
+}
+
+// siteRetryPolicy resolves the retry policy for a site, substituting test
+// defaults for any field the site leaves at its zero value.
+func siteRetryPolicy(site SitePlugin) SiteRetryPolicy {
+	policy := DefaultRetryPolicy()
+	if provider, ok := site.(RetryPolicySite); ok {
+		custom := provider.GetRetryPolicy()
+		if custom.MaxChapterRetries > 0 {
+			policy.MaxChapterRetries = custom.MaxChapterRetries
+		}
+		if custom.ChapterBackoff > 0 {
+			policy.ChapterBackoff = custom.ChapterBackoff
+		}
+		if custom.MaxImageRetries > 0 {
+			policy.MaxImageRetries = custom.MaxImageRetries
+		}
+		if custom.ImageBackoff > 0 {
+			policy.ImageBackoff = custom.ImageBackoff
+		}
+	}
+	return policy
+}
+
 // DebuggableSite is implemented by sites that provide optional debugging support.
 // Sites that do not implement this interface simply do not expose debugging features.
 type DebugSite interface {
 	// Debugger returns the debugging configuration for this site.
 	// Returning nil means no debugging is enabled.
 	Debugger() *Debugger
+}
+
+// SiteRetryPolicy configures per-site retry/backoff behavior. A zero-valued
+// field falls back to the package default (see DefaultRetryPolicy).
+type SiteRetryPolicy struct {
+	// MaxChapterRetries is the number of retries attempted when a chapter
+	// download fails. Zero means use the default.
+	MaxChapterRetries int
+
+	// ChapterBackoff is the base time between chapter-download retries. The
+	// actual wait grows exponentially from this base (base * 2^attempt).
+	// Zero means use the default.
+	ChapterBackoff time.Duration
+
+	// MaxImageRetries is the number of retries attempted when an image
+	// download fails. Zero means use the default.
+	MaxImageRetries int
+
+	// ImageBackoff is the base time between image-download retries. The actual
+	// wait grows exponentially from this base (base * 2^attempt).
+	// Zero means use the default.
+	ImageBackoff time.Duration
+}
+
+// RetryPolicySite is implemented by sites that override the default
+// retry/backoff behavior. Sites that do not implement this interface use
+// DefaultRetryPolicy.
+type RetryPolicySite interface {
+	GetRetryPolicy() SiteRetryPolicy
 }
 
 // ManualCFPromptSite is implemented by sites that need to always open the
