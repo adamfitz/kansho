@@ -158,9 +158,9 @@ func parseWeebcentralChapters(html string) (map[string]string, error) {
 
 // extractChapterLinks parses <a href="/chapters/...">Chapter N</a> links from HTML.
 func extractChapterLinks(html string) (map[string]string, error) {
-	// Match chapter links: <a href="https://weebcentral.com/chapters/...">
+	// Match chapter links: <a href="/chapters/..."> or absolute URL
 	// The chapter title is in a <span> inside: <span class="">Chapter N</span>
-	linkRe := regexp.MustCompile(`<a\s+href="(https://weebcentral\.com/chapters/[^"]+)"[^>]*>[\s\S]*?<span[^>]*>\s*((?:Chapter|Episode)\s+\d+(?:\.\d+)?)\s*</span>`)
+	linkRe := regexp.MustCompile(`<a\s+href="((?:https://weebcentral\.com)?/chapters/[^"]+)"[^>]*>[\s\S]*?<span[^>]*>\s*((?:Chapter|Episode)\s+\d+(?:\.\d+)?)\s*</span>`)
 	matches := linkRe.FindAllStringSubmatch(html, -1)
 
 	if len(matches) == 0 {
@@ -171,6 +171,9 @@ func extractChapterLinks(html string) (map[string]string, error) {
 	result := make(map[string]string)
 	for _, m := range matches {
 		url := m[1]
+		if !strings.HasPrefix(url, "http") {
+			url = "https://weebcentral.com" + url
+		}
 		text := strings.TrimSpace(m[2])
 		if url == "" || text == "" {
 			continue
@@ -194,12 +197,15 @@ func extractChapterLinks(html string) (map[string]string, error) {
 // then looks for "Chapter N" text nearby in the same anchor tag.
 func extractChapterLinksSimple(html string) (map[string]string, error) {
 	// Find anchors to /chapters/ and grab surrounding text for the chapter number
-	anchorRe := regexp.MustCompile(`<a\s[^>]*href="(https://weebcentral\.com/chapters/[^"]+)"[^>]*>([\s\S]*?)</a>`)
+	anchorRe := regexp.MustCompile(`<a\s[^>]*href="((?:https://weebcentral\.com)?/chapters/[^"]+)"[^>]*>([\s\S]*?)</a>`)
 	chNumRe := regexp.MustCompile(`(?i)((?:Chapter|Episode)\s+\d+(?:\.\d+)?)`)
 
 	result := make(map[string]string)
 	for _, m := range anchorRe.FindAllStringSubmatch(html, -1) {
 		url := m[1]
+		if !strings.HasPrefix(url, "http") {
+			url = "https://weebcentral.com" + url
+		}
 		inner := m[2]
 
 		numMatch := chNumRe.FindStringSubmatch(inner)
@@ -238,13 +244,19 @@ func extractChapterLinksSimple(html string) (map[string]string, error) {
 // The server requires a reading_style parameter (missing = 400 Bad Request).
 // We append reading_style=long_strip which returns all images in a single response.
 func parseWeebcentralImages(html string) ([]string, error) {
-	// Extract the images HTMX endpoint from the chapter page
-	endpointRe := regexp.MustCompile(`hx-get="(https://weebcentral\.com/chapters/[^"]+/images\?[^"]+)"`)
+	// Extract the images HTMX endpoint from the chapter page.
+	// Modern WeebCentral pages pass it via JavaScript instead of an hx-get
+	// attribute:
+	//
+	//	htmx.ajax('GET', "https://weebcentral.com/chapters/{ID}/images?is_prev=False", {...})
+	//
+	// Older pages used: hx-get="https://weebcentral.com/chapters/{ID}/images?..."
+	endpointRe := regexp.MustCompile(`["'](https://weebcentral\.com/chapters/[^"']+/images\?[^"']+)["']`)
 	matches := endpointRe.FindStringSubmatch(html)
 
 	if len(matches) < 2 {
 		// Also try relative URLs
-		relRe := regexp.MustCompile(`hx-get="(/chapters/[^"]+/images\?[^"]+)"`)
+		relRe := regexp.MustCompile(`["'](/chapters/[^"']+/images\?[^"']+)["']`)
 		relMatches := relRe.FindStringSubmatch(html)
 		if len(relMatches) < 2 {
 			return nil, fmt.Errorf("WeebCentral: no images endpoint found in chapter page")
