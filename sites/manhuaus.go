@@ -1,14 +1,18 @@
 package sites
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log"
+	"regexp"
 	"strings"
 	"time"
 
 	"kansho/config"
 	"kansho/downloader"
+
+	"github.com/PuerkitoBio/goquery"
 )
 
 // ManhuausSite implements the SitePlugin interface for manhuaus sites
@@ -51,48 +55,98 @@ func (m *ManhuausSite) NeedsCFBypass() bool {
 	return true // Manhuaus uses Cloudflare protection
 }
 
-// GetChapterExtractionMethod returns HOW to extract chapters
-// Downloader will execute this - we just provide the JavaScript
+// chapterNumRe extracts the chapter number from a manhuaus chapter URL:
+// https://manhuaus.com/manga/<series>/chapter-<num>/ — matching the shape the
+// old JS extraction produced so NormalizeChapterFilename keeps working.
+var chapterNumRe = regexp.MustCompile(`/chapter-([\d.]+)/?$`)
+
+// GetChapterExtractionMethod returns HOW to extract chapters.
+//
+// Manhuaus runs WordPress Madara, so the full chapter list is ALWAYS
+// server-rendered in the manga page HTML (<li class="wp-manga-chapter"><a
+// href=".../chapter-N/">). The browser/JS path is unnecessary and actively
+// harmful: headless Chrome regularly stalls on manhuaus's Cloudflare challenge
+// for minutes, then dies at the refresh pool's 90s deadline. Plain HTTP with
+// the captured cf bypass data returns the complete list in ~2s, so extraction
+// uses the "custom" parser over the executor's HTTP-first path (browser only
+// as a last resort).
 func (m *ManhuausSite) GetChapterExtractionMethod() *downloader.ChapterExtractionMethod {
 	return &downloader.ChapterExtractionMethod{
-		Type:         "javascript",
+		Type: "custom",
+		// Used only if the executor ever falls back to the browser.
 		WaitSelector: "li.wp-manga-chapter a",
-		// Manhuaus is CF-protected and JS-heavy; the chapter-list page regularly
-		// takes longer than the 45 s default to finish navigating.
-		Timeout: 90 * time.Second,
-		JavaScript: `
-			[...document.querySelectorAll('li.wp-manga-chapter a')]
-			.map(a => {
-				const href = a.href;
-				const match = href.match(/chapter-([\d.]+)/);
-				if (match) {
-					return { 
-						num: match[1], 
-						url: href 
-					};
+		Timeout:      60 * time.Second,
+		CustomParser: func(html string) (map[string]string, error) {
+			doc, err := goquery.NewDocumentFromReader(bytes.NewReader([]byte(html)))
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse manhuaus chapter list: %w", err)
+			}
+
+			result := make(map[string]string)
+			parsed := 0
+			doc.Find("li.wp-manga-chapter a").Each(func(_ int, s *goquery.Selection) {
+				href, _ := s.Attr("href")
+				if href == "" {
+					return
 				}
-				return null;
+				match := chapterNumRe.FindStringSubmatch(href)
+				if len(match) < 2 {
+					return
+				}
+
+				data := map[string]string{
+					"num":  match[1],
+					"url":  href,
+					"text": strings.TrimSpace(s.Text()),
+				}
+
+				filename := m.NormalizeChapterFilename(data)
+				result[filename] = m.NormalizeChapterURL(href, "")
+				parsed++
 			})
-			.filter(x => x !== null)
-		`,
+
+			if parsed == 0 {
+				return nil, fmt.Errorf("no wp-manga-chapter links found in manhuaus HTML")
+			}
+			return result, nil
+		},
 	}
 }
 
-// GetImageExtractionMethod returns HOW to extract images
-// Downloader will execute this - we just provide the JavaScript
+// GetImageExtractionMethod returns HOW to extract images.
+//
+// The reading page also server-renders every image (<img class="wp-manga-chapter-img"
+// data-src="https://img.manhuaus.com/...">) in the initial HTML, so images are
+// pulled from that static HTML over plain HTTP like the chapter list. No
+// WaitSelector is set (an empty one routes extractImagesCustom through the
+// executor's HTTP-first path instead of forcing the browser).
 func (m *ManhuausSite) GetImageExtractionMethod() *downloader.ImageExtractionMethod {
 	return &downloader.ImageExtractionMethod{
-		Type:         "javascript",
-		WaitSelector: "div.reading-content img",
-		Timeout:      90 * time.Second,
-		JavaScript: `
-			[...document.querySelectorAll('div.reading-content img')]
-			.map(img => {
-				const src = img.getAttribute('data-src') || img.src;
-				return src.trim();
+		Type:    "custom",
+		Timeout: 60 * time.Second,
+		CustomParser: func(html string) ([]string, error) {
+			doc, err := goquery.NewDocumentFromReader(bytes.NewReader([]byte(html)))
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse manhuaus reading page: %w", err)
+			}
+
+			var imageURLs []string
+			doc.Find("div.reading-content img").Each(func(_ int, s *goquery.Selection) {
+				src := s.AttrOr("data-src", "")
+				if src == "" {
+					src = s.AttrOr("src", "")
+				}
+				src = strings.TrimSpace(src)
+				if src != "" {
+					imageURLs = append(imageURLs, src)
+				}
 			})
-			.filter(src => src !== '')
-		`,
+
+			if len(imageURLs) == 0 {
+				return nil, fmt.Errorf("no reading-content images found in manhuaus HTML")
+			}
+			return imageURLs, nil
+		},
 	}
 }
 
