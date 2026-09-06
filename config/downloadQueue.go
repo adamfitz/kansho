@@ -48,12 +48,31 @@ type DownloadTask struct {
 	TotalFound      int
 }
 
-// DownloadQueue manages FIFO download queue
+// maxDownloadWorkers caps how many chapter downloads may run at once across the
+// whole queue. A worker downloads from a single site at a time, so with this
+// value at most three different sites download simultaneously. It is a variable
+// so tests can exercise the pool with a smaller pool.
+var maxDownloadWorkers = 3
+
+// DownloadQueue manages the download queue as a worker pool. Up to
+// maxDownloadWorkers tasks run concurrently, FIFO across the queue, with at
+// most one download per site at a time (so up to maxDownloadWorkers different
+// sites download at once).
 type DownloadQueue struct {
-	tasks        []*DownloadTask
-	mu           sync.RWMutex
-	processing   bool
-	processingMu sync.Mutex
+	tasks []*DownloadTask
+	mu    sync.RWMutex
+
+	// Worker pool state. running is the number of tasks currently executing;
+	// cfWaits is the number of handleCfWait goroutines currently blocked on a
+	// Cloudflare challenge. wake is signalled (non-blocking) every time the set
+	// of dispatchable tasks may have changed, and startOnce guarantees the
+	// dispatcher goroutine runs exactly once.
+	maxWorkers   int
+	running      int
+	cfWaits      int
+	idleNotified bool
+	wake         chan struct{}
+	startOnce    sync.Once
 
 	// Callbacks for UI updates
 	onTaskAdded   func(*DownloadTask)
@@ -70,7 +89,9 @@ var queueOnce sync.Once
 func GetDownloadQueue() *DownloadQueue {
 	queueOnce.Do(func() {
 		globalQueue = &DownloadQueue{
-			tasks: make([]*DownloadTask, 0),
+			tasks:      make([]*DownloadTask, 0),
+			maxWorkers: maxDownloadWorkers,
+			wake:       make(chan struct{}, 1),
 		}
 	})
 	return globalQueue
@@ -124,6 +145,7 @@ func (q *DownloadQueue) AddChapterTask(manga *Bookmarks, chapter, chapterURL str
 	}
 
 	q.tasks = append(q.tasks, task)
+	q.idleNotified = false
 	q.mu.Unlock()
 
 	log.Printf("[Queue] Added chapter task: %s - %s (%s)", task.Manga.Title, task.Chapter, task.ID)
@@ -132,8 +154,8 @@ func (q *DownloadQueue) AddChapterTask(manga *Bookmarks, chapter, chapterURL str
 		q.onTaskAdded(task)
 	}
 
-	// Start processing if not already running
-	go q.processQueue()
+	// Start the worker pool if it is not running, then wake it for the new task.
+	q.startDispatcher()
 
 	return task, nil
 }
@@ -164,6 +186,7 @@ func (q *DownloadQueue) AddTask(manga *Bookmarks) (*DownloadTask, error) {
 	}
 
 	q.tasks = append(q.tasks, task)
+	q.idleNotified = false
 	q.mu.Unlock()
 
 	log.Printf("[Queue] Added task: %s (%s) - Location: %s", task.Manga.Title, task.ID, task.Manga.Location)
@@ -172,8 +195,8 @@ func (q *DownloadQueue) AddTask(manga *Bookmarks) (*DownloadTask, error) {
 		q.onTaskAdded(task)
 	}
 
-	// Start processing if not already running
-	go q.processQueue()
+	// Start the worker pool if it is not running, then wake it for the new task.
+	q.startDispatcher()
 
 	return task, nil
 }
@@ -219,13 +242,14 @@ func (q *DownloadQueue) RetryTask(id string) error {
 				task.Status = "queued"
 				task.StatusMessage = "Retrying..."
 				task.Error = nil
+				q.idleNotified = false
 
 				if q.onTaskUpdated != nil {
 					q.onTaskUpdated(task)
 				}
 
-				// Restart queue processing
-				go q.processQueue()
+				// Wake the worker pool so the retried task is dispatched.
+				q.startDispatcher()
 				return nil
 			}
 			return fmt.Errorf("task cannot be retried (status: %s)", task.Status)
@@ -458,75 +482,146 @@ func (q *DownloadQueue) RemoveCompletedTasks() {
 	log.Printf("[Queue] Cleaned up completed tasks, %d remaining", len(q.tasks))
 }
 
-// processQueue processes tasks in FIFO order
-func (q *DownloadQueue) processQueue() {
-	q.processingMu.Lock()
-	if q.processing {
-		q.processingMu.Unlock()
-		return // Already processing
+// startDispatcher guarantees the dispatcher goroutine is running, then wakes it
+// so any newly queued task is considered for dispatch.
+func (q *DownloadQueue) startDispatcher() {
+	if q.maxWorkers <= 0 {
+		q.maxWorkers = maxDownloadWorkers
 	}
-	q.processing = true
-	q.processingMu.Unlock()
-
-	defer func() {
-		q.processingMu.Lock()
-		q.processing = false
-		q.processingMu.Unlock()
-	}()
-
-	for {
-		task := q.getNextTask()
-		if task == nil {
-			log.Println("[Queue] No more tasks to process")
-			if q.onQueueEmpty != nil {
-				q.onQueueEmpty()
-			}
-			break
+	q.startOnce.Do(func() {
+		if q.wake == nil {
+			q.wake = make(chan struct{}, 1)
 		}
+		go q.dispatcherLoop()
+	})
+	q.signalWake()
+}
 
-		log.Printf("[Queue] Processing task: %s (Location: %s)", task.Manga.Title, task.Manga.Location)
-		q.executeTask(task)
-
-		// CRITICAL: if the download was blocked by a Cloudflare challenge, the
-		// queue MUST stop here so the downloader opens a single browser window
-		// for the user to solve the challenge. Without this pause every queued
-		// CF-protected chapter would fire its own browser window (and dialog),
-		// which can crash the machine. We wait for bypass data to be imported
-		// (then re-queue this task) or, after cfWaitTimeout, skip the remaining
-		// CF-protected queued tasks so downloads that do not need Cloudflare
-		// can proceed.
-		if task.Status == "waiting_cf" {
-			q.handleCfWait(task)
-		}
-
-		// Check if we should continue
-		q.mu.RLock()
-		hasMore := false
-		for _, t := range q.tasks {
-			if t.Status == "queued" {
-				hasMore = true
-				break
-			}
-		}
-		q.mu.RUnlock()
-
-		if !hasMore {
-			break
-		}
+// signalWake pokes the dispatcher (non-blocking). Call it whenever the set of
+// dispatchable tasks may have changed: a task was added/retried/resumed, a
+// download finished, or a CF wait re-queued or skipped tasks.
+func (q *DownloadQueue) signalWake() {
+	select {
+	case q.wake <- struct{}{}:
+	default:
 	}
 }
 
-// getNextTask gets the next queued task
-func (q *DownloadQueue) getNextTask() *DownloadTask {
-	q.mu.Lock()
-	defer q.mu.Unlock()
+// dispatcherLoop is the single goroutine that owns dispatch. It fills free
+// worker slots up to maxWorkers, then sleeps until the queue changes.
+func (q *DownloadQueue) dispatcherLoop() {
+	for {
+		q.fillSlots()
+		<-q.wake
+	}
+}
 
-	for _, task := range q.tasks {
-		if task.Status == "queued" {
-			return task
+// fillSlots starts downloads for every currently dispatchable queued task, up
+// to maxWorkers concurrent runs. A task is dispatchable when a worker slot is
+// free, its site is not already downloading a chapter, and it would not open a
+// second Cloudflare browser while another challenge is being resolved.
+func (q *DownloadQueue) fillSlots() {
+	for {
+		q.mu.Lock()
+		if q.running >= q.maxWorkers {
+			q.mu.Unlock()
+			return
+		}
+		task := q.nextDispatchable()
+		if task == nil {
+			onEmpty := q.maybeNotifyIdle()
+			q.mu.Unlock()
+			if onEmpty != nil {
+				onEmpty()
+			}
+			return
+		}
+
+		log.Printf("[Queue] Dispatching task: %s (%s, site %s)", task.Manga.Title, task.Chapter, task.Manga.Site)
+		task.Status = "downloading"
+		task.StatusMessage = "Starting download..."
+		task.CancelFunc = nil
+		q.running++
+		q.mu.Unlock()
+
+		if q.onTaskUpdated != nil {
+			q.onTaskUpdated(task)
+		}
+
+		go q.runTask(task)
+	}
+}
+
+// nextDispatchable returns the first queued task that can start now, or nil.
+// Callers must hold q.mu. Tasks are scanned in FIFO order, so within a site
+// chapters keep their enqueue order; a site is busy while any of its tasks has
+// status "downloading", so two workers never download from the same site.
+func (q *DownloadQueue) nextDispatchable() *DownloadTask {
+	busySites := make(map[string]bool)
+	for _, t := range q.tasks {
+		if t.Status == "downloading" {
+			busySites[t.Manga.Site] = true
 		}
 	}
+
+	for _, t := range q.tasks {
+		if t.Status != "queued" {
+			continue
+		}
+		if busySites[t.Manga.Site] {
+			continue
+		}
+		// While any CF challenge is being resolved we must not start another
+		// CF-protected download: each one that runs could open its own browser
+		// window. Downloads that cannot need bypass data are unaffected.
+		if q.cfWaits > 0 && taskNeedsCF(t) {
+			continue
+		}
+		return t
+	}
 	return nil
+}
+
+// maybeNotifyIdle fires the onQueueEmpty callback the first time the queue
+// becomes fully idle (nothing downloading and nothing queued). It returns the
+// callback to invoke, or nil. Callers must hold q.mu.
+func (q *DownloadQueue) maybeNotifyIdle() func() {
+	if q.idleNotified || q.running > 0 {
+		return nil
+	}
+	for _, t := range q.tasks {
+		if t.Status == "queued" {
+			return nil
+		}
+	}
+	q.idleNotified = true
+	return q.onQueueEmpty
+}
+
+// runTask executes one dispatched task in a worker goroutine. On completion it
+// releases the worker slot so the dispatcher can start the next task. A task
+// blocked on a Cloudflare challenge keeps the queue gated via handleCfWait so a
+// second CF-protected download does not open another browser.
+func (q *DownloadQueue) runTask(task *DownloadTask) {
+	defer func() {
+		q.mu.Lock()
+		q.running--
+		q.mu.Unlock()
+		q.signalWake()
+	}()
+
+	q.executeTask(task)
+
+	if task.Status == "waiting_cf" {
+		// Bump the gate synchronously (before releasing the worker slot) so the
+		// dispatcher never starts another CF-protected download in the window
+		// between the challenge and handleCfWait starting. handleCfWait releases
+		// the gate when it finishes.
+		q.mu.Lock()
+		q.cfWaits++
+		q.mu.Unlock()
+		go q.handleCfWait(task)
+	}
 }
 
 // executeTask executes a download task
@@ -620,9 +715,11 @@ func (q *DownloadQueue) executeTask(task *DownloadTask) {
 	log.Printf("[Queue] Task completed: %s (status: %s)", task.Manga.Title, task.Status)
 }
 
-// handleCfWait pauses the whole queue after a Cloudflare challenge so the user
-// can provide bypass data. Only the single browser window already opened by the
-// blocked download will fire — no other queued chapter starts while we wait.
+// handleCfWait gates CF-protected downloads after a Cloudflare challenge so the
+// user can provide bypass data. While it runs, cfWaits is bumped so the worker
+// pool does not start another download that needs Cloudflare bypass data — only
+// the single browser window already opened by the blocked download fires.
+// Downloads that do not need Cloudflare continue on other worker slots.
 // See openspec/specs/download-queue/spec.md ("CF Challenge Handling").
 //
 // It returns once bypass data for the blocked domain is detected (the task is
@@ -630,6 +727,13 @@ func (q *DownloadQueue) executeTask(task *DownloadTask) {
 // cfWaitTimeout elapses without data (the remaining CF-protected queued tasks
 // are marked as skipped so downloads that do not need Cloudflare can proceed).
 func (q *DownloadQueue) handleCfWait(task *DownloadTask) {
+	defer func() {
+		q.mu.Lock()
+		q.cfWaits--
+		q.mu.Unlock()
+		q.signalWake()
+	}()
+
 	cfErr, ok := task.Error.(*cf.CfChallengeError)
 	if !ok || cfErr == nil {
 		return
@@ -735,7 +839,7 @@ func (q *DownloadQueue) ResumeCfTasks() {
 
 	if len(resumed) > 0 {
 		log.Printf("[Queue] Resumed %d CF-blocked tasks with fresh bypass data", len(resumed))
-		go q.processQueue()
+		q.startDispatcher()
 	}
 }
 

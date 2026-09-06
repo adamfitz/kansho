@@ -263,22 +263,47 @@ func TestRetryRowLabelIsCentreWithButtonRight(t *testing.T) {
 	}
 }
 
-// TestActiveDownloadTask verifies that activeDownloadTask returns the single
-// downloading task, or nil when nothing is downloading.
-func TestActiveDownloadTask(t *testing.T) {
+// TestActiveDownloadTasks verifies that activeDownloadTasks returns every
+// task that is currently downloading (all concurrent downloads) in queue order,
+// or nil when nothing is downloading.
+func TestActiveDownloadTasks(t *testing.T) {
 	tasks := []*config.DownloadTask{
 		{Manga: config.Bookmarks{Title: "Manga A"}, Chapter: "a1.cbz", Status: "queued"},
 		{Manga: config.Bookmarks{Title: "Manga B"}, Chapter: "b1.cbz", Status: "downloading"},
+		{Manga: config.Bookmarks{Title: "Manga C"}, Chapter: "c1.cbz", Status: "downloading"},
+		{Manga: config.Bookmarks{Title: "Manga A"}, Chapter: "a2.cbz", Status: "queued"},
 	}
-	active := activeDownloadTask(tasks)
-	if active == nil || active.Chapter != "b1.cbz" {
-		t.Fatalf("expected the downloading task, got %+v", active)
+	active := activeDownloadTasks(tasks)
+	if len(active) != 2 {
+		t.Fatalf("expected the two downloading tasks, got %+v", active)
+	}
+	if active[0].Chapter != "b1.cbz" || active[1].Chapter != "c1.cbz" {
+		t.Fatalf("expected queue-order active tasks, got %+v", active)
 	}
 
-	if active := activeDownloadTask([]*config.DownloadTask{
+	if active := activeDownloadTasks([]*config.DownloadTask{
 		{Manga: config.Bookmarks{Title: "Manga A"}, Chapter: "a1.cbz", Status: "queued"},
-	}); active != nil {
+	}); len(active) != 0 {
 		t.Fatalf("expected nil when nothing is downloading, got %+v", active)
+	}
+}
+
+// TestFirstActiveTask verifies firstActiveTask returns the first concurrent
+// download, or nil when idle.
+func TestFirstActiveTask(t *testing.T) {
+	if got := firstActiveTask([]*config.DownloadTask{
+		{Manga: config.Bookmarks{Title: "Manga A"}, Chapter: "a1.cbz", Status: "queued"},
+	}); got != nil {
+		t.Fatalf("expected nil when idle, got %+v", got)
+	}
+
+	got := firstActiveTask([]*config.DownloadTask{
+		{Manga: config.Bookmarks{Title: "Manga A"}, Chapter: "a1.cbz", Status: "queued"},
+		{Manga: config.Bookmarks{Title: "Manga B"}, Chapter: "b1.cbz", Status: "downloading"},
+		{Manga: config.Bookmarks{Title: "Manga C"}, Chapter: "c1.cbz", Status: "downloading"},
+	})
+	if got == nil || got.Chapter != "b1.cbz" {
+		t.Fatalf("expected the first downloading task, got %+v", got)
 	}
 }
 
@@ -312,6 +337,98 @@ func TestActiveTaskRowShowsProgressAndStopButton(t *testing.T) {
 	}
 	if progress.Value != 0.42 {
 		t.Errorf("progress bar should reflect task progress, got %f", progress.Value)
+	}
+}
+
+// TestRebuildPopupShowsAllConcurrentDownloads verifies that every concurrent
+// download (all tasks with status "downloading") gets its own row with a
+// progress bar in the "Currently Downloading" section at the top of the list,
+// and that each downloading chapter also gets a progress bar beside its row in
+// the manga group.
+func TestRebuildPopupShowsAllConcurrentDownloads(t *testing.T) {
+	state, _, _ := newChapterListViewTest(t, "")
+	b := NewDownloadQueueButton(state)
+	b.buildPopup()
+
+	tasks := []*config.DownloadTask{
+		{ID: "1", Manga: config.Bookmarks{Title: "Manga A"}, Chapter: "a1.cbz", Status: "downloading", Progress: 0.2},
+		{ID: "2", Manga: config.Bookmarks{Title: "Manga A"}, Chapter: "a2.cbz", Status: "downloading", Progress: 0.5},
+		{ID: "3", Manga: config.Bookmarks{Title: "Manga B"}, Chapter: "b1.cbz", Status: "downloading", Progress: 0.8},
+		{ID: "4", Manga: config.Bookmarks{Title: "Manga A"}, Chapter: "a3.cbz", Status: "queued"},
+	}
+	b.rebuildPopup(tasks, activeDownloadTasks(tasks))
+
+	// Every active task must be tracked by the in-place widgets map...
+	if len(b.activeRows) != 3 {
+		t.Fatalf("expected 3 tracked active rows, got %d", len(b.activeRows))
+	}
+	for _, id := range []string{"1", "2", "3"} {
+		if row := b.activeRows[id]; row == nil || row.progress == nil {
+			t.Errorf("active row for task %s should be tracked with a progress bar", id)
+		}
+	}
+	// ...and each downloading chapter's manga-group row must track a progress bar.
+	if b.summaryRows["1"] == nil || b.summaryRows["2"] == nil || b.summaryRows["3"] == nil {
+		t.Error("each downloading chapter should register a progress bar in its manga group row")
+	}
+	if b.summaryRows["4"] != nil {
+		t.Error("a queued task should not get a progress bar")
+	}
+}
+
+// TestUpdateActiveRowsInPlaceMovesConcurrentBars verifies a progress tick
+// updates every concurrent download's progress bar in both places (the
+// "Currently Downloading" row and the manga-group row) without a rebuild.
+func TestUpdateActiveRowsInPlaceMovesConcurrentBars(t *testing.T) {
+	state, _, _ := newChapterListViewTest(t, "")
+	b := NewDownloadQueueButton(state)
+	b.buildPopup()
+
+	tasks := []*config.DownloadTask{
+		{ID: "1", Manga: config.Bookmarks{Title: "Manga A"}, Chapter: "a1.cbz", Status: "downloading", Progress: 0.2},
+		{ID: "2", Manga: config.Bookmarks{Title: "Manga A"}, Chapter: "a2.cbz", Status: "downloading", Progress: 0.5},
+	}
+	b.rebuildPopup(tasks, activeDownloadTasks(tasks))
+
+	tasks[0].Progress = 0.9
+	tasks[1].Progress = 0.7
+	b.updateActiveRowsInPlace(tasks)
+
+	if got := b.activeRows["1"].progress.Value; got != 0.9 {
+		t.Errorf("active row 1 progress should be 0.9, got %f", got)
+	}
+	if got := b.activeRows["2"].progress.Value; got != 0.7 {
+		t.Errorf("active row 2 progress should be 0.7, got %f", got)
+	}
+	if got := b.summaryRows["1"].Value; got != 0.9 {
+		t.Errorf("manga-group row 1 progress should be 0.9, got %f", got)
+	}
+	if got := b.summaryRows["2"].Value; got != 0.7 {
+		t.Errorf("manga-group row 2 progress should be 0.7, got %f", got)
+	}
+}
+
+// TestTaskSummaryRowDownloadingHasProgressBar verifies a downloading chapter's
+// summary row shows a live progress bar beside the label.
+func TestTaskSummaryRowDownloadingHasProgressBar(t *testing.T) {
+	state, _, _ := newChapterListViewTest(t, "")
+	b := NewDownloadQueueButton(state)
+
+	task := &config.DownloadTask{ID: "1", Manga: config.Bookmarks{Title: "Manga A"}, Chapter: "a1.cbz", Status: "downloading", Progress: 0.33}
+	row := b.taskSummaryRow(task)
+
+	progress, ok := findProgressBar(row)
+	if !ok {
+		t.Fatal("downloading task summary row should contain a progress bar")
+	}
+	if progress.Value != 0.33 {
+		t.Errorf("progress bar should reflect task progress, got %f", progress.Value)
+	}
+	if b.summaryRows["1"] != progress {
+		t.Error("downloading task progress bar should be tracked for in-place updates")
+	}
+	if btn := findButton(row, "Retry"); btn != nil {
+		t.Error("downloading task row should NOT have a Retry button")
 	}
 }
 
@@ -411,8 +528,8 @@ func TestRefreshPopupThrottlesStructuralRebuilds(t *testing.T) {
 	if !b.lastFullRebuild.Equal(firstRebuild) {
 		t.Error("progress tick should not trigger a full list rebuild")
 	}
-	if b.activeRowProgress == nil || b.activeRowProgress.Value != 0.6 {
-		t.Errorf("active row progress should update in place, got %+v", b.activeRowProgress)
+	if b.activeRows[task.ID] == nil || b.activeRows[task.ID].progress.Value != 0.6 {
+		t.Errorf("active row progress should update in place, got %+v", b.activeRows[task.ID])
 	}
 	if !strings.Contains(b.statusMessage.Text, "Downloading image 2/5") {
 		t.Errorf("status bar should reflect the progress tick, got %q", b.statusMessage.Text)
@@ -470,6 +587,16 @@ func TestUpdateStatusBar(t *testing.T) {
 	}
 	if !strings.HasSuffix(b.statusMessage.Text, active.StatusMessage) {
 		t.Errorf("expected message to contain the status message, got %q", b.statusMessage.Text)
+	}
+
+	// With multiple concurrent downloads the status bar must call out how many
+	// other downloads are running alongside the first active task.
+	b.updateStatusBar([]*config.DownloadTask{
+		{ID: "1", Manga: config.Bookmarks{Title: "Manga A"}, Chapter: "a1.cbz", Status: "downloading", StatusMessage: "Chapter 1/1: Downloading image 3/5"},
+		{ID: "2", Manga: config.Bookmarks{Title: "Manga B"}, Chapter: "b1.cbz", Status: "downloading", StatusMessage: "Chapter 1/1: Downloading image 1/5"},
+	})
+	if !strings.Contains(b.statusMessage.Text, "(+1 more concurrent download)") {
+		t.Errorf("expected concurrent-download count in status bar, got %q", b.statusMessage.Text)
 	}
 
 	b.updateStatusBar([]*config.DownloadTask{

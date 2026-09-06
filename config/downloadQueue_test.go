@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -136,9 +137,6 @@ func TestExecuteTaskKeepsFailedChapter(t *testing.T) {
 // TestRetryTaskAllowsCancelled verifies that a cancelled task can be retried.
 func TestRetryTaskAllowsCancelled(t *testing.T) {
 	q := &DownloadQueue{}
-	q.processingMu.Lock()
-	q.processing = true
-	q.processingMu.Unlock()
 
 	q.tasks = []*DownloadTask{
 		{ID: "1", Manga: Bookmarks{Title: "Manga A"}, Chapter: "a1.cbz", Status: "cancelled"},
@@ -237,9 +235,6 @@ func TestClearRetriesAbortsWaitingCF(t *testing.T) {
 // retried (it is not in a retryable state).
 func TestRetryTaskRejectsActiveTasks(t *testing.T) {
 	q := &DownloadQueue{}
-	q.processingMu.Lock()
-	q.processing = true
-	q.processingMu.Unlock()
 
 	q.tasks = []*DownloadTask{
 		{ID: "1", Manga: Bookmarks{Title: "Manga A"}, Chapter: "a1.cbz", Status: "queued"},
@@ -254,9 +249,6 @@ func TestRetryTaskRejectsActiveTasks(t *testing.T) {
 // Cloudflare data was provided can be retried once the data is available.
 func TestRetryTaskAllowsSkippedCF(t *testing.T) {
 	q := &DownloadQueue{}
-	q.processingMu.Lock()
-	q.processing = true
-	q.processingMu.Unlock()
 
 	q.tasks = []*DownloadTask{
 		{ID: "1", Manga: Bookmarks{Title: "Manga A"}, Chapter: "a1.cbz", Status: "skipped_cf"},
@@ -484,10 +476,6 @@ func TestResumeCfTasksRequeuesBlockedTasksWithData(t *testing.T) {
 	})
 
 	q := &DownloadQueue{}
-	q.processingMu.Lock()
-	q.processing = true
-	q.processingMu.Unlock()
-
 	q.tasks = []*DownloadTask{
 		{ID: "wait", Manga: Bookmarks{Site: "cf-site", Url: "https://ready.example.com/manga"}, Chapter: "a1.cbz", Status: "waiting_cf", Error: &cf.CfChallengeError{URL: "https://ready.example.com/chapter-1/"}},
 		{ID: "skip", Manga: Bookmarks{Site: "cf-site", Url: "https://ready.example.com/manga"}, Chapter: "a2.cbz", Status: "skipped_cf"},
@@ -546,5 +534,290 @@ func TestHandleCfWaitAbortsOnCancel(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("handleCfWait should abort promptly when the task is cancelled")
+	}
+}
+
+// TestNextDispatchableSkipsBusySites verifies that nextDispatchable never hands
+// out two queued tasks for the same site while that site already has a task in
+// the "downloading" state, and that it returns nil only once nothing is left.
+func TestNextDispatchableSkipsBusySites(t *testing.T) {
+	q := &DownloadQueue{
+		tasks: []*DownloadTask{
+			{ID: "a1", Manga: Bookmarks{Title: "A", Site: "siteA"}, Chapter: "a1.cbz", Status: "downloading"},
+			{ID: "a2", Manga: Bookmarks{Title: "A", Site: "siteA"}, Chapter: "a2.cbz", Status: "queued"},
+			{ID: "b1", Manga: Bookmarks{Title: "B", Site: "siteB"}, Chapter: "b1.cbz", Status: "queued"},
+		},
+	}
+
+	task := q.nextDispatchable()
+	if task == nil || task.ID != "b1" {
+		t.Fatalf("expected siteB task to be dispatchable while siteA is busy, got %+v", task)
+	}
+	task.Status = "downloading"
+
+	if task := q.nextDispatchable(); task != nil {
+		t.Fatalf("expected no dispatchable task once all sites are busy, got %+v", task)
+	}
+
+	q.mu.Lock()
+	q.tasks[0].Status = "completed"
+	q.tasks[1].Status = "completed"
+	q.tasks[2].Status = "completed"
+	q.mu.Unlock()
+
+	if task := q.nextDispatchable(); task != nil {
+		t.Fatalf("expected nil when no task is queued, got %+v", task)
+	}
+}
+
+// TestNextDispatchableYieldsWithinSiteInFifoOrder verifies that, when a site
+// becomes free, its queued chapters are handed out in the order they were
+// enqueued (FIFO within a site).
+func TestNextDispatchableYieldsWithinSiteInFifoOrder(t *testing.T) {
+	q := &DownloadQueue{
+		tasks: []*DownloadTask{
+			{ID: "a1", Manga: Bookmarks{Title: "A", Site: "siteA"}, Chapter: "a1.cbz", Status: "queued"},
+			{ID: "a2", Manga: Bookmarks{Title: "A", Site: "siteA"}, Chapter: "a2.cbz", Status: "queued"},
+		},
+	}
+
+	for _, want := range []string{"a1", "a2"} {
+		task := q.nextDispatchable()
+		if task == nil || task.ID != want {
+			t.Fatalf("expected to dispatch %s, got %+v", want, task)
+		}
+		// Free the site once the chapter is done so the next queued chapter of
+		// the same site becomes dispatchable in FIFO order.
+		task.Status = "completed"
+	}
+	if task := q.nextDispatchable(); task != nil {
+		t.Fatalf("expected no more dispatchable tasks, got %+v", task)
+	}
+}
+
+// TestRunTaskGatesAndReleasesCfWaits verifies that a worker whose task hits a
+// Cloudflare challenge holds the CF gate open while handleCfWait is running, and
+// releases it once the wait ends.
+func TestRunTaskGatesAndReleasesCfWaits(t *testing.T) {
+	withTestCfData(t, func(domain string) bool { return false })
+	withTestCfWaitTiming(t, time.Minute, 5*time.Millisecond)
+
+	registerFakeChapterDownload(func() error {
+		return &cf.CfChallengeError{URL: "https://cf.example.com/chapter-1/"}
+	})
+
+	q := &DownloadQueue{}
+	q.setCallbacksForPoolTest()
+	q.tasks = []*DownloadTask{
+		{ID: "1", Manga: Bookmarks{Title: "A", Site: "siteA"}, Chapter: "a1.cbz", ChapterURL: "http://a1", Status: "queued"},
+	}
+	task := q.tasks[0]
+
+	done := make(chan struct{})
+	go func() {
+		q.runTask(task)
+		close(done)
+	}()
+
+	start := time.Now()
+	for time.Since(start) < 5*time.Second {
+		q.mu.Lock()
+		gate := q.cfWaits
+		q.mu.Unlock()
+		if gate == 1 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	q.mu.Lock()
+	if q.cfWaits != 1 {
+		t.Fatalf("expected cfWaits to be held at 1 while the CF wait runs, got %d", q.cfWaits)
+	}
+	q.mu.Unlock()
+
+	// Abort the CF wait by cancelling the task, then verify the gate releases.
+	q.mu.Lock()
+	task.Status = "cancelled"
+	q.mu.Unlock()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runTask should return once the CF wait aborts")
+	}
+
+	waitFor(func() bool {
+		q.mu.Lock()
+		defer q.mu.Unlock()
+		return q.cfWaits == 0
+	})
+}
+
+// TestWorkerPoolRunsConcurrentDownloads verifies that the dispatcher starts up
+// to maxWorkers downloads concurrently across distinct sites, never beyond that
+// limit, and that a task queued later starts once a slot frees up.
+func TestWorkerPoolRunsConcurrentDownloads(t *testing.T) {
+	release := make(chan struct{})
+	started := make(chan struct{}, 10)
+	var startedCounted int32
+	registerFakeChapterDownload(func() error {
+		atomic.AddInt32(&startedCounted, 1)
+		started <- struct{}{}
+		<-release
+		return nil
+	})
+
+	q := &DownloadQueue{maxWorkers: 3}
+	q.setCallbacksForPoolTest()
+	q.tasks = []*DownloadTask{
+		{ID: "1", Manga: Bookmarks{Title: "A", Site: "siteA"}, Chapter: "a1.cbz", ChapterURL: "http://a", Status: "queued"},
+		{ID: "2", Manga: Bookmarks{Title: "B", Site: "siteB"}, Chapter: "b1.cbz", ChapterURL: "http://b", Status: "queued"},
+		{ID: "3", Manga: Bookmarks{Title: "C", Site: "siteC"}, Chapter: "c1.cbz", ChapterURL: "http://c", Status: "queued"},
+		{ID: "4", Manga: Bookmarks{Title: "D", Site: "siteD"}, Chapter: "d1.cbz", ChapterURL: "http://d", Status: "queued"},
+	}
+	q.startDispatcher()
+
+	waitCount(t, started, 3, "three concurrent downloads should start")
+
+	q.mu.RLock()
+	active := make([]string, 0, 3)
+	var activeCount int
+	for _, tk := range q.tasks {
+		if tk.Status == "downloading" {
+			active = append(active, tk.ID)
+			activeCount++
+		}
+	}
+	if activeCount != 3 {
+		t.Errorf("expected exactly 3 concurrent downloads, got %d (%v)", activeCount, active)
+	}
+	if s := q.qTaskByID("4").Status; s != "queued" {
+		t.Errorf("task 4 should stay queued while all %d slots are busy, got %s", q.maxWorkers, s)
+	}
+	q.mu.RUnlock()
+
+	// Free one slot; the fourth site's task must then start.
+	release <- struct{}{}
+	waitSignal(t, started, "fourth download should start once a slot frees up")
+
+	// Drain the remaining workers.
+	close(release)
+	waitFor(func() bool {
+		q.mu.RLock()
+		done := q.running == 0
+		q.mu.RUnlock()
+		return done
+	})
+
+	if got := atomic.LoadInt32(&startedCounted); got != 4 {
+		t.Errorf("expected 4 downloads overall, got %d", got)
+	}
+}
+
+// TestWorkerPoolNeverRunsSecondTaskOnSameSite verifies that a queued chapter is
+// not dispatched while another chapter of the same site is still downloading,
+// even if other sites have already filled the remaining worker slots.
+func TestWorkerPoolNeverRunsSecondTaskOnSameSite(t *testing.T) {
+	started := make(chan struct{}, 10)
+	release := make(chan struct{})
+	registerFakeChapterDownload(func() error {
+		started <- struct{}{}
+		<-release
+		return nil
+	})
+
+	q := &DownloadQueue{maxWorkers: 3}
+	q.setCallbacksForPoolTest()
+	q.tasks = []*DownloadTask{
+		{ID: "a1", Manga: Bookmarks{Title: "A", Site: "siteA"}, Chapter: "a1.cbz", ChapterURL: "http://a1", Status: "queued"},
+		{ID: "a2", Manga: Bookmarks{Title: "A", Site: "siteA"}, Chapter: "a2.cbz", ChapterURL: "http://a2", Status: "queued"},
+		{ID: "b1", Manga: Bookmarks{Title: "B", Site: "siteB"}, Chapter: "b1.cbz", ChapterURL: "http://b1", Status: "queued"},
+	}
+	q.startDispatcher()
+
+	// Exactly two downloads start (one per distinct site); a2 must stay put.
+	waitCount(t, started, 2, "one download per distinct site should start")
+
+	q.mu.RLock()
+	activeCount := 0
+	for _, tk := range q.tasks {
+		if tk.Status == "downloading" {
+			activeCount++
+		}
+	}
+	if activeCount != 2 {
+		t.Errorf("expected exactly 2 concurrent downloads (siteA + siteB), got %d", activeCount)
+	}
+	if s := q.qTaskByID("a2").Status; s != "queued" {
+		t.Errorf("second chapter of siteA must stay queued while siteA is busy, got %s", s)
+	}
+	q.mu.RUnlock()
+
+	// Release the running workers; only then may a2 run, and it runs alone.
+	close(release)
+	waitFor(func() bool {
+		q.mu.RLock()
+		done := q.running == 0
+		q.mu.RUnlock()
+		return done
+	})
+}
+
+// qTaskByID returns the queue task with the given ID (callers must hold the
+// queue mutex).
+func (q *DownloadQueue) qTaskByID(id string) *DownloadTask {
+	for _, t := range q.tasks {
+		if t.ID == id {
+			return t
+		}
+	}
+	return nil
+}
+
+// setCallbacksForPoolTest installs no-op UI callbacks on a bare queue so pooling
+// tests that go through startDispatcher do not nil-pointer panic.
+func (q *DownloadQueue) setCallbacksForPoolTest() {
+	q.SetCallbacks(
+		func(*DownloadTask) {},
+		func(*DownloadTask) {},
+		func(string) {},
+		func() {},
+	)
+}
+
+// waitCount blocks until at least want signals arrive on ch, or the test times
+// out.
+func waitCount(t *testing.T, ch chan struct{}, want int, msg string) {
+	t.Helper()
+	for got := 0; got < want; got++ {
+		select {
+		case <-ch:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%s (got %d of %d within timeout)", msg, got, want)
+		}
+	}
+}
+
+// waitSignal blocks until a single signal arrives on ch, or the test times out.
+func waitSignal(t *testing.T, ch chan struct{}, msg string) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("%s (no signal within timeout)", msg)
+	}
+}
+
+// waitFor polls cond until it returns true or a 5s timeout elapses.
+func waitFor(cond func() bool) {
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if cond() {
+			return
+		}
+		if time.Now().After(deadline) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }

@@ -45,11 +45,20 @@ const (
 )
 
 // adaptiveTimeout implements that grow-on-failure / reset-on-success policy.
+// Use initAdaptiveTimeout to build one; a zero-value adaptiveTimeout has a
+// base of 0, which makes next() return an already-expired 0 deadline.
 type adaptiveTimeout struct {
 	base    time.Duration // deadline for the first attempt
 	step    time.Duration // added to the deadline after every failure
 	max     time.Duration // ceiling for the growth
 	current time.Duration // 0 means "at base"
+}
+
+// initAdaptiveTimeout returns an adaptiveTimeout seeded from the base/step/max
+// policy. It must be used instead of the zero value so next() yields the base
+// deadline instead of 0s.
+func initAdaptiveTimeout(base, step, max time.Duration) adaptiveTimeout {
+	return adaptiveTimeout{base: base, step: step, max: max, current: 0}
 }
 
 // next returns the deadline to use for the upcoming attempt.
@@ -101,6 +110,7 @@ func NewManager(config *DownloadConfig) *Manager {
 	return &Manager{
 		config:       config,
 		domain:       domain,
+		imageTimer:   initAdaptiveTimeout(imageAttemptBase, imageAttemptStep, imageAttemptMax),
 		retryBackoff: retryBackoff,
 	}
 }
