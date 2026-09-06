@@ -54,12 +54,15 @@ type DownloadQueueButton struct {
 	statusMessage *widget.Label
 
 	// Incremental refresh state. A progress event that only touches the currently
-	// downloading task updates these widgets in place instead of rebuilding the
+	// downloading tasks updates these widgets in place instead of rebuilding the
 	// whole list, which keeps the main thread responsive during downloads.
-	activeRowTask     *config.DownloadTask
-	activeRowManga    *widget.Label
-	activeRowChapter  *widget.Label
-	activeRowProgress *widget.ProgressBar
+	//
+	// activeRows maps task ID → the live widgets of that task's row in the
+	// "Currently Downloading" section, so progress ticks can nudge the right row.
+	// summaryRows maps task ID → the progress bar shown beside that chapter in
+	// its manga group, so a downloading chapter's bar moves in place too.
+	activeRows  map[string]*activeRowWidgets
+	summaryRows map[string]*widget.ProgressBar
 
 	// Throttle state for full list rebuilds. Structural changes (a task added,
 	// removed, or changed status) rebuild the list at most every
@@ -80,9 +83,21 @@ type mangaTaskGroup struct {
 	tasks []*config.DownloadTask
 }
 
+// activeRowWidgets holds the live widgets of one row in the "Currently
+// Downloading" section so progress ticks can update them in place.
+type activeRowWidgets struct {
+	manga    *widget.Label
+	chapter  *widget.Label
+	progress *widget.ProgressBar
+}
+
 // NewDownloadQueueButton creates the download queue summary button.
 func NewDownloadQueueButton(state *KanshoAppState) *DownloadQueueButton {
-	b := &DownloadQueueButton{state: state}
+	b := &DownloadQueueButton{
+		state:       state,
+		activeRows:  make(map[string]*activeRowWidgets),
+		summaryRows: make(map[string]*widget.ProgressBar),
+	}
 	b.button = widget.NewButton("Download Queue", b.showSummary)
 	b.Card = b.button
 	b.Refresh()
@@ -240,15 +255,15 @@ func (b *DownloadQueueButton) buildPopup() fyne.CanvasObject {
 func (b *DownloadQueueButton) refreshPopup(tasks []*config.DownloadTask) {
 	b.updateStatusBar(tasks)
 
-	active := activeDownloadTask(tasks)
+	active := activeDownloadTasks(tasks)
 	key := structureKey(tasks)
 
-	// Nothing structural changed: if the same task is still downloading, nudge
-	// its progress bar in place. (The queue stores stable task pointers, so
+	// Nothing structural changed: if some tasks are still downloading, nudge
+	// their progress bars in place. (The queue stores stable task pointers, so
 	// pointer identity reliably means "same task".)
 	if key == b.lastStructureKey {
-		if active != nil && active == b.activeRowTask {
-			b.updateActiveRowInPlace(active)
+		if len(active) > 0 {
+			b.updateActiveRowsInPlace(active)
 		}
 		return
 	}
@@ -293,26 +308,29 @@ func structureKey(tasks []*config.DownloadTask) string {
 // rebuildPopup rebuilds the pop-up's list from the current queue state,
 // grouping tasks by manga with a per-manga "Cancel All" button and a "Start"
 // / "Retry" button on any unfinished task. A prominent "Currently Downloading"
-// section sits at the top of the list whenever a download is active, showing
-// the in-progress chapter next to a live progress bar and a Stop button.
-func (b *DownloadQueueButton) rebuildPopup(tasks []*config.DownloadTask, active *config.DownloadTask) {
+// section sits at the top of the list whenever downloads are active, showing
+// every in-progress chapter (all concurrent downloads) next to a live progress
+// bar and a Stop button.
+func (b *DownloadQueueButton) rebuildPopup(tasks []*config.DownloadTask, active []*config.DownloadTask) {
 	b.subtitleText.Text = fmt.Sprintf("%d manga · %d chapters in queue", len(taskTitles(tasks)), len(tasks))
 	b.subtitleText.Refresh()
 
-	// Track which task owns the active row, so progress ticks can update it in
+	// Track which tasks own the active rows, so progress ticks can update them in
 	// place. Stale widgets from a previous build are dropped.
-	b.activeRowTask = active
-	if active == nil {
-		b.activeRowManga, b.activeRowChapter, b.activeRowProgress = nil, nil, nil
-	}
+	b.activeRows = make(map[string]*activeRowWidgets)
+	b.summaryRows = make(map[string]*widget.ProgressBar)
 
 	objects := make([]fyne.CanvasObject, 0, len(tasks)+len(tasks)/2+4)
 
-	// Prominent "Currently Downloading" section: the left half shows the chapter
-	// being downloaded, the right half a live progress bar with a Stop button.
-	if active != nil {
+	// Prominent "Currently Downloading" section: every in-progress chapter gets
+	// a row split left (chapter) / right (live progress bar with a Stop button).
+	// The queue runs up to maxDownloadWorkers chapters at once, so all of them
+	// must be listed, each with its own progress bar.
+	if len(active) > 0 {
 		objects = append(objects, NewBoldLabel("Currently Downloading"))
-		objects = append(objects, b.activeTaskRow(active))
+		for _, task := range active {
+			objects = append(objects, b.activeTaskRow(task))
+		}
 		objects = append(objects, widget.NewSeparator())
 	}
 
@@ -337,30 +355,33 @@ func (b *DownloadQueueButton) rebuildPopup(tasks []*config.DownloadTask, active 
 	b.lastFullRebuild = time.Now()
 }
 
-// activeDownloadTask returns the single task that is currently downloading, or
-// nil if the queue is idle. The queue processes tasks one at a time, so there
-// is never more than one actively downloading task.
-func activeDownloadTask(tasks []*config.DownloadTask) *config.DownloadTask {
+// activeDownloadTasks returns every task that is currently downloading, in
+// queue order. With the worker pool up to maxDownloadWorkers chapters download
+// at once, so the result is usually more than one.
+func activeDownloadTasks(tasks []*config.DownloadTask) []*config.DownloadTask {
+	var active []*config.DownloadTask
 	for _, task := range tasks {
 		if task.Status == "downloading" {
-			return task
+			active = append(active, task)
 		}
 	}
-	return nil
+	return active
 }
 
 // mangaTitleMaxRunes is the fixed length the manga title is truncated to in the
 // status bar, so long titles stay readable at a glance.
 const mangaTitleMaxRunes = 30
 
-// updateStatusBar refreshes the footer status bar with what the current download
-// is doing right now. The badge shows the site being downloaded from plus a
+// updateStatusBar refreshes the footer status bar with what the current
+// download is doing right now. If several chapters download at once, it follows
+// the first active task (in queue order) and reports how many others are
+// running alongside it. The badge shows the site being downloaded from plus a
 // small state glyph; the message shows the (truncated) manga title followed by
 // the latest status message. This is driven by the progress callback, which
 // emits an update for every phase of an image download, so the bar never sits
 // stale during a stalled download.
 func (b *DownloadQueueButton) updateStatusBar(tasks []*config.DownloadTask) {
-	active := activeDownloadTask(tasks)
+	active := firstActiveTask(tasks)
 	if active == nil {
 		b.statusBadge.SetText("⏸ Idle")
 		if len(tasks) == 0 {
@@ -382,6 +403,27 @@ func (b *DownloadQueueButton) updateStatusBar(tasks []*config.DownloadTask) {
 	} else {
 		b.statusMessage.SetText(active.StatusMessage)
 	}
+
+	if n := len(activeDownloadTasks(tasks)); n > 1 {
+		b.statusMessage.SetText(fmt.Sprintf("%s — (+%d more concurrent download%s)", b.statusMessage.Text, n-1, pluralSuffix(n-1)))
+	}
+}
+
+// pluralSuffix returns "s" for values other than 1, and "" for 1.
+func pluralSuffix(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
+}
+
+// firstActiveTask returns the first task currently downloading, or nil.
+func firstActiveTask(tasks []*config.DownloadTask) *config.DownloadTask {
+	active := activeDownloadTasks(tasks)
+	if len(active) == 0 {
+		return nil
+	}
+	return active[0]
 }
 
 // siteNameForTask returns the human-readable site name for a download task,
@@ -461,22 +503,28 @@ func (b *DownloadQueueButton) activeTaskRow(task *config.DownloadTask) fyne.Canv
 
 	// Keep the widgets so later progress ticks can update them in place without
 	// rebuilding the whole list.
-	b.activeRowManga = mangaLabel
-	b.activeRowChapter = chapterLabel
-	b.activeRowProgress = progress
+	b.activeRows[task.ID] = &activeRowWidgets{
+		manga:    mangaLabel,
+		chapter:  chapterLabel,
+		progress: progress,
+	}
 
 	return container.NewGridWithColumns(2, leftPane, rightPane)
 }
 
-// updateActiveRowInPlace refreshes the currently displayed "Currently
+// updateActiveRowsInPlace refreshes every currently displayed "Currently
 // Downloading" row without rebuilding the list, for pure progress ticks.
-func (b *DownloadQueueButton) updateActiveRowInPlace(task *config.DownloadTask) {
-	if b.activeRowProgress == nil {
-		return
+func (b *DownloadQueueButton) updateActiveRowsInPlace(active []*config.DownloadTask) {
+	for _, task := range active {
+		if row := b.activeRows[task.ID]; row != nil {
+			row.manga.SetText(task.Manga.Title)
+			row.chapter.SetText(task.Chapter)
+			row.progress.SetValue(task.Progress)
+		}
+		if bar := b.summaryRows[task.ID]; bar != nil {
+			bar.SetValue(task.Progress)
+		}
 	}
-	b.activeRowManga.SetText(task.Manga.Title)
-	b.activeRowChapter.SetText(task.Chapter)
-	b.activeRowProgress.SetValue(task.Progress)
 }
 
 // groupTasksByManga groups the given tasks by manga title, preserving order.
@@ -495,13 +543,15 @@ func groupTasksByManga(tasks []*config.DownloadTask) []*mangaTaskGroup {
 	return groups
 }
 
-// taskSummaryRow returns a one-line summary of a queue task. Tasks that did not
-// finish downloading (failed, cancelled, or waiting on a CF challenge) stay in
-// the queue and get an action button so the user can re-queue them: "Start" for
-// a download the user stopped, "Retry" for a failed or CF-blocked one. The
-// label occupies the centre of the row (so it gets the remaining width and
-// truncates cleanly instead of wrapping into the button) and the button hugs
-// the right edge.
+// taskSummaryRow returns a one-line summary of a queue task. Tasks that are
+// currently downloading get a live progress bar beside the chapter so their
+// progress is visible both in the "Currently Downloading" section and in their
+// manga group. Tasks that did not finish downloading (failed, cancelled, or
+// waiting on a CF challenge) stay in the queue and get an action button so the
+// user can re-queue them: "Start" for a download the user stopped, "Retry" for
+// a failed or CF-blocked one. The label occupies the centre of the row (so it
+// gets the remaining width and truncates cleanly instead of wrapping into the
+// button) and the button hugs the right edge.
 func (b *DownloadQueueButton) taskSummaryRow(task *config.DownloadTask) fyne.CanvasObject {
 	status := task.Status
 	if task.Chapter != "" {
@@ -509,6 +559,15 @@ func (b *DownloadQueueButton) taskSummaryRow(task *config.DownloadTask) fyne.Can
 	}
 	label := widget.NewLabel(fmt.Sprintf("%s %s — %s", getStatusIcon(task.Status), task.Manga.Title, status))
 	label.Truncation = fyne.TextTruncateEllipsis
+
+	// A downloading chapter shows its live progress bar beside the row so both
+	// places an active download appears keep the same progress in sync.
+	if task.Status == "downloading" {
+		progress := widget.NewProgressBar()
+		progress.SetValue(task.Progress)
+		b.summaryRows[task.ID] = progress
+		return container.NewBorder(nil, nil, nil, progress, label)
+	}
 
 	if !isRetryableTaskStatus(task.Status) {
 		return label
