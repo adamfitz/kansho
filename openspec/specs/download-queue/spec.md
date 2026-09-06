@@ -1,7 +1,7 @@
 # download-queue Specification
 
 ## Purpose
-Provide a FIFO download queue that manages single-chapter download tasks with lifecycle tracking, cancellation, and retry support. Each task represents one chapter of a manga (since the UI refactor, tasks are no longer whole-manga downloads). The queue pauses entirely when a task hits a Cloudflare challenge so only one browser window opens, waits for the user to import bypass data (up to a timeout), skips CF-protected tasks on timeout so non-CF downloads proceed, and resumes CF downloads automatically once the data is imported.
+Provide a concurrent download queue that manages single-chapter download tasks with lifecycle tracking, cancellation, and retry support. Each task represents one chapter of a manga (since the UI refactor, tasks are no longer whole-manga downloads). The queue runs up to three downloads concurrently as a worker pool, with at most one download per site at a time (so up to three different sites download at once). When a task hits a Cloudflare challenge it gates other CF-protected downloads so only one browser window opens, waits for the user to import bypass data (up to a timeout), skips CF-protected tasks on timeout so non-CF downloads proceed, and resumes CF downloads automatically once the data is imported.
 
 ## Requirements
 
@@ -54,16 +54,23 @@ The queue SHALL manage download tasks through defined states.
 - THEN it SHALL return the matching task, or nil if none exists
 - AND `ChapterQueued(mangaTitle, chapter)` SHALL return true if such a task exists
 
-### Requirement: FIFO Processing
-The queue SHALL process chapter tasks in first-in-first-out order.
+### Requirement: Concurrent Worker Pool
+The queue SHALL process chapter tasks as a worker pool: up to `maxDownloadWorkers` (3) tasks run concurrently, FIFO across the queue, with at most one download per site at a time.
 
-#### Scenario: Process queued chapter tasks sequentially
-- GIVEN multiple chapter tasks are in the queue
+#### Scenario: Process queued chapter tasks concurrently
+- GIVEN multiple chapter tasks for different sites are in the queue
 - WHEN processing starts
-- THEN tasks SHALL be executed in the order they were added
-- AND only one task SHALL be processed at a time
+- THEN up to three tasks SHALL be executed at the same time
+- AND each executing task SHALL belong to a different site (a site runs at most one download at a time)
+- AND tasks waiting for earlier chapters of the same site SHALL wait until that site's download completes
 - AND processing SHALL continue until all queued tasks are complete
-- AND processing SHALL pause entirely when a task becomes "waiting_cf" so no other queued chapter starts while a Cloudflare challenge is being resolved
+- AND queued tasks that share a site SHALL run in the order they were added
+
+#### Scenario: Concurrent dispatch respects worker limit
+- GIVEN the four queued chapters span four different sites
+- WHEN the first three have started downloading
+- THEN the fourth SHALL remain "queued"
+- AND SHALL start as soon as any of the first three completes
 
 ### Requirement: Task Cancellation
 The queue SHALL support cancelling individual tasks or all tasks with immediate status feedback.
@@ -91,25 +98,26 @@ The queue SHALL support cancelling individual tasks or all tasks with immediate 
 - THEN all cancel functions SHALL be called (after releasing the queue lock to prevent UI freezing)
 
 ### Requirement: CF Challenge Handling
-The queue SHALL pause on a Cloudflare challenge so only a single browser window opens, wait for the user to provide bypass data (up to `cfWaitTimeout`, default 5 minutes), skip CF-protected queued tasks on timeout so downloads that do not need Cloudflare proceed, and resume CF downloads automatically once the data is imported.
+The queue SHALL gate CF-protected downloads on a Cloudflare challenge so only a single browser window opens, wait for the user to provide bypass data (up to `cfWaitTimeout`, default 5 minutes), skip CF-protected queued tasks on timeout so downloads that do not need Cloudflare proceed, and resume CF downloads automatically once the data is imported.
 
-#### Scenario: CF challenge pauses the queue
+#### Scenario: CF challenge gates CF-protected downloads
 - GIVEN a task encounters a CF challenge during download
 - WHEN the `cf.CfChallengeError` is returned
 - THEN the task status SHALL be set to "waiting_cf"
 - AND the browser SHALL be opened exactly once for manual challenge solving
-- AND queue processing SHALL pause so no other queued task starts (preventing a new browser window per queued chapter)
+- AND while the challenge is unresolved, no other queued task that would require Cloudflare bypass data SHALL start (preventing a new browser window per queued chapter)
+- AND queued tasks that do not require Cloudflare SHALL be dispatched normally on the remaining worker slots
 - AND the task SHALL remain in the queue for later retry
 
 #### Scenario: CF data received during wait
-- GIVEN the queue is paused on a "waiting_cf" task for a domain
+- GIVEN the queue is gated on a "waiting_cf" task for a domain
 - WHEN Cloudflare bypass data for that domain becomes available (imported via the CF dialog)
-- THEN the paused task SHALL be reset to "queued" with its error cleared
+- THEN the blocked task SHALL be reset to "queued" with its error cleared
 - AND queue processing SHALL resume
 - AND the download SHALL proceed using the freshly imported bypass data
 
 #### Scenario: CF wait timeout skips protected tasks
-- GIVEN the queue is paused on a "waiting_cf" task and no bypass data is provided within `cfWaitTimeout`
+- GIVEN the queue is gated on a "waiting_cf" task and no bypass data is provided within `cfWaitTimeout`
 - WHEN the timeout elapses
 - THEN the task that hit the challenge SHALL remain "waiting_cf"
 - AND every other queued task whose site requires Cloudflare bypass data (with none stored for its domain) SHALL be marked "skipped_cf"
