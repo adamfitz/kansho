@@ -17,7 +17,7 @@ func Test_arenascan_Chapters_And_Images(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	site := &sites.arenascanSite{}
+	site := &sites.ArenascanSite{}
 
 	// Stable arenascan.com series (served from arenascan.com).
 	const mangaURL = "https://arenascan.com/manga/han-dae-sung-returned-from-hell/"
