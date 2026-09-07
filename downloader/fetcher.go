@@ -314,7 +314,7 @@ func extractChaptersCustom(ctx context.Context, mangaURL string, site SitePlugin
 		return nil, fmt.Errorf("failed to create request executor: %w", err)
 	}
 
-	fetchCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	fetchCtx, cancel := context.WithTimeout(ctx, chapterTimeout(method.Timeout))
 	defer cancel()
 
 	html, err := exec.FetchHTML(fetchCtx, mangaURL, method.WaitSelector)
@@ -433,7 +433,7 @@ func extractImagesCustom(ctx context.Context, chapterURL string, site SitePlugin
 			return nil, fmt.Errorf("failed to create request executor: %w", err)
 		}
 
-		fetchCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		fetchCtx, cancel := context.WithTimeout(ctx, chapterTimeout(method.Timeout))
 		defer cancel()
 
 		html, err = exec.FetchHTML(fetchCtx, chapterURL, "")
