@@ -37,8 +37,9 @@ import (
 //   - "Clear Retries" (global, in the header) removes every failed, cancelled
 //     or CF-blocked task across all manga titles, leaving active and queued
 //     downloads untouched
-//   - a per-manga "Cancel All" button next to each manga group cancels all
-//     active tasks for that manga only, also leaving them retryable
+//   - a per-manga "Cancel Queue" button next to each manga group cancels only
+//     that manga's chapters still waiting in the queue, leaving its currently
+//     downloading chapter running
 type DownloadQueueButton struct {
 	Card   fyne.CanvasObject
 	button *widget.Button
@@ -306,7 +307,7 @@ func structureKey(tasks []*config.DownloadTask) string {
 }
 
 // rebuildPopup rebuilds the pop-up's list from the current queue state,
-// grouping tasks by manga with a per-manga "Cancel All" button and a "Start"
+// grouping tasks by manga with a per-manga "Cancel Queue" button and a "Start"
 // / "Retry" button on any unfinished task. A prominent "Currently Downloading"
 // section sits at the top of the list whenever downloads are active, showing
 // every in-progress chapter (all concurrent downloads) next to a live progress
@@ -336,8 +337,8 @@ func (b *DownloadQueueButton) rebuildPopup(tasks []*config.DownloadTask, active 
 
 	for _, group := range groupTasksByManga(tasks) {
 		mangaTitle := group.title
-		groupCancel := widget.NewButtonWithIcon("Cancel All", theme.CancelIcon(), func() {
-			config.GetDownloadQueue().CancelMangaTasks(mangaTitle)
+		groupCancel := widget.NewButtonWithIcon("Cancel Queue", theme.DeleteIcon(), func() {
+			config.GetDownloadQueue().CancelMangaQueue(mangaTitle)
 		})
 		groupCancel.Importance = widget.HighImportance
 

@@ -340,6 +340,44 @@ func TestActiveTaskRowShowsProgressAndStopButton(t *testing.T) {
 	}
 }
 
+// TestRebuildPopupUsesCancelQueuePerManga verifies that each manga group in the
+// queue pop-up has a "Cancel Queue" button (labelled as such, distinct from the
+// global "Cancel All" header button) that cancels only the queued chapters of
+// that manga, not its currently downloading chapter.
+func TestRebuildPopupUsesCancelQueuePerManga(t *testing.T) {
+	state, _, _ := newChapterListViewTest(t, "")
+	b := NewDownloadQueueButton(state)
+	b.buildPopup()
+
+	tasks := []*config.DownloadTask{
+		{ID: "1", Manga: config.Bookmarks{Title: "Manga A"}, Chapter: "a1.cbz", Status: "downloading"},
+		{ID: "2", Manga: config.Bookmarks{Title: "Manga A"}, Chapter: "a2.cbz", Status: "queued"},
+		{ID: "3", Manga: config.Bookmarks{Title: "Manga B"}, Chapter: "b1.cbz", Status: "queued"},
+	}
+	b.rebuildPopup(tasks, activeDownloadTasks(tasks))
+
+	// Each manga group (Manga A with two chapters, Manga B with one) gets its
+	// own "Cancel Queue" button — and the list must NOT reuse the global
+	// "Cancel All" label, which stays reserved for the header.
+	if btn := findButton(b.listBox, "Cancel Queue"); btn == nil {
+		t.Error("manga groups should each have a 'Cancel Queue' button")
+	} else if btn.Importance != widget.HighImportance {
+		t.Error("'Cancel Queue' button should stand out with high importance")
+	}
+	count := 0
+	for _, obj := range b.listBox.Objects {
+		if btn := findButton(obj, "Cancel Queue"); btn != nil {
+			count++
+		}
+	}
+	if count != 2 {
+		t.Errorf("expected one 'Cancel Queue' button per manga group, got %d", count)
+	}
+	if btn := findButton(b.listBox, "Cancel All"); btn != nil {
+		t.Error("'Cancel All' must only appear in the pop-up header, not per manga group")
+	}
+}
+
 // TestRebuildPopupShowsAllConcurrentDownloads verifies that every concurrent
 // download (all tasks with status "downloading") gets its own row with a
 // progress bar in the "Currently Downloading" section at the top of the list,

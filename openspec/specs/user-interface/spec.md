@@ -161,7 +161,7 @@ The system SHALL display an overall download progress summary instead of a dedic
 - THEN a modal pop-up window (not a dialog) SHALL open
 - AND it SHALL fill the size of the main Kansho window
 - AND it SHALL block interaction with the application windows beneath it, so it must be closed with the "Close" button to return to them
-- AND it SHALL group the tasks by manga title, each group showing a per-manga "Cancel All" button
+- AND it SHALL group the tasks by manga title, each group showing a per-manga "Cancel Queue" button
 - AND it SHALL show the overall manga and chapter counts remaining in the queue
 - AND it SHALL list each manga title, the chapter currently being processed for it, and its status
 - AND each task row SHALL show its chapter name on a single line, truncating with an ellipsis if it does not fit
@@ -205,10 +205,10 @@ The system SHALL display an overall download progress summary instead of a dedic
 
 #### Scenario: Cancel all downloads for a manga
 - GIVEN the download queue pop-up is open
-- WHEN the user clicks a manga group's "Cancel All" button
-- THEN every queued or downloading task for that manga title SHALL be cancelled
+- WHEN the user clicks a manga group's "Cancel Queue" button
+- THEN every queued or CF-skipped task for that manga title SHALL be cancelled and remain in the queue with a "Start" button
+- AND the task currently downloading for that manga title SHALL continue running (it SHALL NOT be cancelled)
 - AND tasks for other manga SHALL be left untouched
-- AND the cancelled tasks SHALL remain in the queue with a "Start" button
 
 #### Scenario: Empty download queue
 - GIVEN the queue is empty

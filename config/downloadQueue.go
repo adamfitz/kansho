@@ -380,27 +380,26 @@ func (q *DownloadQueue) CancelAll() {
 	}
 }
 
-// CancelMangaTasks cancels every active task (downloading, waiting on a CF
-// challenge, or queued) whose manga title matches. Completed, failed and
-// already-cancelled tasks are left untouched.
-func (q *DownloadQueue) CancelMangaTasks(mangaTitle string) {
+// CancelMangaQueue cancels every chapter of a manga title that is still waiting
+// in the queue but is not currently being downloaded ("queued" or "skipped_cf").
+// The chapter currently downloading for that manga (status "downloading",
+// including one waiting on a Cloudflare challenge) is left running, and tasks in
+// every other state are left untouched. The cancelled chapters stay in the
+// queue marked "cancelled" so they can be started again.
+func (q *DownloadQueue) CancelMangaQueue(mangaTitle string) {
 	q.mu.Lock()
 
-	log.Printf("[Queue] Cancelling tasks for manga: %s", mangaTitle)
+	log.Printf("[Queue] Cancelling queued tasks for manga: %s", mangaTitle)
 
-	var cancelFuncs []context.CancelFunc
 	for _, task := range q.tasks {
 		if task.Manga.Title != mangaTitle {
 			continue
 		}
-		if (task.Status == "downloading" || task.Status == "waiting_cf") && task.CancelFunc != nil {
-			task.Status = "cancelled"
-			task.StatusMessage = "Cancelling..."
-			cancelFuncs = append(cancelFuncs, task.CancelFunc)
-		} else if task.Status == "queued" || task.Status == "skipped_cf" {
-			task.Status = "cancelled"
-			task.StatusMessage = "Cancelled by user"
+		if task.Status != "queued" && task.Status != "skipped_cf" {
+			continue
 		}
+		task.Status = "cancelled"
+		task.StatusMessage = "Cancelled by user"
 
 		if q.onTaskUpdated != nil {
 			q.onTaskUpdated(task)
@@ -408,10 +407,6 @@ func (q *DownloadQueue) CancelMangaTasks(mangaTitle string) {
 	}
 
 	q.mu.Unlock()
-
-	for _, cancel := range cancelFuncs {
-		cancel()
-	}
 }
 
 // ClearRetries removes every task that did not finish and can be retried

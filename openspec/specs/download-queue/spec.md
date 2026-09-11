@@ -73,7 +73,7 @@ The queue SHALL process chapter tasks as a worker pool: up to `maxDownloadWorker
 - AND SHALL start as soon as any of the first three completes
 
 ### Requirement: Task Cancellation
-The queue SHALL support cancelling individual tasks or all tasks with immediate status feedback.
+The queue SHALL support cancelling individual tasks, all tasks, or a single manga's queued chapters, each with immediate status feedback.
 
 #### Scenario: Cancel queued task
 - GIVEN a task is in "queued" or "skipped_cf" status (no download is running)
@@ -96,6 +96,16 @@ The queue SHALL support cancelling individual tasks or all tasks with immediate 
 - AND all queued and skipped_cf tasks SHALL be marked as "cancelled" with StatusMessage "Cancelled by user"
 - AND the UI callback SHALL be notified for all tasks BEFORE any cancel functions are invoked
 - THEN all cancel functions SHALL be called (after releasing the queue lock to prevent UI freezing)
+
+#### Scenario: Cancel queued chapters only for one manga
+- GIVEN a manga title has chapters both in the queue and currently downloading
+- WHEN `CancelMangaQueue` is called with the manga title
+- THEN every "queued" and "skipped_cf" chapter of that manga SHALL be set to "cancelled" with StatusMessage "Cancelled by user"
+- AND the chapter currently "downloading" for that manga SHALL be left untouched (its download SHALL continue)
+- AND a chapter of that manga waiting on a Cloudflare challenge (status "waiting_cf") SHALL be left untouched
+- AND chapters for other manga titles SHALL be left untouched
+- AND completed, failed and already-cancelled tasks SHALL be left untouched
+- AND the cancelled chapters SHALL stay in the queue so they can be started again
 
 ### Requirement: CF Challenge Handling
 The queue SHALL gate CF-protected downloads on a Cloudflare challenge so only a single browser window opens, wait for the user to provide bypass data (up to `cfWaitTimeout`, default 5 minutes), skip CF-protected queued tasks on timeout so downloads that do not need Cloudflare proceed, and resume CF downloads automatically once the data is imported.
