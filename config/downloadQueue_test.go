@@ -18,36 +18,70 @@ func statusByID(tasks []*DownloadTask) map[string]string {
 	return statuses
 }
 
-// TestCancelMangaTasksCancelsOnlyThatManga verifies that CancelMangaTasks
-// cancels queued and downloading tasks for the matching manga title and leaves
-// tasks for other manga (and completed tasks) untouched.
-func TestCancelMangaTasksCancelsOnlyThatManga(t *testing.T) {
+// TestCancelMangaQueueCancelsOnlyQueuedChapters verifies that CancelMangaQueue
+// cancels the queued and CF-skipped chapters for the matching manga title but
+// leaves the chapter currently downloading for that manga running, along with
+// tasks for other manga and tasks in every other state.
+func TestCancelMangaQueueCancelsOnlyQueuedChapters(t *testing.T) {
 	_, cancelA := context.WithCancel(context.Background())
-	_, cancelB := context.WithCancel(context.Background())
 
 	q := &DownloadQueue{
 		tasks: []*DownloadTask{
 			{ID: "1", Manga: Bookmarks{Title: "Manga A"}, Chapter: "a1.cbz", Status: "queued"},
 			{ID: "2", Manga: Bookmarks{Title: "Manga A"}, Chapter: "a2.cbz", Status: "downloading", CancelFunc: cancelA},
-			{ID: "3", Manga: Bookmarks{Title: "Manga B"}, Chapter: "b1.cbz", Status: "downloading", CancelFunc: cancelB},
-			{ID: "4", Manga: Bookmarks{Title: "Manga A"}, Chapter: "a3.cbz", Status: "completed"},
+			{ID: "3", Manga: Bookmarks{Title: "Manga B"}, Chapter: "b1.cbz", Status: "downloading", CancelFunc: cancelA},
+			{ID: "4", Manga: Bookmarks{Title: "Manga A"}, Chapter: "a3.cbz", Status: "skipped_cf"},
+			{ID: "5", Manga: Bookmarks{Title: "Manga A"}, Chapter: "a4.cbz", Status: "completed"},
 		},
 	}
 
-	q.CancelMangaTasks("Manga A")
+	q.CancelMangaQueue("Manga A")
 
 	statuses := statusByID(q.tasks)
 	if statuses["1"] != "cancelled" {
 		t.Errorf("queued task for Manga A should be cancelled, got %s", statuses["1"])
 	}
-	if statuses["2"] != "cancelled" {
-		t.Errorf("downloading task for Manga A should be cancelled, got %s", statuses["2"])
+	if statuses["4"] != "cancelled" {
+		t.Errorf("CF-skipped task for Manga A should be cancelled, got %s", statuses["4"])
+	}
+	if statuses["2"] != "downloading" {
+		t.Errorf("downloading task for Manga A must NOT be cancelled, got %s", statuses["2"])
 	}
 	if statuses["3"] != "downloading" {
 		t.Errorf("downloading task for Manga B must NOT be cancelled, got %s", statuses["3"])
 	}
-	if statuses["4"] != "completed" {
-		t.Errorf("completed task must be left untouched, got %s", statuses["4"])
+	if statuses["5"] != "completed" {
+		t.Errorf("completed task must be left untouched, got %s", statuses["5"])
+	}
+}
+
+// TestCancelMangaQueueLeavesWaitingCFRunning verifies that CancelMangaQueue does
+// not abort a chapter of the manga that is blocked on a Cloudflare challenge
+// (it is still an active task, just like a downloading one).
+func TestCancelMangaQueueLeavesWaitingCFRunning(t *testing.T) {
+	cancelled := false
+	cancelFunc := func() {
+		cancelled = true
+	}
+
+	q := &DownloadQueue{
+		tasks: []*DownloadTask{
+			{ID: "wait", Manga: Bookmarks{Title: "Manga A"}, Chapter: "a1.cbz", Status: "waiting_cf", CancelFunc: cancelFunc},
+			{ID: "queued", Manga: Bookmarks{Title: "Manga A"}, Chapter: "a2.cbz", Status: "queued"},
+		},
+	}
+
+	q.CancelMangaQueue("Manga A")
+
+	statuses := statusByID(q.tasks)
+	if statuses["wait"] != "waiting_cf" {
+		t.Errorf("waiting_cf task for Manga A must NOT be cancelled, got %s", statuses["wait"])
+	}
+	if statuses["queued"] != "cancelled" {
+		t.Errorf("queued task for Manga A should be cancelled, got %s", statuses["queued"])
+	}
+	if cancelled {
+		t.Error("cancel function of the waiting_cf task must not be called by CancelMangaQueue")
 	}
 }
 
