@@ -19,6 +19,30 @@ This directory contains Gherkin-style specifications for the kansho manga downlo
 | [MangaDex](specs/mangadex/spec.md) | `specs/mangadex/spec.md` | MangaDex API integration, non-spoofed User-Agent policy, chapter/image endpoints, URL parsing, chapter filtering |
 | [Validation](specs/validation/spec.md) | `specs/validation/spec.md` | Add-manga input validation against site required fields |
 
+## Site Plugin Documentation
+
+Each implemented site plugin has a dedicated document describing exactly how it works end-to-end — extraction method (custom HTML / browser JavaScript / API), what it scrapes, how and why, the full flow from initial chapter-list scrape to per-chapter download, and its retry/backoff policy.
+
+The full list lives in the [Site Plugin Index](specs/sites/README.md). Individual docs:
+
+| Site | Doc |
+|------|-----|
+| arenascan | [specs/sites/arenascan.md](specs/sites/arenascan.md) |
+| asurascans | [specs/sites/asurascans.md](specs/sites/asurascans.md) |
+| comix | [specs/sites/comix.md](specs/sites/comix.md) |
+| cubari | [specs/sites/cubari.md](specs/sites/cubari.md) |
+| flamecomics | [specs/sites/flamecomics.md](specs/sites/flamecomics.md) |
+| kingofshojo | [specs/sites/kingofshojo.md](specs/sites/kingofshojo.md) |
+| kunmanga | [specs/sites/kunmanga.md](specs/sites/kunmanga.md) |
+| mangadex | [specs/sites/mangadex.md](specs/sites/mangadex.md) |
+| mangakatana | [specs/sites/mangakatana.md](specs/sites/mangakatana.md) |
+| manhuaus | [specs/sites/manhuaus.md](specs/sites/manhuaus.md) |
+| mgeko | [specs/sites/mgeko.md](specs/sites/mgeko.md) |
+| philiascans | [specs/sites/philiascans.md](specs/sites/philiascans.md) |
+| ravenscans | [specs/sites/ravenscans.md](specs/sites/ravenscans.md) |
+| stonescape | [specs/sites/stonescape.md](specs/sites/stonescape.md) |
+| weebcentral | [specs/sites/weebcentral.md](specs/sites/weebcentral.md) |
+
 ## Format
 
 Each spec follows: **Purpose** → **Requirements** → **Scenarios** (Given/When/Then with `SHALL`).
