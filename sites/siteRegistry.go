@@ -10,8 +10,8 @@ import (
 
 // sitePlugins maps site names to SitePlugin constructors.
 // These are used for fetching chapter lists remotely and for single-chapter
-// downloads. Sites without a plugin entry (e.g. hls, which has its own legacy
-// downloader) cannot be browsed/queried remotely and will only show locally
+// downloads. Sites without a plugin entry cannot be browsed/queried remotely
+// and will only show locally
 // downloaded chapters.
 var sitePlugins = map[string]func() downloader.SitePlugin{
 	"mgeko":       func() downloader.SitePlugin { return &MgekoSite{} },
@@ -66,7 +66,6 @@ func init() {
 	config.RegisterSite("mgeko", MgekoDownloadChapters)       // Implements downloader interface
 	config.RegisterSite("manhuaus", ManhuausDownloadChapters) // Implements downloader interface
 	config.RegisterSite("kunmanga", KunmangaDownloadChapters) // Implements downloader interface
-	config.RegisterSite("hls", HlsDownloadChapters)
 	config.RegisterSite("asurascans", AsuraDownloadChapters)
 	config.RegisterSite("mangakatana", MangakatanaDownloadChapters) // Implements downloader interface
 	config.RegisterSite("mangadex", MangadexDownloadChapters)       // Implements downloader interface

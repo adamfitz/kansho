@@ -27,13 +27,6 @@ sites:
       shortname: false
       title: true
       location: true
-  - name: hls
-    display_name: hls
-    required_fields:
-      url: false
-      shortname: false
-      title: true
-      location: true
   - name: cfotz
     display_name: Childhood Friend of the Zenith
     required_fields:
