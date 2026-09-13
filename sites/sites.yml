@@ -132,3 +132,10 @@ sites:
       shortname: false
       title: true
       location: true
+  - name: thunderscans
+    display_name: thunderscans
+    required_fields:
+      url: true
+      shortname: false
+      title: true
+      location: true

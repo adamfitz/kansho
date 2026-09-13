@@ -14,21 +14,22 @@ import (
 // and will only show locally
 // downloaded chapters.
 var sitePlugins = map[string]func() downloader.SitePlugin{
-	"mgeko":       func() downloader.SitePlugin { return &MgekoSite{} },
-	"manhuaus":    func() downloader.SitePlugin { return &ManhuausSite{} },
-	"kunmanga":    func() downloader.SitePlugin { return &KunmangaSite{} },
-	"asurascans":  func() downloader.SitePlugin { return &AsuraSite{} },
-	"mangakatana": func() downloader.SitePlugin { return &MangakatanaSite{} },
-	"mangadex":    func() downloader.SitePlugin { return &MangadexSite{} },
-	"stonescape":  func() downloader.SitePlugin { return &StonescapeSite{} },
-	"ravenscans":  func() downloader.SitePlugin { return &RavenscansSite{} },
-	"cubari":      func() downloader.SitePlugin { return &CubariSite{} },
-	"flamecomics": func() downloader.SitePlugin { return &FlameComicsSite{} },
-	"weebcentral": func() downloader.SitePlugin { return &WeebcentralSite{} },
-	"philiascans": func() downloader.SitePlugin { return &PhiliaScansSite{} },
-	"comix":       func() downloader.SitePlugin { return &ComixSite{} },
-	"kingofshojo": func() downloader.SitePlugin { return &KingOfShojoSite{} },
-	"arenascan":   func() downloader.SitePlugin { return &ArenascanSite{} },
+	"mgeko":        func() downloader.SitePlugin { return &MgekoSite{} },
+	"manhuaus":     func() downloader.SitePlugin { return &ManhuausSite{} },
+	"kunmanga":     func() downloader.SitePlugin { return &KunmangaSite{} },
+	"asurascans":   func() downloader.SitePlugin { return &AsuraSite{} },
+	"mangakatana":  func() downloader.SitePlugin { return &MangakatanaSite{} },
+	"mangadex":     func() downloader.SitePlugin { return &MangadexSite{} },
+	"stonescape":   func() downloader.SitePlugin { return &StonescapeSite{} },
+	"ravenscans":   func() downloader.SitePlugin { return &RavenscansSite{} },
+	"cubari":       func() downloader.SitePlugin { return &CubariSite{} },
+	"flamecomics":  func() downloader.SitePlugin { return &FlameComicsSite{} },
+	"weebcentral":  func() downloader.SitePlugin { return &WeebcentralSite{} },
+	"philiascans":  func() downloader.SitePlugin { return &PhiliaScansSite{} },
+	"comix":        func() downloader.SitePlugin { return &ComixSite{} },
+	"kingofshojo":  func() downloader.SitePlugin { return &KingOfShojoSite{} },
+	"arenascan":    func() downloader.SitePlugin { return &ArenascanSite{} },
+	"thunderscans": func() downloader.SitePlugin { return &ThunderscansSite{} },
 }
 
 // GetSitePlugin returns a new SitePlugin instance for the given site name,
@@ -78,6 +79,7 @@ func init() {
 	config.RegisterSite("comix", ComixDownloadChapters)
 	config.RegisterSite("kingofshojo", KingOfShojoDownloadChapters)
 	config.RegisterSite("arenascan", ArenascanDownloadChapters)
+	config.RegisterSite("thunderscans", ThunderscansDownloadChapters)
 
 	// Register the generic single-chapter download dispatcher
 	config.RegisterChapterDownload(DownloadSingleChapter)

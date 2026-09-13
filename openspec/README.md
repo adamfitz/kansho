@@ -41,6 +41,7 @@ The full list lives in the [Site Plugin Index](specs/sites/README.md). Individua
 | philiascans | [specs/sites/philiascans.md](specs/sites/philiascans.md) |
 | ravenscans | [specs/sites/ravenscans.md](specs/sites/ravenscans.md) |
 | stonescape | [specs/sites/stonescape.md](specs/sites/stonescape.md) |
+| thunderscans | [specs/sites/thunderscans.md](specs/sites/thunderscans.md) |
 | weebcentral | [specs/sites/weebcentral.md](specs/sites/weebcentral.md) |
 
 ## Format
