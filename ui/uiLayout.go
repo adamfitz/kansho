@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"kansho/mangadex"
 	"kansho/refreshpool"
 
 	"fyne.io/fyne/v2"
@@ -75,6 +76,12 @@ func BuildMainLayout(window fyne.Window) fyne.CanvasObject {
 	// Displays chapters for the currently selected manga with per-chapter
 	// progress bars and download controls
 	chapterListView := NewChapterListView(state, downloadQueueButton)
+
+	// The MangaDex (i) info button renders the title information in the chapter
+	// list pane instead of a separate dialog window.
+	mangaListView.SetInfoDisplayHandler(func(info *mangadex.MangaInfo, bookmarkTitle string) {
+		chapterListView.ShowMangaInfo(info, bookmarkTitle)
+	})
 
 	// Status bar (bottom of the window)
 	// Mirrors the download queue page's status bar: it shows the selected

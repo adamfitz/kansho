@@ -18,3 +18,12 @@ var redNoEntryResource = &fyne.StaticResource{
 	StaticName:    "red_no_entry.svg",
 	StaticContent: []byte(`<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="#f44336" stroke-width="3"/><path d="M6.5 6.5 L17.5 17.5" fill="none" stroke="#f44336" stroke-width="3" stroke-linecap="round"/></svg>`),
 }
+
+// mangaInfoIconResource is the "info" (i) icon shown on each manga title row.
+// It opens the MangaDex title information window for that manga. Rendered
+// through widget.Icon so it has no button chrome and no hover highlight,
+// matching the per-chapter action icons.
+var mangaInfoIconResource = &fyne.StaticResource{
+	StaticName:    "manga_info.svg",
+	StaticContent: []byte(`<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="#5c6bc0" stroke-width="3"/><path d="M12 10.5 L12 16.5" stroke="#5c6bc0" stroke-width="2.5" stroke-linecap="round"/><circle cx="12" cy="7.8" r="1.3" fill="#5c6bc0"/></svg>`),
+}

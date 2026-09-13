@@ -15,6 +15,7 @@ import (
 	"kansho/cf"
 	"kansho/config"
 	"kansho/downloader"
+	"kansho/mangadex"
 	"kansho/parser"
 	"kansho/refreshpool"
 	"kansho/sites"
@@ -90,6 +91,17 @@ type ChapterListView struct {
 	// tests); when attached, it shows the selected manga's site and chapter
 	// counts.
 	statusBar *MainStatusBar
+
+	// MangaDex title information pane. The chapter list card is temporarily
+	// replaced by the info pane when the user clicks the (i) info button; the
+	// card's chapter-list chrome (header/footer) is hidden while it is shown.
+	inInfoMode     bool
+	infoBackButton *widget.Button
+	infoTitleLabel *widget.Label
+	chapterTop     *fyne.Container
+	chapterBottom  *fyne.Container
+	infoTop        *fyne.Container
+	infoBottom     *fyne.Container
 }
 
 func NewChapterListView(state *KanshoAppState, downloadQueueButton *DownloadQueueButton) *ChapterListView {
@@ -152,16 +164,38 @@ func NewChapterListView(state *KanshoAppState, downloadQueueButton *DownloadQueu
 		),
 	)
 
+	// Chapter-list chrome (header + footer). Both top and bottom are stacks
+	// with a chapter variant and an info-pane variant; Fyne skips hidden stack
+	// children, so showing one hides the other without manual layout.
+	view.chapterTop = container.NewVBox(
+		NewBoldLabel("Chapter List"),
+		NewSeparator(),
+		view.selectedMangaLabel,
+	)
+	view.chapterBottom = container.NewVBox(
+		NewSeparator(),
+		bottomBar,
+	)
+
+	// Info-pane chrome: a back button + heading at the top, a spacer footer at
+	// the bottom. Hidden until the user asks for MangaDex title info.
+	view.infoTitleLabel = widget.NewLabel("MangaDex Title Information")
+	view.infoTitleLabel.TextStyle = fyne.TextStyle{Bold: true}
+	view.infoTitleLabel.Truncation = fyne.TextTruncateEllipsis
+	view.infoBackButton = widget.NewButtonWithIcon("Back to Chapter List", theme.NavigateBackIcon(), func() {
+		view.backToChapterList()
+	})
+	view.infoTop = container.NewVBox(
+		container.NewBorder(nil, nil, view.infoBackButton, nil, view.infoTitleLabel),
+		NewSeparator(),
+	)
+	view.infoBottom = container.NewVBox(NewSeparator())
+	view.infoTop.Hide()
+	view.infoBottom.Hide()
+
 	cardContent := container.NewBorder(
-		container.NewVBox(
-			NewBoldLabel("Chapter List"),
-			NewSeparator(),
-			view.selectedMangaLabel,
-		),
-		container.NewVBox(
-			NewSeparator(),
-			bottomBar,
-		),
+		container.NewStack(view.chapterTop, view.infoTop),
+		container.NewStack(view.chapterBottom, view.infoBottom),
 		nil,
 		nil,
 		view.contentContainer,
@@ -221,6 +255,63 @@ func (v *ChapterListView) SetStatusBar(bar *MainStatusBar) {
 	bar.SetIdle()
 }
 
+// ShowMangaInfo replaces the chapter list pane with the MangaDex title
+// information for the given title. The chapter-list chrome is swapped for the
+// info-pane chrome, and the user returns to the chapter list via the heading
+// back button.
+func (v *ChapterListView) ShowMangaInfo(info *mangadex.MangaInfo, bookmarkTitle string) {
+	if info == nil {
+		return
+	}
+	v.inInfoMode = true
+	v.infoTitleLabel.SetText("MangaDex Title Information")
+	v.infoTop.Show()
+	v.infoBottom.Show()
+	v.chapterTop.Hide()
+	v.chapterBottom.Hide()
+
+	infoContent := buildMangaInfoContent(v.state.Window, func(o fyne.CanvasObject) {
+		v.setInfoContent(o)
+	}, info, bookmarkTitle, "en")
+	v.setInfoContent(infoContent)
+
+	v.Card.Refresh()
+}
+
+// setInfoContent swaps the card's center content (used to redraw the info pane
+// after a refresh).
+func (v *ChapterListView) setInfoContent(o fyne.CanvasObject) {
+	v.contentContainer.Objects = []fyne.CanvasObject{o}
+	v.contentContainer.Refresh()
+}
+
+// backToChapterList restores the chapter list chrome and re-renders the
+// chapters for the current selection.
+func (v *ChapterListView) backToChapterList() {
+	v.restoreChapterChrome()
+	if v.state.SelectedMangaID >= 0 {
+		v.onMangaSelected(v.state.SelectedMangaID)
+	} else {
+		v.showNoSelection()
+	}
+}
+
+// restoreChapterChrome switches the card header/footer back from the info pane
+// to the chapter list. Used when leaving the info pane, or automatically when
+// the user selects a different manga. It does not touch the center content,
+// which the caller re-renders.
+func (v *ChapterListView) restoreChapterChrome() {
+	if !v.inInfoMode {
+		return
+	}
+	v.inInfoMode = false
+	v.infoTop.Hide()
+	v.infoBottom.Hide()
+	v.chapterTop.Show()
+	v.chapterBottom.Show()
+	v.Card.Refresh()
+}
+
 // updateStatusBar refreshes the main window status bar for the currently
 // selected manga. The site and the number of downloaded chapters are always
 // shown. The number of not-downloaded chapters is only shown once remote
@@ -265,6 +356,9 @@ func (v *ChapterListView) updateStatusBar() {
 func (v *ChapterListView) onMangaSelected(id int) {
 	v.loadGeneration++
 	v.refreshing = false
+
+	// Selecting a different manga always exits the MangaDex info pane.
+	v.restoreChapterChrome()
 
 	manga := v.state.GetSelectedManga()
 	if manga == nil {
@@ -899,6 +993,11 @@ func (v *ChapterListView) stopLoading() {
 func (v *ChapterListView) showNoSelection() {
 	v.loadGeneration++
 	v.refreshing = false
+
+	// A cleared selection (e.g. the selected manga was deleted) also exits the
+	// MangaDex info pane.
+	v.restoreChapterChrome()
+
 	v.chapters = []*ChapterItem{}
 	v.downloadAllButton.Disable()
 	v.refreshButton.Disable()

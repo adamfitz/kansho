@@ -17,6 +17,7 @@ This directory contains Gherkin-style specifications for the kansho manga downlo
 | [Manga Bookmarks](specs/manga-bookmarks/spec.md) | `specs/manga-bookmarks/spec.md` | Bookmark CRUD, JSON persistence, config directory, import/export, log file setup |
 | [Image Processing](specs/image-processing/spec.md) | `specs/image-processing/spec.md` | Image download, WebP/PNG/GIF→JPEG conversion, CBZ archive creation, 1500ms rate limiting, context-aware sleep, shared keep-alive clients, Referer-based image download |
 | [MangaDex](specs/mangadex/spec.md) | `specs/mangadex/spec.md` | MangaDex API integration, non-spoofed User-Agent policy, chapter/image endpoints, URL parsing, chapter filtering |
+| [MangaDex Title Info](specs/mangadex-title-info/spec.md) | `specs/mangadex-title-info/spec.md` | Per-manga info (i) button, MangaDex title lookup dialog (50-result pages + infinite scroll + manual URL/ID), info pane in the chapter list card with copyable fields and clickable link, language dropdown with English default, local SQLite database, Database menu (Backup/Restore/Compact) |
 | [Validation](specs/validation/spec.md) | `specs/validation/spec.md` | Add-manga input validation against site required fields |
 
 ## Site Plugin Documentation

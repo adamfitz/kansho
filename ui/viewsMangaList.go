@@ -12,6 +12,8 @@ import (
 	"fyne.io/fyne/v2/dialog"
 	//"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+
+	"kansho/mangadex"
 )
 
 // enterButton is a button that also activates when the Enter key is pressed
@@ -49,6 +51,8 @@ type MangaListView struct {
 	selectedIndex int
 	state         *KanshoAppState
 	editMangaView *EditMangaView
+
+	infoDisplayHandler func(info *mangadex.MangaInfo, bookmarkTitle string)
 
 	onUnfoldEdit func()
 	onToggleEdit func()
@@ -112,13 +116,22 @@ func NewMangaListView(state *KanshoAppState) *MangaListView {
 			return len(view.state.MangaData.Manga)
 		},
 		func() fyne.CanvasObject {
+			// Each row is a border layout: the title label fills the row and a
+			// plain (i) info icon sits on the right-hand side, mirroring the
+			// per-chapter action icons.
 			label := widget.NewLabel("template")
 			label.Truncation = fyne.TextTruncateEllipsis
-			return label
+			infoButton := newIconButton(mangaInfoIconResource)
+			return container.NewBorder(nil, nil, nil, infoButton, label)
 		},
 		func(id widget.ListItemID, item fyne.CanvasObject) {
-			label := item.(*widget.Label)
+			row := item.(*fyne.Container)
+			label := row.Objects[0].(*widget.Label)
+			infoButton := row.Objects[1].(*iconButton)
 			label.SetText(view.state.MangaData.Manga[id].Title)
+			infoButton.OnTapped = func() {
+				view.onInfoButtonClicked(int(id))
+			}
 		},
 	)
 
@@ -382,4 +395,26 @@ func (v *MangaListView) clearSearch() {
 	v.editButton.Disable()
 	v.dirButton.Disable()
 	v.siteButton.Disable()
+}
+
+// onInfoButtonClicked opens the MangaDex title information for the manga at the
+// given list index, either from the local database or through the lookup
+// dialog when no local record exists yet. The information is rendered in the
+// chapter list pane via the display handler.
+func (v *MangaListView) onInfoButtonClicked(mangaIndex int) {
+	if mangaIndex < 0 || mangaIndex >= len(v.state.MangaData.Manga) {
+		return
+	}
+	if v.infoDisplayHandler == nil {
+		return
+	}
+	manga := v.state.MangaData.Manga[mangaIndex]
+	ShowMangaTitleInfo(manga, v.state.Window, v.infoDisplayHandler)
+}
+
+// SetInfoDisplayHandler registers the callback that renders a MangaDex title
+// record. It is wired to the chapter list pane so title info is displayed in
+// the main window instead of a separate dialog window.
+func (v *MangaListView) SetInfoDisplayHandler(fn func(info *mangadex.MangaInfo, bookmarkTitle string)) {
+	v.infoDisplayHandler = fn
 }
