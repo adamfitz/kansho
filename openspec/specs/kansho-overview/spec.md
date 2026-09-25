@@ -21,7 +21,7 @@ The system SHALL be a cross-platform desktop application built with Go, using th
 - WHEN the user views the menu bar
 - THEN a File menu SHALL exist with a Logs option
 - AND a Bookmarks menu SHALL exist with Bookmarks, Export Bookmarks, and Import Bookmarks options
-- AND a Database menu SHALL exist with Backup, Restore, and Compact options for the MangaDex title database
+- AND a Database menu SHALL exist with Backup, Restore, and Compact options for the local MangaDex title and manga chapter-statistics database
 - AND a Help menu SHALL exist with an About option
 
 #### Scenario: Keyboard shortcuts

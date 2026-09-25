@@ -1,7 +1,7 @@
 # mangadex-title-info Specification
 
 ## Purpose
-Provide MangaDex title information (title, alt titles, description, author, artist, status, demographic, year, tags, cover, URL) for any bookmarked manga through an info (i) button on each manga list row. Title info is fetched from the MangaDex API, stored in a local SQLite database, and displayed in the main window's chapter list pane (in place of the chapter list) with copyable fields, a clickable MangaDex URL, and a language selector.
+Provide MangaDex title information (title, alt titles, description, author, artist, status, demographic, year, tags, cover, URL) for any bookmarked manga through an info (i) button on each manga list row. Title info is fetched from the MangaDex API, stored in a local SQLite database, and displayed in the main window's chapter list pane (in place of the chapter list) with copyable fields, a clickable MangaDex URL, and a language selector. The same SQLite file also stores per-source manga chapter-count snapshots for all supported sites; remote chapter URLs and chapter rows remain separate from these aggregates.
 
 ## Requirements
 
@@ -15,13 +15,14 @@ The manga list SHALL show an info (i) button to the right of each manga title ro
 - AND the info icon SHALL be rendered without button chrome (mirroring the per-chapter action icons)
 
 ### Requirement: Local Title Database
-MangaDex title information SHALL be persisted in a SQLite database stored in the kansho config directory (`~/.config/kansho/mangadex.db`).
+MangaDex title information and generic per-manga chapter-count snapshots SHALL be persisted in a SQLite database stored in the kansho config directory (`~/.config/kansho/mangadex.db`).
 
 #### Scenario: Database location and schema
 - GIVEN the user invokes the info button
 - WHEN the database does not exist yet
-- THEN the database SHALL be created on first use with a `manga_title` table
-- AND the database SHALL be a separate artifact from `bookmarks.json` (bookmarks remain JSON; title info lives only in the database)
+- THEN the database SHALL be created on first use with `manga_title`, `manga_title_lookup`, and `manga_chapter_stats` tables
+- AND `manga_chapter_stats` SHALL key records by a stable manga source identity and store title, site, URL, total chapters, downloaded chapters, not-downloaded chapters, and the update timestamp
+- AND the database SHALL be a separate artifact from `bookmarks.json` (bookmarks remain JSON; title info and aggregate chapter counts live in the database)
 
 #### Scenario: Detail fields stored
 - GIVEN a MangaDex title is fetched
@@ -167,7 +168,7 @@ The information pane SHALL default to English and let the user choose from any l
 - AND SHALL persist the fetched record to the local database
 
 ### Requirement: Database Menu
-The application menu bar SHALL include a "Database" menu next to Bookmarks with Backup, Restore, and Compact options for the MangaDex title database.
+The application menu bar SHALL include a "Database" menu next to Bookmarks with Backup, Restore, and Compact options for the local database containing MangaDex title information and manga chapter-count snapshots.
 
 #### Scenario: Backup database
 - GIVEN the user selects Database → Backup

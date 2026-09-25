@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"log"
@@ -52,6 +53,11 @@ type ChapterItem struct {
 	Progress   float64
 }
 
+type chapterStatsRepository interface {
+	UpsertChapterStats(string, mangadex.ChapterStats) error
+	LookupChapterStats(string) (*mangadex.ChapterStats, error)
+}
+
 // ChapterListView is the right-hand card that shows the chapters for the
 // currently selected manga. Each chapter row has three panes:
 //   - Left:  the chapter name
@@ -81,11 +87,13 @@ type ChapterListView struct {
 	cfDialogShown       map[string]bool
 	loadGeneration      int
 	refreshing          bool
-	// remoteChapters caches, per manga title, the chapters fetched from the
-	// target site (chapter name -> download URL). It persists for the lifetime
-	// of the application so refreshed chapters stay visible across manga
-	// switches.
-	remoteChapters map[string]map[string]string
+	// remoteChapters caches, per manga source identity, the chapters fetched
+	// from the target site (chapter name -> download URL). It persists for the
+	// lifetime of the application so refreshed chapters stay visible across
+	// manga switches.
+	remoteChapters    map[string]map[string]string
+	chapterStats      *mangadex.ChapterStats
+	chapterStatsStore chapterStatsRepository
 
 	// statusBar is the main window's status bar. It is optional (nil in
 	// tests); when attached, it shows the selected manga's site and chapter
@@ -214,6 +222,9 @@ func NewChapterListView(state *KanshoAppState, downloadQueueButton *DownloadQueu
 		},
 		func(task *config.DownloadTask) {
 			fyne.Do(func() {
+				if task.Status == "completed" {
+					view.updateStoredDownloadedCount(&task.Manga)
+				}
 				if task.Status == "waiting_cf" && !view.cfDialogShown[task.ID] {
 					view.showCFDialog(task)
 					view.cfDialogShown[task.ID] = true
@@ -252,7 +263,7 @@ func NewChapterListView(state *KanshoAppState, downloadQueueButton *DownloadQueu
 // change. The bar is optional; without it the view works exactly as before.
 func (v *ChapterListView) SetStatusBar(bar *MainStatusBar) {
 	v.statusBar = bar
-	bar.SetIdle()
+	v.updateStatusBar()
 }
 
 // ShowMangaInfo replaces the chapter list pane with the MangaDex title
@@ -312,12 +323,163 @@ func (v *ChapterListView) restoreChapterChrome() {
 	v.Card.Refresh()
 }
 
+func mangaSourceKey(manga *config.Bookmarks) string {
+	if manga == nil {
+		return ""
+	}
+	site := strings.ToLower(strings.TrimSpace(manga.Site))
+	target := strings.TrimSpace(manga.Url)
+	if target == "" {
+		target = strings.ToLower(strings.TrimSpace(manga.Title))
+	}
+	sum := sha256.Sum256([]byte(site + "\x00" + target))
+	return fmt.Sprintf("%x", sum)
+}
+
+func (v *ChapterListView) getChapterStatsStore() (chapterStatsRepository, error) {
+	if v.chapterStatsStore != nil {
+		return v.chapterStatsStore, nil
+	}
+	return mangadex.GetStore()
+}
+
+func (v *ChapterListView) loadChapterStats(manga *config.Bookmarks) {
+	v.chapterStats = nil
+	store, err := v.getChapterStatsStore()
+	if err != nil {
+		log.Printf("[UI] Failed to open database for chapter counts of %s: %v", manga.Title, err)
+		return
+	}
+	stats, err := store.LookupChapterStats(mangaSourceKey(manga))
+	if err != nil {
+		log.Printf("[UI] Failed to load chapter counts for %s: %v", manga.Title, err)
+		return
+	}
+	v.chapterStats = stats
+}
+
+func chapterStatsFromItems(manga *config.Bookmarks, items []*ChapterItem) mangadex.ChapterStats {
+	downloaded := 0
+	for _, item := range items {
+		if item.Downloaded {
+			downloaded++
+		}
+	}
+	return mangadex.ChapterStats{
+		Title:         manga.Title,
+		Site:          manga.Site,
+		URL:           manga.Url,
+		Total:         len(items),
+		Downloaded:    downloaded,
+		NotDownloaded: len(items) - downloaded,
+	}
+}
+
+func chapterStatsWithDownloaded(manga *config.Bookmarks, current mangadex.ChapterStats, downloaded int) mangadex.ChapterStats {
+	total := current.Total
+	if downloaded > total {
+		total = downloaded
+	}
+	return mangadex.ChapterStats{
+		Title:         manga.Title,
+		Site:          manga.Site,
+		URL:           manga.Url,
+		Total:         total,
+		Downloaded:    downloaded,
+		NotDownloaded: total - downloaded,
+	}
+}
+
+func chapterStatsEqual(a, b mangadex.ChapterStats) bool {
+	return a.Title == b.Title && a.Site == b.Site && a.URL == b.URL &&
+		a.Total == b.Total && a.Downloaded == b.Downloaded &&
+		a.NotDownloaded == b.NotDownloaded
+}
+
+func (v *ChapterListView) saveChapterStats(manga *config.Bookmarks, stats mangadex.ChapterStats) (*mangadex.ChapterStats, error) {
+	store, err := v.getChapterStatsStore()
+	if err != nil {
+		return nil, err
+	}
+	key := mangaSourceKey(manga)
+	if err := store.UpsertChapterStats(key, stats); err != nil {
+		return nil, err
+	}
+	return store.LookupChapterStats(key)
+}
+
+func downloadedChapterCount(items []*ChapterItem) int {
+	downloaded := 0
+	for _, item := range items {
+		if item.Downloaded {
+			downloaded++
+		}
+	}
+	return downloaded
+}
+
+func (v *ChapterListView) syncSelectedChapterStats() {
+	if v.chapterStats == nil {
+		return
+	}
+	manga := v.state.GetSelectedManga()
+	if manga == nil {
+		return
+	}
+	stats := chapterStatsWithDownloaded(manga, *v.chapterStats, downloadedChapterCount(v.chapters))
+	if chapterStatsEqual(stats, *v.chapterStats) {
+		return
+	}
+	saved, err := v.saveChapterStats(manga, stats)
+	if err != nil {
+		log.Printf("[UI] Failed to update chapter counts for %s: %v", manga.Title, err)
+		return
+	}
+	if saved != nil {
+		v.chapterStats = saved
+	}
+}
+
+func (v *ChapterListView) updateStoredDownloadedCount(manga *config.Bookmarks) {
+	store, err := v.getChapterStatsStore()
+	if err != nil {
+		log.Printf("[UI] Failed to open database for chapter counts of %s: %v", manga.Title, err)
+		return
+	}
+	key := mangaSourceKey(manga)
+	current, err := store.LookupChapterStats(key)
+	if err != nil {
+		log.Printf("[UI] Failed to load chapter counts for %s: %v", manga.Title, err)
+		return
+	}
+	if current == nil {
+		return
+	}
+	localNames, err := readLocalChapterNames(manga)
+	if err != nil {
+		return
+	}
+	stats := chapterStatsWithDownloaded(manga, *current, len(localNames))
+	if chapterStatsEqual(stats, *current) {
+		return
+	}
+	if err := store.UpsertChapterStats(key, stats); err != nil {
+		log.Printf("[UI] Failed to update chapter counts for %s: %v", manga.Title, err)
+		return
+	}
+	saved, err := store.LookupChapterStats(key)
+	if err != nil {
+		log.Printf("[UI] Failed to reload chapter counts for %s: %v", manga.Title, err)
+		return
+	}
+	if selected := v.state.GetSelectedManga(); saved != nil && mangaSourceKey(selected) == key {
+		v.chapterStats = saved
+	}
+}
+
 // updateStatusBar refreshes the main window status bar for the currently
-// selected manga. The site and the number of downloaded chapters are always
-// shown. The number of not-downloaded chapters is only shown once remote
-// chapters have been fetched for this manga — i.e. after the user pressed
-// Refresh on the chapter list (the per-manga remote cache is only populated by
-// a successful refresh).
+// selected manga. Chapter counts are shown only from a complete snapshot loaded
+// from the local database.
 func (v *ChapterListView) updateStatusBar() {
 	if v.statusBar == nil {
 		return
@@ -329,14 +491,6 @@ func (v *ChapterListView) updateStatusBar() {
 		return
 	}
 
-	downloaded := 0
-	for _, ch := range v.chapters {
-		if ch.Downloaded {
-			downloaded++
-		}
-	}
-	notDownloaded := len(v.chapters) - downloaded
-
 	site := manga.Site
 	if site == "" && manga.Url != "" {
 		if host, err := url.Parse(manga.Url); err == nil && host.Hostname() != "" {
@@ -344,8 +498,15 @@ func (v *ChapterListView) updateStatusBar() {
 		}
 	}
 
-	_, refreshed := v.remoteChapters[manga.Title]
-	v.statusBar.ShowManga(site, downloaded, notDownloaded, refreshed)
+	var counts *chapterCounts
+	if v.chapterStats != nil {
+		counts = &chapterCounts{
+			Total:         v.chapterStats.Total,
+			Downloaded:    v.chapterStats.Downloaded,
+			NotDownloaded: v.chapterStats.NotDownloaded,
+		}
+	}
+	v.statusBar.ShowManga(site, counts)
 }
 
 // onMangaSelected rebuilds the chapter list for the newly selected manga from
@@ -373,7 +534,9 @@ func (v *ChapterListView) onMangaSelected(id int) {
 	v.chapterList.Refresh()
 	v.startLoading()
 
+	v.chapterStats = nil
 	v.presentChapters(manga)
+	v.loadChapterStats(manga)
 
 	v.refreshAfterTaskChange()
 	v.refreshButton.Enable()
@@ -385,8 +548,12 @@ func (v *ChapterListView) onMangaSelected(id int) {
 // presentChapters builds the displayed chapter list for the selected manga from
 // its on-disk chapters merged with the manga's cached remote chapters.
 func (v *ChapterListView) presentChapters(manga *config.Bookmarks) {
-	items := buildChapterItems(localChapterNames(manga), v.remoteChapters[manga.Title])
+	items := buildChapterItems(localChapterNames(manga), v.remoteChapters[mangaSourceKey(manga)])
 
+	v.presentChapterItems(items)
+}
+
+func (v *ChapterListView) presentChapterItems(items []*ChapterItem) {
 	v.chapters = items
 	if len(items) == 0 {
 		v.contentContainer.Objects = []fyne.CanvasObject{
@@ -401,16 +568,21 @@ func (v *ChapterListView) presentChapters(manga *config.Bookmarks) {
 
 // localChapterNames lists the chapter CBZ files for the manga that exist on
 // disk, sorted by name.
-func localChapterNames(manga *config.Bookmarks) []string {
+func readLocalChapterNames(manga *config.Bookmarks) ([]string, error) {
 	if manga == nil || manga.Location == "" {
-		return nil
+		return nil, nil
 	}
 	names, err := parser.LocalChapterList(manga.Location)
 	if err != nil {
 		log.Printf("[UI] Failed to list local chapters for %s: %v", manga.Title, err)
-		return nil
+		return nil, err
 	}
 	sort.Strings(names)
+	return names, nil
+}
+
+func localChapterNames(manga *config.Bookmarks) []string {
+	names, _ := readLocalChapterNames(manga)
 	return names
 }
 
@@ -492,7 +664,8 @@ func (v *ChapterListView) onRefreshClicked() {
 	v.startLoading()
 
 	gen := v.loadGeneration
-	title, siteName, targetURL := manga.Title, manga.Site, manga.Url
+	bookmark := *manga
+	title, siteName, targetURL := bookmark.Title, bookmark.Site, bookmark.Url
 
 	submitted := refreshpool.Get().Submit(&refreshpool.Task{
 		Site: siteName,
@@ -517,19 +690,7 @@ func (v *ChapterListView) onRefreshClicked() {
 				return err
 			}
 			fyne.Do(func() {
-				if v.loadGeneration != gen || v.state.SelectedMangaID < 0 {
-					return // user navigated away; discard stale result
-				}
-
-				// Persist the fetched remote chapters in the per-manga cache
-				// and merge them into the displayed list. The cache keeps them
-				// visible whenever the user switches back to this manga.
-				v.mergeRemoteChapters(title, remote)
-
-				v.contentContainer.Objects = []fyne.CanvasObject{v.chapterList}
-				v.contentContainer.Refresh()
-				v.refreshAfterTaskChange()
-				v.updateStatusBar()
+				v.applyRefreshedChapters(&bookmark, remote, gen)
 			})
 			return nil
 		},
@@ -573,45 +734,43 @@ func (v *ChapterListView) finishRefresh(gen int, cfURL string) {
 	}
 }
 
-// mergeRemoteChapters stores fetched remote chapters in the per-manga cache
-// (which persists for the lifetime of the application) and merges them into the
-// currently displayed chapter list.
-func (v *ChapterListView) mergeRemoteChapters(mangaTitle string, remote map[string]string) {
-	cached := v.remoteChapters[mangaTitle]
+func (v *ChapterListView) cacheRemoteChapters(key string, remote map[string]string) {
+	cached := v.remoteChapters[key]
 	if cached == nil {
 		cached = make(map[string]string)
-		v.remoteChapters[mangaTitle] = cached
+		v.remoteChapters[key] = cached
 	}
-	for name, url := range remote {
-		cached[name] = url
+	for name, chapterURL := range remote {
+		cached[name] = chapterURL
 	}
+}
 
-	existing := make(map[string]*ChapterItem, len(v.chapters))
-	for _, ch := range v.chapters {
-		existing[ch.Name] = ch
-	}
-
-	added := false
-	for name, url := range cached {
-		if ch, ok := existing[name]; ok {
-			if ch.URL == "" {
-				ch.URL = url
-			}
-			continue
+func (v *ChapterListView) applyRefreshedChapters(manga *config.Bookmarks, remote map[string]string, gen int) {
+	key := mangaSourceKey(manga)
+	v.cacheRemoteChapters(key, remote)
+	localNames, localErr := readLocalChapterNames(manga)
+	items := buildChapterItems(localNames, v.remoteChapters[key])
+	var saved *mangadex.ChapterStats
+	if localErr == nil {
+		var err error
+		saved, err = v.saveChapterStats(manga, chapterStatsFromItems(manga, items))
+		if err != nil {
+			log.Printf("[UI] Failed to store chapter counts for %s: %v", manga.Title, err)
 		}
-		v.chapters = append(v.chapters, &ChapterItem{
-			Name:  name,
-			URL:   url,
-			State: chapterNotDownloaded,
-		})
-		added = true
 	}
 
-	if added {
-		sort.Slice(v.chapters, func(i, j int) bool {
-			return v.chapters[i].Name < v.chapters[j].Name
-		})
+	selected := v.state.GetSelectedManga()
+	isSelected := selected != nil && mangaSourceKey(selected) == key
+	if saved != nil && isSelected {
+		v.chapterStats = saved
 	}
+	if v.loadGeneration != gen || !isSelected {
+		return
+	}
+
+	v.presentChapterItems(items)
+	v.refreshAfterTaskChange()
+	v.updateStatusBar()
 }
 
 // createChapterRow builds the template object for a chapter list row. It is
@@ -868,7 +1027,9 @@ func (v *ChapterListView) refreshAfterTaskChange() {
 	// happen before the UI processes the "completed" update, so the queue alone
 	// cannot be relied on to know that a download succeeded. The disk is the
 	// source of truth for whether a chapter has been downloaded.
-	v.reconcileDownloadedChapters()
+	if v.reconcileDownloadedChapters() {
+		v.syncSelectedChapterStats()
+	}
 
 	// Reset to the on-disk truth
 	for _, ch := range v.chapters {
@@ -917,18 +1078,23 @@ func (v *ChapterListView) refreshAfterTaskChange() {
 // chapter's completed queue task is removed from the queue as soon as it
 // finishes, so the UI cannot rely on seeing the task to know the download
 // succeeded.
-func (v *ChapterListView) reconcileDownloadedChapters() {
+func (v *ChapterListView) reconcileDownloadedChapters() bool {
 	manga := v.state.GetSelectedManga()
-	if manga == nil || manga.Location == "" {
-		return
+	if manga == nil {
+		return false
 	}
 	onDisk := make(map[string]bool)
-	for _, name := range localChapterNames(manga) {
+	localNames, err := readLocalChapterNames(manga)
+	if err != nil {
+		return false
+	}
+	for _, name := range localNames {
 		onDisk[name] = true
 	}
 	for _, ch := range v.chapters {
 		ch.Downloaded = onDisk[ch.Name]
 	}
+	return true
 }
 
 // findChapter returns the chapter item for the given manga title and chapter,
@@ -999,6 +1165,7 @@ func (v *ChapterListView) showNoSelection() {
 	v.restoreChapterChrome()
 
 	v.chapters = []*ChapterItem{}
+	v.chapterStats = nil
 	v.downloadAllButton.Disable()
 	v.refreshButton.Disable()
 	v.selectedMangaLabel.SetText("")

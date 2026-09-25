@@ -13,7 +13,7 @@ import (
 	"kansho/parser"
 )
 
-// defaultDBPath returns the current MangaDex database path.
+// defaultDBPath returns the current Kansho database path.
 func defaultDBPath() string {
 	configDir, err := parser.ExpandPath("~/.config/kansho")
 	if err != nil {
@@ -22,12 +22,12 @@ func defaultDBPath() string {
 	return filepath.Join(configDir, "mangadex.db")
 }
 
-// ShowDatabaseBackupDialog writes a VACUUM snapshot of the MangaDex title
-// database to a user-chosen file.
+// ShowDatabaseBackupDialog writes a VACUUM snapshot of the local title and
+// chapter-statistics database to a user-chosen file.
 func ShowDatabaseBackupDialog(_ fyne.App, window fyne.Window) {
 	store, err := mangadex.GetStore()
 	if err != nil {
-		dialog.ShowError(fmt.Errorf("cannot open MangaDex database: %v", err), window)
+		dialog.ShowError(fmt.Errorf("cannot open Kansho database: %v", err), window)
 		return
 	}
 
@@ -46,7 +46,7 @@ func ShowDatabaseBackupDialog(_ fyne.App, window fyne.Window) {
 			return
 		}
 		dialog.ShowInformation("Backup Complete",
-			fmt.Sprintf("MangaDex title database backed up to %s", dest), window)
+			fmt.Sprintf("local title and chapter-statistics database backed up to %s", dest), window)
 	}, window)
 
 	saveDialog.SetFileName("mangadex-backup.db")
@@ -60,13 +60,14 @@ func ShowDatabaseBackupDialog(_ fyne.App, window fyne.Window) {
 	saveDialog.Show()
 }
 
-// ShowDatabaseRestoreDialog replaces the MangaDex title database with the file
-// chosen by the user. The candidate file must pass schema validation and an
-// integrity check; the current database is kept as mangadex.pre-restore.db.
+// ShowDatabaseRestoreDialog replaces the local title and chapter-statistics
+// database with the file chosen by the user. The candidate file must pass
+// schema validation and an integrity check; the current database is kept as
+// mangadex.pre-restore.db.
 func ShowDatabaseRestoreDialog(_ fyne.App, window fyne.Window) {
 	store, err := mangadex.GetStore()
 	if err != nil {
-		dialog.ShowError(fmt.Errorf("cannot open MangaDex database: %v", err), window)
+		dialog.ShowError(fmt.Errorf("cannot open Kansho database: %v", err), window)
 		return
 	}
 
@@ -88,7 +89,7 @@ func ShowDatabaseRestoreDialog(_ fyne.App, window fyne.Window) {
 
 		dialog.ShowConfirm(
 			"Restore MangaDex Database",
-			fmt.Sprintf("Replace the current MangaDex title database with %s?\nThe current database is saved as mangadex.pre-restore.db before the swap.", path),
+			fmt.Sprintf("Replace the current local title and chapter-statistics database with %s?\nThe current database is saved as mangadex.pre-restore.db before the swap.", path),
 			func(confirmed bool) {
 				if !confirmed {
 					return
@@ -117,21 +118,22 @@ func doRestore(store databaseStore, src string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("restore succeeded but count failed: %v", err)
 	}
-	return fmt.Sprintf("MangaDex title database restored successfully (%d titles). The previous database is at %s",
+	return fmt.Sprintf("local title and chapter-statistics database restored successfully (%d titles). The previous database is at %s",
 		count, filepath.Join(filepath.Dir(defaultDBPath()), "mangadex.pre-restore.db")), nil
 }
 
-// ShowDatabaseCompactDialog optimises and shrinks the MangaDex title database.
+// ShowDatabaseCompactDialog optimises and shrinks the local title and
+// chapter-statistics database.
 func ShowDatabaseCompactDialog(_ fyne.App, window fyne.Window) {
 	store, err := mangadex.GetStore()
 	if err != nil {
-		dialog.ShowError(fmt.Errorf("cannot open MangaDex database: %v", err), window)
+		dialog.ShowError(fmt.Errorf("cannot open Kansho database: %v", err), window)
 		return
 	}
 
 	dialog.ShowConfirm(
 		"Compact MangaDex Database",
-		"Compact the MangaDex title database (PRAGMA optimize + VACUUM)? This frees unused space and is safe to run at any time.",
+		"Compact the local title and chapter-statistics database (PRAGMA optimize + VACUUM)? This frees unused space and is safe to run at any time.",
 		func(confirmed bool) {
 			if !confirmed {
 				return
@@ -145,7 +147,7 @@ func ShowDatabaseCompactDialog(_ fyne.App, window fyne.Window) {
 				dialog.ShowError(fmt.Errorf("integrity check returned %q after compact", integrity), window)
 				return
 			}
-			dialog.ShowInformation("Database Compacted", "MangaDex title database compacted successfully.", window)
+			dialog.ShowInformation("Database Compacted", "local title and chapter-statistics database compacted successfully.", window)
 		},
 		window,
 	)

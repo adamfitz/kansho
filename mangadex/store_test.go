@@ -200,10 +200,99 @@ func TestSetTitleAliasUpdatesMapping(t *testing.T) {
 	}
 }
 
+func TestChapterStatsRoundTripAndReopen(t *testing.T) {
+	store := tempStore(t)
+	key := "source-key"
+	stats := ChapterStats{
+		Title:         "One Piece",
+		Site:          "mangadex",
+		URL:           "https://mangadex.org/title/a1",
+		Total:         12,
+		Downloaded:    4,
+		NotDownloaded: 8,
+	}
+
+	missing, err := store.LookupChapterStats(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if missing != nil {
+		t.Fatalf("expected no initial chapter stats, got %+v", missing)
+	}
+	if err := store.UpsertChapterStats(key, stats); err != nil {
+		t.Fatalf("UpsertChapterStats: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	reopened, err := OpenPath(store.path)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	t.Cleanup(func() { reopened.Close() })
+	got, err := reopened.LookupChapterStats(key)
+	if err != nil {
+		t.Fatalf("LookupChapterStats: %v", err)
+	}
+	if got == nil || *got != stats {
+		t.Fatalf("chapter stats after reopen = %+v, want %+v", got, stats)
+	}
+
+	stats.Downloaded = 5
+	stats.NotDownloaded = 7
+	if err := reopened.UpsertChapterStats(key, stats); err != nil {
+		t.Fatalf("update chapter stats: %v", err)
+	}
+	got, err = reopened.LookupChapterStats(key)
+	if err != nil || got == nil || got.Downloaded != 5 || got.NotDownloaded != 7 {
+		t.Fatalf("updated chapter stats = %+v, err = %v", got, err)
+	}
+}
+
+func TestEnsureSchemaMigratesExistingDatabase(t *testing.T) {
+	store := tempStore(t)
+	if _, err := store.conn.Exec(`DROP TABLE manga_chapter_stats; PRAGMA user_version = 2;`); err != nil {
+		t.Fatalf("prepare version 2 database: %v", err)
+	}
+	if err := store.EnsureSchema(); err != nil {
+		t.Fatalf("EnsureSchema: %v", err)
+	}
+
+	var version int
+	if err := store.conn.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatalf("read user_version: %v", err)
+	}
+	if version != 3 {
+		t.Fatalf("user_version = %d, want 3", version)
+	}
+
+	stats := ChapterStats{Title: "One Piece", Total: 2, NotDownloaded: 2}
+	if err := store.UpsertChapterStats("source-key", stats); err != nil {
+		t.Fatalf("UpsertChapterStats after migration: %v", err)
+	}
+}
+
+func TestUpsertChapterStatsRejectsInvalidCounts(t *testing.T) {
+	store := tempStore(t)
+	err := store.UpsertChapterStats("source-key", ChapterStats{
+		Total:         3,
+		Downloaded:    2,
+		NotDownloaded: 2,
+	})
+	if err == nil {
+		t.Fatal("expected invalid chapter counts to be rejected")
+	}
+}
+
 func TestBackup(t *testing.T) {
 	store := tempStore(t)
 	if err := store.Upsert(sampleInfo()); err != nil {
 		t.Fatalf("Upsert: %v", err)
+	}
+	stats := ChapterStats{Title: "One Piece", Total: 12, Downloaded: 4, NotDownloaded: 8}
+	if err := store.UpsertChapterStats("source-key", stats); err != nil {
+		t.Fatalf("UpsertChapterStats: %v", err)
 	}
 
 	dest := filepath.Join(t.TempDir(), "backup.db")
@@ -223,6 +312,10 @@ func TestBackup(t *testing.T) {
 	got, err := backup.LookupByID(sampleInfo().ID)
 	if err != nil || got == nil {
 		t.Fatalf("lookup in backup: %v (got %v)", err, got)
+	}
+	statsGot, err := backup.LookupChapterStats("source-key")
+	if err != nil || statsGot == nil || *statsGot != stats {
+		t.Fatalf("chapter stats in backup = %+v, err = %v", statsGot, err)
 	}
 }
 
@@ -263,6 +356,10 @@ func TestRestore(t *testing.T) {
 	if err := store.Upsert(sampleInfo()); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}
+	stats := ChapterStats{Title: "One Piece", Total: 12, Downloaded: 4, NotDownloaded: 8}
+	if err := store.UpsertChapterStats("source-key", stats); err != nil {
+		t.Fatalf("UpsertChapterStats: %v", err)
+	}
 
 	backup := filepath.Join(t.TempDir(), "restore-source.db")
 	if err := store.Backup(backup); err != nil {
@@ -295,6 +392,10 @@ func TestRestore(t *testing.T) {
 	}
 	if got.Title["en"] != "One Piece" {
 		t.Errorf("restored title = %q, want One Piece", got.Title["en"])
+	}
+	statsGot, err := store.LookupChapterStats("source-key")
+	if err != nil || statsGot == nil || *statsGot != stats {
+		t.Fatalf("restored chapter stats = %+v, err = %v", statsGot, err)
 	}
 
 	result, err := store.IntegrityCheck()
