@@ -1,6 +1,7 @@
 package downloader
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -141,6 +142,19 @@ func (c *APIClient) FetchJSON(ctx context.Context, url string, result interface{
 
 	if statusCode != 200 {
 		return fmt.Errorf("API returned status %d: %s", statusCode, string(responseData))
+	}
+
+	// Guard against endpoints that answer HTML instead of JSON (e.g. after a
+	// domain migration the old API path can resolve to a 200 HTML page such as
+	// the new site's root). Surface that immediately with the URL instead of
+	// failing deep in json.Unmarshal with a cryptic "invalid character '<'".
+	trimmed := bytes.TrimLeft(responseData, " \t\r\n")
+	if len(trimmed) > 0 && trimmed[0] == '<' {
+		snippet := trimmed
+		if len(snippet) > 120 {
+			snippet = snippet[:120]
+		}
+		return fmt.Errorf("API returned HTML instead of JSON for %s (status %d): %q", url, statusCode, string(snippet))
 	}
 
 	// Unmarshal JSON
