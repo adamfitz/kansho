@@ -28,7 +28,9 @@ const SUPPORTED_DOMAINS = [
   "*://comix.to/*",
   "*://*.comix.to/*",
   "*://arenascan.com/*",
-  "*://*.arenascan.com/*"
+  "*://*.arenascan.com/*",
+  "*://en-thunderscans.com/*",
+  "*://*.en-thunderscans.com/*"
 ];
 
 // URL_PATTERNS is just the SUPPORTED_DOMAINS since they're already properly formatted

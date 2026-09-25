@@ -164,14 +164,8 @@ func ParseCapturedData(jsonData string) (*BypassData, error) {
 	}
 
 	// Parse cfClearanceCapturedAt
-	if ts := data.CfClearanceCapturedAt.Format(time.RFC3339Nano); ts != "" {
-		t, err := time.Parse(time.RFC3339Nano, ts)
-		if err != nil {
-			logCF("ParseCapturedData: Failed to parse cfClearanceCapturedAt: %v", err)
-		} else {
-			data.CfClearanceCapturedAt = t
-			logCF("ParseCapturedData: Captured at: %s", t.Format(time.RFC3339))
-		}
+	if !data.CfClearanceCapturedAt.IsZero() {
+		logCF("ParseCapturedData: Captured at: %s", data.CfClearanceCapturedAt.Format(time.RFC3339))
 	}
 
 	logCF("ParseCapturedData: Total cookies=%d, Turnstile=%v",
@@ -250,6 +244,21 @@ func LoadFromFile(domain string) (*BypassData, error) {
 	return &data, nil
 }
 
+// ClearanceDomainMatches reports whether a cf_clearance cookie issued for
+// cookieDomain is valid for targetDomain. It accepts an exact match or a
+// cookie issued for a parent (apex) domain covering a subdomain target
+// (standard browser cookie scoping). It rejects a completely different site
+// and rejects a cookie for a subdomain when the target is the apex or a
+// different subdomain.
+func ClearanceDomainMatches(cookieDomain, targetDomain string) bool {
+	cookieClean := strings.TrimPrefix(cookieDomain, ".")
+	targetClean := strings.TrimPrefix(targetDomain, ".")
+	if cookieClean == targetClean {
+		return true
+	}
+	return strings.HasSuffix(targetClean, "."+cookieClean)
+}
+
 // ValidateCookieData performs structural validation only — it checks that the
 // bypass data is present and structurally correct, but does NOT reject data
 // based on timestamps, expiry dates, or previous failures.
@@ -313,41 +322,22 @@ func ValidateCookieData(data *BypassData, targetDomain ...string) error {
 
 		// Domain mismatch check — a token for site A will be cryptographically
 		// rejected by site B, so this is a hard structural error, not a staleness check.
-		//
-		// We accept two valid cases:
-		//   1. Exact match:   cookie domain "example.com"  for target "example.com"
-		//   2. Parent domain: cookie domain "example.com"  for target "www.example.com"
-		//      (standard browser cookie scoping — a cookie issued for the apex domain
-		//       is sent by the browser for all subdomains including www)
-		//
-		// We reject:
-		//   - cookie domain "other.com" for target "example.com"  (completely different site)
-		//   - cookie domain "sub.example.com" for target "example.com" (subdomain can't cover apex)
 		if len(targetDomain) > 0 && targetDomain[0] != "" {
-			target := targetDomain[0]
+			target := strings.TrimPrefix(targetDomain[0], ".")
 			cookieDomain := strings.TrimPrefix(data.CfClearanceStruct.Domain, ".")
-			targetClean := strings.TrimPrefix(target, ".")
 
-			exactMatch := cookieDomain == targetClean
-			// Parent domain match: cookie is for "example.com", target is "sub.example.com"
-			parentMatch := strings.HasSuffix(targetClean, "."+cookieDomain)
-
-			if !exactMatch && !parentMatch {
+			if !ClearanceDomainMatches(cookieDomain, target) {
 				errMsg := fmt.Sprintf(
 					"cf_clearance domain mismatch: cookie is for %q but target is %q — "+
 						"you must solve the CF challenge on %s, not on another tab",
-					cookieDomain, targetClean, targetClean,
+					cookieDomain, target, target,
 				)
 				logCF("ValidateCookieData: ⚠️  %s", errMsg)
 				validationErrors = append(validationErrors, errMsg)
 				LogCFValidation(data.Domain, false, validationErrors)
 				return fmt.Errorf("%s", errMsg)
 			}
-			if parentMatch {
-				logCF("ValidateCookieData: cf_clearance parent domain %q covers target %q: OK", cookieDomain, targetClean)
-			} else {
-				logCF("ValidateCookieData: cf_clearance domain matches target (%s): OK", targetClean)
-			}
+			logCF("ValidateCookieData: cf_clearance domain %q matches target %q: OK", cookieDomain, target)
 		}
 
 		logCF("ValidateCookieData: ✓ cf_clearance structure OK")

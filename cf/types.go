@@ -1,6 +1,10 @@
 package cf
 
-import "time"
+import (
+	"fmt"
+	"strings"
+	"time"
+)
 
 // ProtectionType indicates which cf protection is active
 type ProtectionType string
@@ -77,8 +81,31 @@ type BypassData struct {
 	CfClearance           string             `json:"cfClearance,omitempty"`    // convenience string
 	CfClearanceRaw        string             `json:"cfClearanceRaw,omitempty"` // full raw string from headers
 	CfClearanceUrl        string             `json:"cfClearanceUrl,omitempty"`
-	CfClearanceCapturedAt time.Time          `json:"cfClearanceCapturedAt"`
+	CfClearanceCapturedAt CapturedAtTime     `json:"cfClearanceCapturedAt"`
 	CfClearanceStruct     *CfClearanceCookie `json:"cfClearanceStruct,omitempty"` // structured cf_clearance
+}
+
+// CapturedAtTime is a time.Time that also accepts an empty string or null in
+// JSON — the browser extension emits "" when no cf_clearance was captured, and
+// a hard parse failure would otherwise turn that into an opaque "cannot parse"
+// error during clipboard import.
+type CapturedAtTime struct {
+	time.Time
+}
+
+// UnmarshalJSON accepts RFC3339 timestamps as well as "" and null.
+func (t *CapturedAtTime) UnmarshalJSON(b []byte) error {
+	s := strings.Trim(string(b), `"`)
+	if s == "" || s == "null" {
+		t.Time = time.Time{}
+		return nil
+	}
+	parsed, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return fmt.Errorf("invalid cfClearanceCapturedAt: %w", err)
+	}
+	t.Time = parsed
+	return nil
 }
 
 // IsExpired checks if the bypass data is too old
