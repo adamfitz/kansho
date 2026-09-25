@@ -139,3 +139,10 @@ sites:
       shortname: false
       title: true
       location: true
+  - name: roliascans
+    display_name: roliascans
+    required_fields:
+      url: true
+      shortname: false
+      title: true
+      location: true

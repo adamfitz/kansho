@@ -1,14 +1,14 @@
 # thunderscans Site Plugin
 
 - **Site name**: `thunderscans` — **Domain**: `en-thunderscans.com` — **File**: `sites/thunderscans.go`
-- **Cloudflare bypass needed**: no
+- **Cloudflare bypass needed**: yes (required after the `cedf1e9` fix — the domain 403s plain HTTP requests with a CF challenge, so a `cf_clearance` cookie captured in the user's browser is loaded and sent with every request).
 - **Extraction**: `custom` HTML parser for both chapters and images — no browser required (server-rendered pages).
 
 ## What is scraped, how, and why
 
 - **Chapter list**: WordPress "mangareader" theme; the manga page (e.g. `/comics/{slug}/`) server-renders the full chapter list in `<div class="eplister" id="chapterlist"><ul>` with one `<li data-num="...">` per chapter (note: unlike KingOfShojo/arenascan the `<ul>` has no `clstyle` class, but the `#chapterlist li` selector matches regardless). Why: the entire list is in the static HTML, so a single fetch avoids pagination and JS.
 - **Chapter images**: each chapter page embeds the page list as a JSON object inside a `ts_reader.run({...});` call (the same reader pattern as KingOfShojo). The `#readerarea` div is empty in the static HTML — the images are only in the reader JSON. Why: the image URLs are recoverable from the static HTML without rendering.
-- **Image hosts**: served from `en-thunderscans.com/wp-content/uploads/manga/...` (same domain as the pages, Cloudflare-fronted). The domain answers a plain HTTP request with a normal 200 page (no CF clearance cookie required), so the plain HTTP image downloader suffices. Any CF challenge is still detected automatically and handled by the downloader.
+- **Image hosts**: served from `en-thunderscans.com/wp-content/uploads/manga/...` (same domain as the pages, Cloudflare-fronted). The domain answers a plain HTTP request with a 403 CF challenge, so the plugin requires CF bypass: the «cf_anywhere»-style extension captures the `cf_clearance` cookie from the user's already-loaded browser tab, and the downloader sends it with every request. Any CF challenge is still detected automatically and handled by the downloader.
 
 ## Chapter-list extraction flow
 
