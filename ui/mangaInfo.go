@@ -23,7 +23,7 @@ import (
 type DisplayMangaInfoFunc func(info *mangadex.MangaInfo, bookmarkTitle string)
 
 // ShowMangaTitleInfo is the entry point for the (i) info button on a manga
-// list row. It looks the manga up in the local MangaDex database first. When a
+// list row. It looks the manga up in the local Kansho database first. When a
 // local record exists it renders the information pane immediately; otherwise a
 // title lookup dialog is shown so the user can pick the correct MangaDex
 // title (or enter a MangaDex URL / title ID manually).
@@ -35,7 +35,7 @@ func ShowMangaTitleInfo(manga config.Bookmarks, window fyne.Window, display Disp
 
 	store, err := mangadex.GetStore()
 	if err != nil {
-		dialog.ShowError(fmt.Errorf("cannot open MangaDex database: %v", err), window)
+		dialog.ShowError(fmt.Errorf("cannot open Kansho database: %v", err), window)
 		return
 	}
 

@@ -273,6 +273,90 @@ func TestEnsureSchemaMigratesExistingDatabase(t *testing.T) {
 	}
 }
 
+func TestMigrateLegacyDatabase(t *testing.T) {
+	dir := t.TempDir()
+	legacy := filepath.Join(dir, legacyDBFileName)
+	store, err := OpenPath(legacy)
+	if err != nil {
+		t.Fatalf("open legacy store: %v", err)
+	}
+	if err := store.Upsert(sampleInfo()); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	stats := ChapterStats{Title: "One Piece", Total: 12, Downloaded: 4, NotDownloaded: 8}
+	if err := store.UpsertChapterStats("source-key", stats); err != nil {
+		t.Fatalf("UpsertChapterStats: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close legacy store: %v", err)
+	}
+
+	newPath := filepath.Join(dir, "kansho.db")
+	if err := migrateLegacyDatabase(newPath); err != nil {
+		t.Fatalf("migrateLegacyDatabase: %v", err)
+	}
+
+	if _, err := os.Stat(newPath); os.IsNotExist(err) {
+		t.Fatal("new database was not created")
+	}
+	if _, err := os.Stat(legacy); !os.IsNotExist(err) {
+		t.Errorf("legacy database still present after migration")
+	}
+
+	migrated, err := OpenPath(newPath)
+	if err != nil {
+		t.Fatalf("open migrated database: %v", err)
+	}
+	defer migrated.Close()
+	got, err := migrated.LookupByID(sampleInfo().ID)
+	if err != nil || got == nil {
+		t.Fatalf("migrated title lookup: %v (got %v)", err, got)
+	}
+	gotStats, err := migrated.LookupChapterStats("source-key")
+	if err != nil || gotStats == nil || *gotStats != stats {
+		t.Fatalf("migrated chapter stats = %+v, err = %v", gotStats, err)
+	}
+}
+
+func TestMigrateLegacyDatabaseSkipsCleanConfig(t *testing.T) {
+	dir := t.TempDir()
+	newPath := filepath.Join(dir, "kansho.db")
+	if err := migrateLegacyDatabase(newPath); err != nil {
+		t.Fatalf("migrateLegacyDatabase on clean config: %v", err)
+	}
+	if _, err := os.Stat(newPath); !os.IsNotExist(err) {
+		t.Errorf("new database should not be created without a legacy file")
+	}
+}
+
+func TestMigrateLegacyDatabaseKeepsLegacyWhenNewExists(t *testing.T) {
+	dir := t.TempDir()
+	legacy := filepath.Join(dir, legacyDBFileName)
+	newPath := filepath.Join(dir, "kansho.db")
+
+	legacyStore, err := OpenPath(legacy)
+	if err != nil {
+		t.Fatalf("open legacy store: %v", err)
+	}
+	if err := legacyStore.Close(); err != nil {
+		t.Fatalf("close legacy store: %v", err)
+	}
+	newStore, err := OpenPath(newPath)
+	if err != nil {
+		t.Fatalf("open new store: %v", err)
+	}
+	if err := newStore.Close(); err != nil {
+		t.Fatalf("close new store: %v", err)
+	}
+
+	if err := migrateLegacyDatabase(newPath); err != nil {
+		t.Fatalf("migrateLegacyDatabase with both files: %v", err)
+	}
+	if _, err := os.Stat(legacy); err != nil {
+		t.Fatalf("legacy database should be left untouched: %v", err)
+	}
+}
+
 func TestUpsertChapterStatsRejectsInvalidCounts(t *testing.T) {
 	store := tempStore(t)
 	err := store.UpsertChapterStats("source-key", ChapterStats{

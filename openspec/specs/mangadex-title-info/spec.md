@@ -15,7 +15,7 @@ The manga list SHALL show an info (i) button to the right of each manga title ro
 - AND the info icon SHALL be rendered without button chrome (mirroring the per-chapter action icons)
 
 ### Requirement: Local Title Database
-MangaDex title information and generic per-manga chapter-count snapshots SHALL be persisted in a SQLite database stored in the kansho config directory (`~/.config/kansho/mangadex.db`).
+MangaDex title information and generic per-manga chapter-count snapshots SHALL be persisted in a SQLite database stored in the kansho config directory (`~/.config/kansho/kansho.db`).
 
 #### Scenario: Database location and schema
 - GIVEN the user invokes the info button
@@ -34,7 +34,7 @@ MangaDex title information and generic per-manga chapter-count snapshots SHALL b
 The user SHALL be shown local database content when available, and a lookup dialog otherwise.
 
 #### Scenario: Local information exists
-- GIVEN a manga title exists in the local MangaDex database
+- GIVEN a manga title exists in the local Kansho database
 - WHEN the info button is clicked for that title
 - THEN the information pane SHALL open directly from local database content in the chapter list card
 - AND no MangaDex network request SHALL be required to open the pane
@@ -179,7 +179,7 @@ The application menu bar SHALL include a "Database" menu next to Bookmarks with 
 - GIVEN the user selects Database → Restore and picks a backup file
 - WHEN the file passes schema validation and an integrity check
 - THEN the current database SHALL be replaced by the chosen file
-- AND the previous database SHALL be preserved as `mangadex.pre-restore.db` before the swap
+- AND the previous database SHALL be preserved as `kansho.pre-restore.db` before the swap
 - WHEN the file does not validate (missing schema or failed integrity check)
 - THEN the restore SHALL be rejected
 

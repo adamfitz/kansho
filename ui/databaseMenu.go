@@ -17,9 +17,9 @@ import (
 func defaultDBPath() string {
 	configDir, err := parser.ExpandPath("~/.config/kansho")
 	if err != nil {
-		return filepath.Join("kansho", "mangadex.db")
+		return filepath.Join("kansho", "kansho.db")
 	}
-	return filepath.Join(configDir, "mangadex.db")
+	return filepath.Join(configDir, "kansho.db")
 }
 
 // ShowDatabaseBackupDialog writes a VACUUM snapshot of the local title and
@@ -49,7 +49,7 @@ func ShowDatabaseBackupDialog(_ fyne.App, window fyne.Window) {
 			fmt.Sprintf("local title and chapter-statistics database backed up to %s", dest), window)
 	}, window)
 
-	saveDialog.SetFileName("mangadex-backup.db")
+	saveDialog.SetFileName("kansho-backup.db")
 	homePath, err := os.UserHomeDir()
 	if err == nil {
 		if homeDir, listerErr := storage.ListerForURI(storage.NewFileURI(homePath)); listerErr == nil {
@@ -63,7 +63,7 @@ func ShowDatabaseBackupDialog(_ fyne.App, window fyne.Window) {
 // ShowDatabaseRestoreDialog replaces the local title and chapter-statistics
 // database with the file chosen by the user. The candidate file must pass
 // schema validation and an integrity check; the current database is kept as
-// mangadex.pre-restore.db.
+// kansho.pre-restore.db.
 func ShowDatabaseRestoreDialog(_ fyne.App, window fyne.Window) {
 	store, err := mangadex.GetStore()
 	if err != nil {
@@ -88,8 +88,8 @@ func ShowDatabaseRestoreDialog(_ fyne.App, window fyne.Window) {
 		}
 
 		dialog.ShowConfirm(
-			"Restore MangaDex Database",
-			fmt.Sprintf("Replace the current local title and chapter-statistics database with %s?\nThe current database is saved as mangadex.pre-restore.db before the swap.", path),
+			"Restore Kansho Database",
+			fmt.Sprintf("Replace the current local title and chapter-statistics database with %s?\nThe current database is saved as %s before the swap.", path, mangadex.PreRestoreFileName),
 			func(confirmed bool) {
 				if !confirmed {
 					return
@@ -119,7 +119,7 @@ func doRestore(store databaseStore, src string) (string, error) {
 		return "", fmt.Errorf("restore succeeded but count failed: %v", err)
 	}
 	return fmt.Sprintf("local title and chapter-statistics database restored successfully (%d titles). The previous database is at %s",
-		count, filepath.Join(filepath.Dir(defaultDBPath()), "mangadex.pre-restore.db")), nil
+		count, filepath.Join(filepath.Dir(defaultDBPath()), mangadex.PreRestoreFileName)), nil
 }
 
 // ShowDatabaseCompactDialog optimises and shrinks the local title and
@@ -132,7 +132,7 @@ func ShowDatabaseCompactDialog(_ fyne.App, window fyne.Window) {
 	}
 
 	dialog.ShowConfirm(
-		"Compact MangaDex Database",
+		"Compact Kansho Database",
 		"Compact the local title and chapter-statistics database (PRAGMA optimize + VACUUM)? This frees unused space and is safe to run at any time.",
 		func(confirmed bool) {
 			if !confirmed {
