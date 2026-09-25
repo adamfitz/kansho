@@ -37,6 +37,7 @@ Shared mechanics:
 | mgeko | `mgeko.go` | javascript → javascript | [mgeko.md](mgeko.md) |
 | philiascans | `philliascans.go`, `philliascans_decrypt.go` | custom (RSC payload) → javascript (canvas/React fiber) + decrypt | [philiascans.md](philiascans.md) |
 | ravenscans | `ravenscans.go` | javascript → custom (regex) | [ravenscans.md](ravenscans.md) |
+| roliascans | `roliascans.go` | API (anti-scraping token) → API | [roliascans.md](roliascans.md) |
 | stonescape | `stonescape.go` | API → API | [stonescape.md](stonescape.md) |
 | thunderscans | `thunderscans.go` | custom HTML → custom (`ts_reader.run` JSON) | [thunderscans.md](thunderscans.md) |
 | weebcentral | `weebcentral.go` | custom HTMX endpoint → custom HTMX endpoint | [weebcentral.md](weebcentral.md) |
