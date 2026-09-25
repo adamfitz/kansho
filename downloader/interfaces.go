@@ -81,7 +81,7 @@ type SitePlugin interface {
 	// GetSiteName returns the site identifier (e.g., "stonescape", "asura")
 	GetSiteName() string
 
-	// GetDomain returns a hint for the site domain used for CF bypass (e.g. "stonescape.xyz").
+	// GetDomain returns a hint for the site domain used for CF bypass (e.g. "stonescape.sayki.fr").
 	// This is used as a fallback only. In practice the domain is always derived
 	// from the actual request URL so that www/non-www mismatches between the
 	// hard-coded value and what the browser extension captures are never an issue.

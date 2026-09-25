@@ -11,7 +11,9 @@ import (
 	"kansho/downloader"
 )
 
-// StonescapeSite implements the SitePlugin interface for stonescape.xyz
+// StonescapeSite implements the SitePlugin interface for stonescape.sayki.fr.
+// The old stonescape.xyz domain now 302-redirects to stonescape.sayki.fr (and
+// drops the API path on redirect), so all API and image URLs use the new domain.
 type StonescapeSite struct{}
 
 // Ensure StonescapeSite implements SitePlugin
@@ -48,7 +50,7 @@ func (s *StonescapeSite) GetSiteName() string {
 }
 
 func (s *StonescapeSite) GetDomain() string {
-	return "stonescape.xyz"
+	return "stonescape.sayki.fr"
 }
 
 func (s *StonescapeSite) NeedsCFBypass() bool {
@@ -71,7 +73,7 @@ func (s *StonescapeSite) GetChapterExtractionMethod() *downloader.ChapterExtract
 			}
 
 			// Step 1: slug → seriesId
-			seriesURL := fmt.Sprintf("https://stonescape.xyz/api/series/by-slug/%s", slug)
+			seriesURL := fmt.Sprintf("https://stonescape.sayki.fr/api/series/by-slug/%s", slug)
 			log.Printf("[Stonescape] Fetching series info: %s", seriesURL)
 
 			var seriesResp stonescapeSeriesResponse
@@ -83,7 +85,7 @@ func (s *StonescapeSite) GetChapterExtractionMethod() *downloader.ChapterExtract
 			}
 
 			// Step 2: seriesId → chapters
-			chaptersURL := fmt.Sprintf("https://stonescape.xyz/api/series/%s/chapters", seriesResp.SeriesID)
+			chaptersURL := fmt.Sprintf("https://stonescape.sayki.fr/api/series/%s/chapters", seriesResp.SeriesID)
 			log.Printf("[Stonescape] Fetching chapters: %s", chaptersURL)
 
 			var chaptersResp stonescapeChaptersResponse
@@ -119,7 +121,7 @@ func (s *StonescapeSite) GetImageExtractionMethod() *downloader.ImageExtractionM
 	return &downloader.ImageExtractionMethod{
 		Type: "api",
 		APIFunc: func(chapterID string, chapterData map[string]string, client *downloader.APIClient) ([]string, error) {
-			pagesURL := fmt.Sprintf("https://stonescape.xyz/api/chapters/%s/pages", chapterID)
+			pagesURL := fmt.Sprintf("https://stonescape.sayki.fr/api/chapters/%s/pages", chapterID)
 			log.Printf("[Stonescape] Fetching pages: %s", pagesURL)
 
 			var pagesResp stonescapePagesResponse
@@ -141,7 +143,7 @@ func (s *StonescapeSite) GetImageExtractionMethod() *downloader.ImageExtractionM
 			// Page URLs from the API are relative: /pub/manhwa/...
 			urls := make([]string, 0, len(pages))
 			for _, p := range pages {
-				urls = append(urls, "https://stonescape.xyz"+p.URL)
+				urls = append(urls, "https://stonescape.sayki.fr"+p.URL)
 			}
 
 			log.Printf("[Stonescape] Found %d pages for chapter %q", len(urls), chapterID)
@@ -193,8 +195,8 @@ func (s *StonescapeSite) NormalizeChapterFilename(data map[string]string) string
 
 // stonescapeExtractSlug pulls the manga slug from a URL like:
 //
-//	https://stonescape.xyz/series/mia-has-returned
-//	https://stonescape.xyz/series/mia-has-returned/
+//	https://stonescape.sayki.fr/series/mia-has-returned
+//	https://stonescape.sayki.fr/series/mia-has-returned/
 func stonescapeExtractSlug(mangaURL string) (string, error) {
 	re := regexp.MustCompile(`/series/([^/?#]+)`)
 	m := re.FindStringSubmatch(mangaURL)

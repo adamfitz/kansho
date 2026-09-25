@@ -1,6 +1,6 @@
 # stonescape Site Plugin
 
-- **Site name**: `stonescape` — **Domain**: `stonescape.xyz` — **File**: `sites/stonescape.go`
+- **Site name**: `stonescape` — **Domain**: `stonescape.sayki.fr` — **File**: `sites/stonescape.go`
 - **Cloudflare bypass needed**: no
 - **Extraction**: `api` for both chapters and images, via the site's official JSON API.
 
@@ -10,7 +10,8 @@
   1. `GET /api/series/by-slug/{slug}` → `seriesId`.
   2. `GET /api/series/{seriesId}/chapters` → `[{chapterId, chapterNumber}]`.
   Why use the API: chapter metadata (including UUID chapter ids) is only reliably available from these endpoints, and no HTML parsing or rendering is needed.
-- **Chapter pages**: `GET /api/chapters/{chapterId}/pages` → `[{pageNumber, url}]`. Why: the API returns the exact page order; the parser insertion-sorts by `pageNumber` and prefixes the *relative* `url` (`/pub/manhwa/...`) with `https://stonescape.xyz` to make absolute image URLs.
+- **Chapter pages**: `GET /api/chapters/{chapterId}/pages` → `[{pageNumber, url}]`. Why: the API returns the exact page order; the parser insertion-sorts by `pageNumber` and prefixes the *relative* `url` (`/pub/manhwa/...`) with `https://stonescape.sayki.fr` to make absolute image URLs.
+- The old `stonescape.xyz` domain 302-redirects to `stonescape.sayki.fr` (dropping the API path on redirect), so all API and image URLs target the new domain directly.
 - The chapter id (a UUID) is carried in the `url` field and passed straight to the image API — `NormalizeChapterURL` leaves it unchanged.
 
 ## Chapter-list extraction flow

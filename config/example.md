@@ -287,7 +287,7 @@ func TestStonescapeChapterURLs(t *testing.T) {
     site := &StonescapeSite{}
     
     // Test manga URL (use a real one for integration testing)
-    mangaURL := "https://stonescape.xyz/manga/test-manga"
+    mangaURL := "https://stonescape.sayki.fr/manga/test-manga"
     
     ctx := context.Background()
     chapters, err := site.GetChapterURLs(ctx, mangaURL)
@@ -312,7 +312,7 @@ func TestStonescapeChapterImages(t *testing.T) {
     site := &StonescapeSite{}
     
     // Test chapter URL
-    chapterURL := "https://stonescape.xyz/manga/test-manga/chapter-1"
+    chapterURL := "https://stonescape.sayki.fr/manga/test-manga/chapter-1"
     
     ctx := context.Background()
     images, err := site.GetChapterImages(ctx, chapterURL)
