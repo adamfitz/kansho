@@ -26,10 +26,10 @@ import (
 //   - Each chapter page embeds the page list as a JSON object inside a
 //     ts_reader.run({...}); call (the same reader pattern as KingOfShojo),
 //     so the image URLs are also extracted from the static HTML.
-//   - The domain is Cloudflare-fronted but serves pages and images without a
-//     CF clearance cookie (cf-cache-status DYNAMIC, plain HTTP returns 200),
-//     so the plain HTTP downloader suffices. A CF challenge is still detected
-//     and handled by the downloader automatically if it ever appears.
+//   - The domain is Cloudflare-fronted and serves 403 challenge pages to
+//     plain HTTP requests, so the CF bypass flow is required: solve the
+//     challenge in the browser, import the captured cookies, and subsequent
+//     requests send them like a real browser.
 type ThunderscansSite struct{}
 
 // Ensure ThunderscansSite implements SitePlugin
@@ -48,7 +48,7 @@ func (s *ThunderscansSite) GetDomain() string {
 }
 
 func (s *ThunderscansSite) NeedsCFBypass() bool {
-	return false
+	return true
 }
 
 func (s *ThunderscansSite) Debugger() *downloader.Debugger {

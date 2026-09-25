@@ -9,12 +9,45 @@ import (
 	"testing"
 
 	"kansho/config"
+	"kansho/mangadex"
 	"kansho/refreshpool"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/widget"
 )
+
+type memoryChapterStatsStore struct {
+	stats map[string]mangadex.ChapterStats
+}
+
+func (s *memoryChapterStatsStore) UpsertChapterStats(key string, stats mangadex.ChapterStats) error {
+	s.stats[key] = stats
+	return nil
+}
+
+func (s *memoryChapterStatsStore) LookupChapterStats(key string) (*mangadex.ChapterStats, error) {
+	stats, ok := s.stats[key]
+	if !ok {
+		return nil, nil
+	}
+	return &stats, nil
+}
+
+func (s *memoryChapterStatsStore) seed(manga *config.Bookmarks, total, downloaded int) {
+	s.stats[mangaSourceKey(manga)] = mangadex.ChapterStats{
+		Title:         manga.Title,
+		Site:          manga.Site,
+		URL:           manga.Url,
+		Total:         total,
+		Downloaded:    downloaded,
+		NotDownloaded: total - downloaded,
+	}
+}
+
+func testChapterStatsStore(view *ChapterListView) *memoryChapterStatsStore {
+	return view.chapterStatsStore.(*memoryChapterStatsStore)
+}
 
 // newChapterListViewTest builds a ChapterListView bound to a single test manga
 // stored in the given location ("" means no on-disk folder).
@@ -33,6 +66,7 @@ func newChapterListViewTest(t *testing.T, location string) (*KanshoAppState, *Ch
 		SelectedMangaID: 0,
 	}
 	view := NewChapterListView(state, NewDownloadQueueButton(state))
+	view.chapterStatsStore = &memoryChapterStatsStore{stats: make(map[string]mangadex.ChapterStats)}
 	return state, view, w
 }
 
@@ -187,29 +221,37 @@ func TestBuildChapterItemsMergesLocalAndRemote(t *testing.T) {
 	}
 }
 
-// TestMergeRemoteChaptersCachesForManga verifies that mergeRemoteChapters
-// persists fetched remote chapters in the per-manga cache and accumulates them
-// across refreshes.
-func TestMergeRemoteChaptersCachesForManga(t *testing.T) {
-	_, view, _ := newChapterListViewTest(t, "")
+// TestRefreshedChaptersAreCachedAndPersisted verifies that successful refresh
+// results accumulate in the per-manga cache and update the database snapshot.
+func TestRefreshedChaptersAreCachedAndPersisted(t *testing.T) {
+	state, view, _ := newChapterListViewTest(t, "")
+	manga := &state.MangaData.Manga[0]
+	key := mangaSourceKey(manga)
 
-	view.mergeRemoteChapters("Test Manga", map[string]string{"ch001.cbz": "u1"})
+	view.applyRefreshedChapters(manga, map[string]string{"ch001.cbz": "u1"}, view.loadGeneration)
 	if len(view.chapters) != 1 {
 		t.Fatalf("expected 1 chapter in the list, got %d", len(view.chapters))
 	}
 	if view.chapters[0].Name != "ch001.cbz" || view.chapters[0].URL != "u1" {
 		t.Fatalf("unexpected chapter: %+v", view.chapters[0])
 	}
-	if len(view.remoteChapters["Test Manga"]) != 1 {
+	if len(view.remoteChapters[key]) != 1 {
 		t.Fatalf("expected the remote cache to hold 1 chapter for the manga")
 	}
 
-	view.mergeRemoteChapters("Test Manga", map[string]string{"ch002.cbz": "u2"})
-	if len(view.remoteChapters["Test Manga"]) != 2 {
-		t.Fatalf("expected the cache to accumulate chapters, got %d", len(view.remoteChapters["Test Manga"]))
+	view.applyRefreshedChapters(manga, map[string]string{"ch002.cbz": "u2"}, view.loadGeneration)
+	if len(view.remoteChapters[key]) != 2 {
+		t.Fatalf("expected the cache to accumulate chapters, got %d", len(view.remoteChapters[key]))
 	}
 	if len(view.chapters) != 2 {
 		t.Fatalf("expected 2 chapters in the list, got %d", len(view.chapters))
+	}
+	stored, err := testChapterStatsStore(view).LookupChapterStats(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored == nil || stored.Total != 2 || stored.Downloaded != 0 || stored.NotDownloaded != 2 {
+		t.Fatalf("unexpected stored counts: %+v", stored)
 	}
 }
 
@@ -221,11 +263,12 @@ func TestChapterListPersistsRemoteChaptersAcrossSelection(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, view, _ := newChapterListViewTest(t, dir)
+	state, view, _ := newChapterListViewTest(t, dir)
+	key := mangaSourceKey(&state.MangaData.Manga[0])
 
 	// Simulate the user having refreshed this manga once: its remote chapters
 	// are cached and must survive switching manga.
-	view.remoteChapters["Test Manga"] = map[string]string{
+	view.remoteChapters[key] = map[string]string{
 		"ch002.cbz": "http://example.com/ch2",
 		"ch003.cbz": "http://example.com/ch3",
 	}
@@ -402,11 +445,10 @@ func TestSelectedMangaTitleIsBold(t *testing.T) {
 	}
 }
 
-// TestStatusBarShowsSiteAndDownloadedCountOnlyUntilRefresh verifies that the
-// main status bar starts idle, then shows the download site and downloaded
-// chapter count on selection, and only includes the not-downloaded count once
-// the manga's chapter list has been refreshed.
-func TestStatusBarShowsSiteAndDownloadedCountOnlyUntilRefresh(t *testing.T) {
+// TestStatusBarLoadsCompleteChapterCountsFromDatabase verifies that the status
+// bar shows no counts until a complete database snapshot exists, then renders
+// downloaded, total, and not-downloaded values from that snapshot.
+func TestStatusBarLoadsCompleteChapterCountsFromDatabase(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "ch001.cbz"), []byte("cbz"), 0o644); err != nil {
 		t.Fatal(err)
@@ -415,49 +457,112 @@ func TestStatusBarShowsSiteAndDownloadedCountOnlyUntilRefresh(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, view, _ := newChapterListViewTest(t, dir)
-
+	state, view, _ := newChapterListViewTest(t, dir)
+	state.SelectedMangaID = -1
 	bar := NewMainStatusBar()
 	view.SetStatusBar(bar)
 	if bar.message.Text != "No manga selected" || bar.badge.Text != "" {
 		t.Fatalf("status bar should start idle, got badge=%q message=%q", bar.badge.Text, bar.message.Text)
 	}
 
-	// Selecting the manga shows site + downloaded count; the not-downloaded
-	// count is hidden until the user presses Refresh.
+	state.SelectedMangaID = 0
 	view.onMangaSelected(0)
 	if bar.badge.Text != "test" {
 		t.Errorf("badge should show the manga's site, got %q", bar.badge.Text)
 	}
-	if bar.message.Text != "2 chapters downloaded" {
-		t.Errorf("before a refresh the bar should show only the downloaded count, got %q", bar.message.Text)
+	if bar.message.Text != "" {
+		t.Errorf("chapter counts should be hidden without a database snapshot, got %q", bar.message.Text)
 	}
 
-	// A refresh fetches remote chapters: afterwards the not-downloaded count
-	// is shown as well (simulated here via the per-manga remote cache).
-	view.remoteChapters["Test Manga"] = map[string]string{
-		"ch003.cbz": "http://example.com/ch3",
-		"ch004.cbz": "http://example.com/ch4",
-	}
+	testChapterStatsStore(view).seed(&state.MangaData.Manga[0], 4, 2)
 	view.onMangaSelected(0)
-	if bar.message.Text != "2 chapters downloaded · 2 to download" {
-		t.Errorf("after a refresh the bar should include the not-downloaded count, got %q", bar.message.Text)
+	if bar.message.Text != "2 of 4 chapters downloaded · 2 to download" {
+		t.Errorf("status bar should render the database counts, got %q", bar.message.Text)
 	}
 }
 
-// TestStatusBarUpdatesOnTaskChange verifies that the status bar counts stay in
-// sync when the queue state changes (e.g. a chapter finishes downloading).
+func TestChapterCountsReloadAfterMangaSwitch(t *testing.T) {
+	state, view, _ := newChapterListViewTest(t, "")
+	first := &state.MangaData.Manga[0]
+	view.applyRefreshedChapters(first, map[string]string{
+		"ch001.cbz": "u1",
+		"ch002.cbz": "u2",
+		"ch003.cbz": "u3",
+	}, view.loadGeneration)
+
+	state.MangaData.Manga = append(state.MangaData.Manga, config.Bookmarks{
+		Title: "Other Manga",
+		Url:   "http://example.com/other",
+		Site:  "test",
+	})
+	state.SelectedMangaID = 1
+	view.onMangaSelected(1)
+	state.SelectedMangaID = 0
+	view.onMangaSelected(0)
+
+	if view.chapterStats == nil || view.chapterStats.Total != 3 || view.chapterStats.NotDownloaded != 3 {
+		t.Fatalf("stored counts were not restored after switching manga: %+v", view.chapterStats)
+	}
+}
+
+func TestStaleRefreshPersistsWithoutReplacingSelectedManga(t *testing.T) {
+	state, view, _ := newChapterListViewTest(t, "")
+	first := &state.MangaData.Manga[0]
+	state.MangaData.Manga = append(state.MangaData.Manga, config.Bookmarks{
+		Title: "Other Manga",
+		Url:   "http://example.com/other",
+		Site:  "test",
+	})
+	state.SelectedMangaID = 1
+	view.onMangaSelected(1)
+
+	view.applyRefreshedChapters(first, map[string]string{
+		"ch001.cbz": "u1",
+	}, 0)
+
+	if len(view.chapters) != 0 {
+		t.Fatalf("stale refresh replaced the selected manga's list: %+v", view.chapters)
+	}
+	if view.chapterStats != nil {
+		t.Fatalf("stale refresh changed the selected manga's counts: %+v", view.chapterStats)
+	}
+	stored, err := testChapterStatsStore(view).LookupChapterStats(mangaSourceKey(first))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored == nil || stored.Total != 1 || stored.NotDownloaded != 1 {
+		t.Fatalf("stale refresh was not persisted for its manga: %+v", stored)
+	}
+}
+
+func TestLocalChapterReadErrorDoesNotOverwriteKnownCounts(t *testing.T) {
+	state, view, _ := newChapterListViewTest(t, filepath.Join(t.TempDir(), "missing"))
+	manga := &state.MangaData.Manga[0]
+	testChapterStatsStore(view).seed(manga, 3, 2)
+	view.onMangaSelected(0)
+	view.updateStoredDownloadedCount(manga)
+
+	stored, err := testChapterStatsStore(view).LookupChapterStats(mangaSourceKey(manga))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored == nil || stored.Total != 3 || stored.Downloaded != 2 || stored.NotDownloaded != 1 {
+		t.Fatalf("local read error overwrote known counts: %+v", stored)
+	}
+}
+
 func TestStatusBarUpdatesOnTaskChange(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "ch001.cbz"), []byte("cbz"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	_, view, _ := newChapterListViewTest(t, dir)
+	state, view, _ := newChapterListViewTest(t, dir)
+	testChapterStatsStore(view).seed(&state.MangaData.Manga[0], 3, 1)
 	bar := NewMainStatusBar()
 	view.SetStatusBar(bar)
 	view.onMangaSelected(0)
-	if bar.message.Text != "1 chapters downloaded" {
+	if bar.message.Text != "1 of 3 chapters downloaded · 2 to download" {
 		t.Fatalf("unexpected initial message: %q", bar.message.Text)
 	}
 
@@ -468,7 +573,7 @@ func TestStatusBarUpdatesOnTaskChange(t *testing.T) {
 	view.chapters = append(view.chapters, &ChapterItem{Name: "ch002.cbz"})
 	view.refreshAfterTaskChange()
 
-	if bar.message.Text != "2 chapters downloaded" {
+	if bar.message.Text != "2 of 3 chapters downloaded · 1 to download" {
 		t.Errorf("bar should reflect the newly downloaded chapter, got %q", bar.message.Text)
 	}
 }

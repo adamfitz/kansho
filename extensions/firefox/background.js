@@ -16,7 +16,9 @@ const SUPPORTED_DOMAINS = [
   "*://flamecomics.xyz/*",
   "*://*.flamecomics.xyz/*",
   "*://weebcentral.com/*",
-  "*://*.weebcentral.com/*"
+  "*://*.weebcentral.com/*",
+  "*://en-thunderscans.com/*",
+  "*://*.en-thunderscans.com/*"
 ];
 
 const URL_PATTERNS = SUPPORTED_DOMAINS;

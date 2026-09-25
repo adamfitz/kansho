@@ -85,9 +85,9 @@ func BuildMainLayout(window fyne.Window) fyne.CanvasObject {
 
 	// Status bar (bottom of the window)
 	// Mirrors the download queue page's status bar: it shows the selected
-	// manga's download site and downloaded chapter count; after a chapter list
-	// refresh it also shows how many chapters are not downloaded. The chapter
-	// list view keeps it up to date. The right edge carries the single
+	// manga's download site and, when a complete database snapshot exists, its
+	// downloaded, total, and not-downloaded chapter counts. The chapter list
+	// view keeps it up to date. The right edge carries the single
 	// representation of the chapter-list refresh worker pool.
 	statusBar := NewMainStatusBar()
 	statusBar.SetWindow(window) // enables the clickable refresh-status dialog

@@ -90,8 +90,34 @@ The system SHALL display the chapters of the currently selected manga with per-c
 - THEN the system SHALL query the target site for the manga's available chapters
 - AND SHALL merge new (not yet downloaded) chapters into the list
 - AND SHALL cache the fetched chapters for that manga so they persist for the lifetime of the application
+- AND SHALL save the displayed total, downloaded, and not-downloaded chapter counts for that manga in the local SQLite database
 - AND new chapters SHALL NOT be downloaded automatically
 - AND the "Refresh" button SHALL be disabled while the fetch is in progress
+
+#### Scenario: Chapter counts reload from the database
+- GIVEN a manga has a complete chapter-count snapshot in the local SQLite database
+- WHEN the user selects that manga, including after switching away and back or restarting Kansho
+- THEN the main status bar SHALL load and display that snapshot
+- AND it SHALL display downloaded chapters out of the total chapters plus the not-downloaded chapter count
+- AND the displayed values SHALL come from the database rather than from only the currently loaded chapter rows
+
+#### Scenario: Chapter counts are hidden until first refresh
+- GIVEN a manga has no complete chapter-count snapshot in the local SQLite database
+- WHEN the manga is selected
+- THEN the main status bar SHALL show the manga's site
+- AND it SHALL NOT display downloaded, total, or not-downloaded chapter numbers
+- AND local or remotely cached chapter rows alone SHALL NOT create a displayed snapshot
+
+#### Scenario: Failed refresh preserves saved counts
+- GIVEN a manga already has chapter counts in the local SQLite database
+- WHEN a later chapter-list refresh fails
+- THEN the previously saved total, downloaded, and not-downloaded counts SHALL remain unchanged
+
+#### Scenario: Local chapter changes update known counts
+- GIVEN a manga already has a complete chapter-count snapshot in the local SQLite database
+- WHEN a chapter finishes downloading or a downloaded chapter is deleted
+- THEN the downloaded and not-downloaded counts SHALL be recalculated from the local CBZ files and saved in the database
+- AND the total SHALL remain the known total unless a successful chapter-list refresh supplies a new snapshot
 
 #### Scenario: Chapter list layout
 - GIVEN the chapter list is rendered

@@ -63,15 +63,7 @@ document.getElementById('captureBtn').addEventListener('click', async () => {
     // -------------------------------------------------------------------------
     // We might get the same cookie from multiple queries, so deduplicate using a Map
     // Map is like Go's map[string]Cookie - key is "name-domain", value is cookie object
-    const dotCookies = document.cookie
-      .split('; ')
-      .map(c => {
-        const [name, value] = c.split('=');
-        return { name, value, domain: window.location.hostname };
-      });
-    const urlCookies = [];
-
-    const allCookies = [...cookies, ...parentCookies, ...dotCookies, ...urlCookies].reduce((acc, cookie) => {
+    const allCookies = [...cookies, ...parentCookies].reduce((acc, cookie) => {
       // Create a unique key for each cookie (name + domain combination)
       const key = `${cookie.name}-${cookie.domain}`;
       
@@ -219,12 +211,52 @@ document.getElementById('captureBtn').addEventListener('click', async () => {
     } catch (e) {
       console.error('Failed to detect Turnstile:', e);
     }
-    // for using the trurnstyle data to capture the cf_clearance cookie to be stored 
+    // More reliable than the background.js storage slot: the cf_clearance
+    // cookie for the CURRENT tab, straight from this domain's cookie jar.
     const cfClearanceStored = await chrome.storage.local.get([
       "cfClearanceRaw",
       "cfClearanceCapturedAt",
       "cfClearanceUrl"
     ]);
+
+    const jarCfCookie = Array.from(allCookies.values())
+      .find(c => c.name === 'cf_clearance');
+
+    // Rebuild a raw Set-Cookie-style string so Go's ParseCfClearanceCookie can
+    // consume it (chrome.cookies gives us the same attributes as Set-Cookie).
+    const buildCfClearanceRaw = (cookie) => {
+      let raw = `cf_clearance=${cookie.value}`;
+      if (cookie.domain) raw += `; Domain=${cookie.domain}`;
+      if (cookie.path) raw += `; Path=${cookie.path}`;
+      if (cookie.sameSite) raw += `; SameSite=${cookie.sameSite}`;
+      if (cookie.secure) raw += `; Secure`;
+      raw += `; HttpOnly`;
+      if (cookie.expirationDate) raw += `; Expires=${new Date(cookie.expirationDate * 1000).toUTCString()}`;
+      return raw;
+    };
+
+    const hostOf = (url) => {
+      try { return new URL(url).hostname.toLowerCase(); } catch (e) { return ''; }
+    };
+    const sameSiteFamily = (a, b) => {
+      if (!a || !b) return false;
+      return a === b || a.endsWith('.' + b) || b.endsWith('.' + a);
+    };
+
+    let cfClearanceRaw = '';
+    let cfClearanceUrl = '';
+    let cfClearanceCapturedAt = '';
+
+    if (jarCfCookie) {
+      cfClearanceRaw = buildCfClearanceRaw(jarCfCookie);
+      cfClearanceUrl = tab.url;
+      cfClearanceCapturedAt = new Date().toISOString();
+    } else if (cfClearanceStored.cfClearanceRaw &&
+               sameSiteFamily(hostOf(cfClearanceStored.cfClearanceUrl), domain)) {
+      cfClearanceRaw = cfClearanceStored.cfClearanceRaw;
+      cfClearanceUrl = cfClearanceStored.cfClearanceUrl;
+      cfClearanceCapturedAt = cfClearanceStored.cfClearanceCapturedAt;
+    }
 
     
     // Pull Turnstile POST data captured by background.js
@@ -282,10 +314,10 @@ document.getElementById('captureBtn').addEventListener('click', async () => {
       turnstileRequestUrl: turnstileStored.turnstileUrl || "",
       turnstileCapturedAt: turnstileStored.turnstileCapturedAt || "",
 
-      // cf clearance data, captured by background.js
-      cfClearance: cfClearanceStored.cfClearanceRaw || "",
-      cfClearanceCapturedAt: cfClearanceStored.cfClearanceCapturedAt || "",
-      cfClearanceUrl: cfClearanceStored.cfClearanceUrl || "",
+      // cf clearance for the active tab's domain
+      cfClearance: cfClearanceRaw,
+      cfClearanceCapturedAt: cfClearanceCapturedAt,
+      cfClearanceUrl: cfClearanceUrl,
 
 
       
@@ -299,6 +331,14 @@ document.getElementById('captureBtn').addEventListener('click', async () => {
       }
     };
     
+    // Don't export empty cf-clearance fields when none was captured for this
+    // tab — an empty timestamp would make the Go importer fail to parse.
+    if (!cfClearanceRaw) {
+      delete exportData.cfClearance;
+      delete exportData.cfClearanceCapturedAt;
+      delete exportData.cfClearanceUrl;
+    }
+
     // -------------------------------------------------------------------------
     // Step 8: Convert to JSON and copy to clipboard
     // -------------------------------------------------------------------------
@@ -319,7 +359,12 @@ document.getElementById('captureBtn').addEventListener('click', async () => {
       `Turnstile (${Object.keys(turnstileData.formData).length} tokens)` : 
       `Cookies (${cfCookies.length} CF + ${allCookies.size} total)`;
     
-    statusDiv.textContent = `✓ Copied! Protection: ${protectionType}`;
+    let statusMessage = `✓ Copied! Protection: ${protectionType}`;
+    if (!cfClearanceRaw) {
+      statusDiv.className = 'warning';
+      statusMessage += ' — ⚠️ no cf_clearance found for this site. Solve the challenge on THIS page first, then capture again.';
+    }
+    statusDiv.textContent = statusMessage;
     
     // Show a preview of the captured data (first 300 characters)
     previewDiv.innerHTML = `

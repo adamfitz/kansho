@@ -85,17 +85,17 @@ func main() {
 
 	databaseMenu := fyne.NewMenu("Database",
 		fyne.NewMenuItem("Backup", func() {
-			log.Println("[UI] MangaDex database backup triggered (GUI)")
+			log.Println("[UI] Kansho database backup triggered (GUI)")
 			ui.ShowDatabaseBackupDialog(kanshoApp, myWindow)
 		}),
 		fyne.NewMenuItemSeparator(),
 		fyne.NewMenuItem("Restore", func() {
-			log.Println("[UI] MangaDex database restore triggered (GUI)")
+			log.Println("[UI] Kansho database restore triggered (GUI)")
 			ui.ShowDatabaseRestoreDialog(kanshoApp, myWindow)
 		}),
 		fyne.NewMenuItemSeparator(),
 		fyne.NewMenuItem("Compact", func() {
-			log.Println("[UI] MangaDex database compact triggered (GUI)")
+			log.Println("[UI] Kansho database compact triggered (GUI)")
 			ui.ShowDatabaseCompactDialog(kanshoApp, myWindow)
 		}),
 	)

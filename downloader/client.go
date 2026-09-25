@@ -51,6 +51,16 @@ func NewHTTPClient(domain string, needsCF bool) (*HTTPClient, error) {
 		data, err := cf.LoadFromFile(domain)
 		if err != nil {
 			log.Printf("[HTTPClient] No CF bypass data for %s: %v", domain, err)
+		} else if data.CfClearanceStruct != nil && data.CfClearanceStruct.Domain != "" &&
+			!cf.ClearanceDomainMatches(data.CfClearanceStruct.Domain, domain) {
+			// A token valid for a different site is cryptographically rejected
+			// by Cloudflare, so keeping it would only cause a guaranteed
+			// challenge. Discard it so a fresh capture is requested.
+			log.Printf("[HTTPClient] Discarding stored CF bypass for %s: clearance domain %q does not match",
+				domain, data.CfClearanceStruct.Domain)
+			if delErr := cf.DeleteDomain(domain); delErr != nil {
+				log.Printf("[HTTPClient] Failed to delete stale CF bypass for %s: %v", domain, delErr)
+			}
 		} else {
 			client.bypassData = data
 			log.Printf("[HTTPClient] ✓ Loaded CF bypass for %s (will verify empirically on first request)", domain)

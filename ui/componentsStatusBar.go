@@ -16,14 +16,13 @@ import (
 // MainStatusBar is a compact live readout pinned to the bottom of the main
 // Kansho window, mirroring the status bar of the download queue page: a short
 // bold badge on the left and a status message that truncates instead of
-// wrapping. It shows the selected manga's download site and how many of its
-// chapters are downloaded; once the user refreshes that manga's chapter list
-// (fetching remote chapters) it also shows how many chapters are not
-// downloaded. The right edge carries the single representation of the
-// chapter-list refresh worker pool (see refreshpool): an ASCII spinner while
-// scrapes are in flight plus the running/queued counts. While the pool has
-// work the readout is clickable and opens a dialog listing every domain
-// currently being refreshed.
+// wrapping. It shows the selected manga's download site and, after a complete
+// chapter-count snapshot has been loaded from the database, its downloaded,
+// total, and not-downloaded chapter counts. The right edge carries the single
+// representation of the chapter-list refresh worker pool (see refreshpool): an
+// ASCII spinner while scrapes are in flight plus the running/queued counts.
+// While the pool has work the readout is clickable and opens a dialog listing
+// every domain currently being refreshed.
 type MainStatusBar struct {
 	Bar        fyne.CanvasObject
 	badge      *widget.Label
@@ -49,6 +48,12 @@ type MainStatusBar struct {
 	dotsTicker    *time.Ticker
 	dotsDone      chan struct{}
 	dotsFrame     int
+}
+
+type chapterCounts struct {
+	Total         int
+	Downloaded    int
+	NotDownloaded int
 }
 
 // SetWindow provides the window used for the refresh-status dialog. Must be
@@ -100,17 +105,15 @@ func NewMainStatusBar() *MainStatusBar {
 	return s
 }
 
-// ShowManga displays the download state for the given site. The number of
-// downloaded chapters is always shown; the number of not-downloaded chapters
-// is only included once refreshed is true, i.e. after the user pressed Refresh
-// on the chapter list and remote chapters were fetched.
-func (s *MainStatusBar) ShowManga(site string, downloaded, notDownloaded int, refreshed bool) {
+// ShowManga displays the download state for the given site. Chapter counts are
+// rendered only when a complete database-backed snapshot is available.
+func (s *MainStatusBar) ShowManga(site string, counts *chapterCounts) {
 	s.badge.SetText(site)
-	if refreshed {
-		s.message.SetText(fmt.Sprintf("%d chapters downloaded · %d to download", downloaded, notDownloaded))
-	} else {
-		s.message.SetText(fmt.Sprintf("%d chapters downloaded", downloaded))
+	if counts == nil {
+		s.message.SetText("")
+		return
 	}
+	s.message.SetText(fmt.Sprintf("%d of %d chapters downloaded · %d to download", counts.Downloaded, counts.Total, counts.NotDownloaded))
 }
 
 // SetIdle resets the bar to its initial state when no manga is selected.

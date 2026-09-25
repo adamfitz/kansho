@@ -22,15 +22,7 @@ document.getElementById('captureBtn').addEventListener('click', async () => {
     const parentDomain = domain.split('.').slice(-2).join('.');
     const parentCookies = await browser.cookies.getAll({ domain: parentDomain });
 
-    const dotCookies = document.cookie
-      .split('; ')
-      .map(c => {
-        const [name, value] = c.split('=');
-        return { name, value, domain: window.location.hostname };
-      });
-    const urlCookies = [];
-
-    const allCookies = [...cookies, ...parentCookies, ...dotCookies, ...urlCookies].reduce((acc, cookie) => {
+    const allCookies = [...cookies, ...parentCookies].reduce((acc, cookie) => {
       const key = `${cookie.name}-${cookie.domain}`;
 
       if (!acc.has(key)) {
@@ -135,6 +127,43 @@ document.getElementById('captureBtn').addEventListener('click', async () => {
       "cfClearanceUrl"
     ]);
 
+    const jarCfCookie = Array.from(allCookies.values())
+      .find(c => c.name === 'cf_clearance');
+
+    const buildCfClearanceRaw = (cookie) => {
+      let raw = `cf_clearance=${cookie.value}`;
+      if (cookie.domain) raw += `; Domain=${cookie.domain}`;
+      if (cookie.path) raw += `; Path=${cookie.path}`;
+      if (cookie.sameSite) raw += `; SameSite=${cookie.sameSite}`;
+      if (cookie.secure) raw += `; Secure`;
+      raw += `; HttpOnly`;
+      if (cookie.expirationDate) raw += `; Expires=${new Date(cookie.expirationDate * 1000).toUTCString()}`;
+      return raw;
+    };
+
+    const hostOf = (url) => {
+      try { return new URL(url).hostname.toLowerCase(); } catch (e) { return ''; }
+    };
+    const sameSiteFamily = (a, b) => {
+      if (!a || !b) return false;
+      return a === b || a.endsWith('.' + b) || b.endsWith('.' + a);
+    };
+
+    let cfClearanceRaw = '';
+    let cfClearanceUrl = '';
+    let cfClearanceCapturedAt = '';
+
+    if (jarCfCookie) {
+      cfClearanceRaw = buildCfClearanceRaw(jarCfCookie);
+      cfClearanceUrl = tab.url;
+      cfClearanceCapturedAt = new Date().toISOString();
+    } else if (cfClearanceStored.cfClearanceRaw &&
+               sameSiteFamily(hostOf(cfClearanceStored.cfClearanceUrl), domain)) {
+      cfClearanceRaw = cfClearanceStored.cfClearanceRaw;
+      cfClearanceUrl = cfClearanceStored.cfClearanceUrl;
+      cfClearanceCapturedAt = cfClearanceStored.cfClearanceCapturedAt;
+    }
+
     const turnstileStored = await browser.storage.local.get([
       "turnstilePayload",
       "turnstileCapturedAt",
@@ -168,15 +197,21 @@ document.getElementById('captureBtn').addEventListener('click', async () => {
       turnstileRequestBody: turnstileStored.turnstilePayload || "",
       turnstileRequestUrl: turnstileStored.turnstileUrl || "",
       turnstileCapturedAt: turnstileStored.turnstileCapturedAt || "",
-      cfClearance: cfClearanceStored.cfClearanceRaw || "",
-      cfClearanceCapturedAt: cfClearanceStored.cfClearanceCapturedAt || "",
-      cfClearanceUrl: cfClearanceStored.cfClearanceUrl || "",
+      cfClearance: cfClearanceRaw,
+      cfClearanceCapturedAt: cfClearanceCapturedAt,
+      cfClearanceUrl: cfClearanceUrl,
       entropy: entropy,
       headers: {
         userAgent: navigator.userAgent,
         acceptLanguage: navigator.language
       }
     };
+
+    if (!cfClearanceRaw) {
+      delete exportData.cfClearance;
+      delete exportData.cfClearanceCapturedAt;
+      delete exportData.cfClearanceUrl;
+    }
 
     const jsonData = JSON.stringify(exportData, null, 2);
 
@@ -187,7 +222,12 @@ document.getElementById('captureBtn').addEventListener('click', async () => {
       `Turnstile (${Object.keys(turnstileData.formData).length} tokens)` :
       `Cookies (${cfCookies.length} CF + ${allCookies.size} total)`;
 
-    statusDiv.textContent = `✓ Copied! Protection: ${protectionType}`;
+    let statusMessage = `✓ Copied! Protection: ${protectionType}`;
+    if (!cfClearanceRaw) {
+      statusDiv.className = 'warning';
+      statusMessage += ' — ⚠️ no cf_clearance found for this site. Solve the challenge on THIS page first, then capture again.';
+    }
+    statusDiv.textContent = statusMessage;
 
     previewDiv.innerHTML = `
       <strong>Preview:</strong>

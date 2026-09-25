@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,12 +16,21 @@ import (
 )
 
 // dbFileName is the name of the SQLite database inside the kansho config
-// directory. It stores MangaDex title information only; Kansho's bookmarks and
-// download URLs live separately in bookmarks.json.
-const dbFileName = "mangadex.db"
+// directory. It stores MangaDex title information and generic per-manga
+// chapter count snapshots; Kansho's bookmarks live separately in bookmarks.json.
+const dbFileName = "kansho.db"
 
-// GetStore returns the process-wide default MangaDex title database, opening
-// it (and its schema) on first use.
+// legacyDBFileName is the old database file name used before the database
+// became a general Kansho store. Open migrates it to dbFileName once so
+// existing local title data and chapter stats are not lost.
+const legacyDBFileName = "mangadex.db"
+
+// PreRestoreFileName is the file the current database is preserved as just
+// before a restore swaps it out for the user's backup.
+const PreRestoreFileName = "kansho.pre-restore.db"
+
+// GetStore returns the process-wide default local database, opening it (and its
+// schema) on first use.
 func GetStore() (*Store, error) {
 	defaultStoreOnce.Do(func() {
 		defaultStore, defaultStoreErr = Open()
@@ -34,9 +44,9 @@ var (
 	defaultStoreErr  error
 )
 
-// Store is the local SQLite database of MangaDex title information. It is
-// stored at ~/.config/kansho/mangadex.db and is completely separate from the
-// bookmarks JSON.
+// Store is the local SQLite database of MangaDex title information and generic
+// manga chapter count snapshots. It is stored at ~/.config/kansho/kansho.db
+// and is completely separate from the bookmarks JSON.
 type Store struct {
 	conn *sql.DB
 	path string
@@ -51,12 +61,66 @@ func DefaultDBPath() (string, error) {
 	return filepath.Join(dir, dbFileName), nil
 }
 
-// Open opens (or creates) the MangaDex title database at the default location
-// and ensures the schema exists.
+// migrateLegacyDatabase moves an existing mangadex.db to kansho.db on first
+// startup after the rename so existing local title data and chapter counts are
+// not lost. It only acts when the legacy file exists and the new one does not.
+func migrateLegacyDatabase(newPath string) error {
+	legacyPath := filepath.Join(filepath.Dir(newPath), legacyDBFileName)
+	if _, err := os.Stat(legacyPath); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if _, err := os.Stat(newPath); err == nil {
+		return nil // new database already in place; leave the legacy file alone
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+
+	if err := ValidateSchema(legacyPath); err != nil {
+		log.Printf("[mangadex] skip migration of %s: not a Kansho database (%v)", legacyPath, err)
+		return nil
+	}
+
+	conn, err := sql.Open("sqlite", legacyPath+"?_busy_timeout=5000")
+	if err != nil {
+		return fmt.Errorf("open legacy database: %w", err)
+	}
+	if err := conn.Ping(); err != nil {
+		conn.Close()
+		return fmt.Errorf("ping legacy database: %w", err)
+	}
+	quoted := strings.ReplaceAll(newPath, "'", "''")
+	if _, err := conn.Exec(fmt.Sprintf("VACUUM INTO '%s'", quoted)); err != nil {
+		conn.Close()
+		return fmt.Errorf("migrate legacy database: %w", err)
+	}
+	if err := conn.Close(); err != nil {
+		return fmt.Errorf("close legacy database: %w", err)
+	}
+	if err := ValidateSchema(newPath); err != nil {
+		return fmt.Errorf("migrated database failed validation: %w", err)
+	}
+
+	for _, p := range []string{legacyPath, legacyPath + "-wal", legacyPath + "-shm"} {
+		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove legacy database %s: %w", p, err)
+		}
+	}
+	return nil
+}
+
+// Open opens (or creates) the local database at the default location and
+// ensures the schema exists. A legacy mangadex.db is migrated to kansho.db
+// automatically on first use.
 func Open() (*Store, error) {
 	path, err := DefaultDBPath()
 	if err != nil {
-		return nil, fmt.Errorf("mangadex db path: %w", err)
+		return nil, fmt.Errorf("kansho db path: %w", err)
+	}
+	if err := migrateLegacyDatabase(path); err != nil {
+		return nil, fmt.Errorf("migrate legacy database: %w", err)
 	}
 	return OpenPath(path)
 }
@@ -64,22 +128,22 @@ func Open() (*Store, error) {
 // OpenPath opens (or creates) the database at an explicit path.
 func OpenPath(path string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return nil, fmt.Errorf("create mangadex db directory: %w", err)
+		return nil, fmt.Errorf("create kansho database directory: %w", err)
 	}
 
 	conn, err := sql.Open("sqlite", path+"?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=on")
 	if err != nil {
-		return nil, fmt.Errorf("open mangadex database: %w", err)
+		return nil, fmt.Errorf("open Kansho database: %w", err)
 	}
 	if err := conn.Ping(); err != nil {
 		conn.Close()
-		return nil, fmt.Errorf("ping mangadex database: %w", err)
+		return nil, fmt.Errorf("ping Kansho database: %w", err)
 	}
 
 	s := &Store{conn: conn, path: path}
 	if err := s.EnsureSchema(); err != nil {
 		conn.Close()
-		return nil, fmt.Errorf("ensure mangadex schema: %w", err)
+		return nil, fmt.Errorf("ensure Kansho schema: %w", err)
 	}
 	return s, nil
 }
@@ -94,7 +158,7 @@ func (s *Store) Path() string {
 	return s.path
 }
 
-// EnsureSchema creates the manga_title and manga_title_lookup tables and their
+// EnsureSchema creates the title, alias, and chapter statistic tables and their
 // indexes if they do not exist.
 func (s *Store) EnsureSchema() error {
 	schema := `
@@ -128,10 +192,33 @@ func (s *Store) EnsureSchema() error {
 	);
 	CREATE INDEX IF NOT EXISTS idx_manga_title_lookup_id
 		ON manga_title_lookup (mangadex_id);
-	PRAGMA user_version = 2;
+	CREATE TABLE IF NOT EXISTS manga_chapter_stats (
+		manga_key             TEXT PRIMARY KEY,
+		title                 TEXT NOT NULL DEFAULT '',
+		site                  TEXT NOT NULL DEFAULT '',
+		url                   TEXT NOT NULL DEFAULT '',
+		total_chapters         INTEGER NOT NULL CHECK (total_chapters >= 0),
+		downloaded_chapters    INTEGER NOT NULL CHECK (downloaded_chapters >= 0),
+		not_downloaded_chapters INTEGER NOT NULL CHECK (not_downloaded_chapters >= 0),
+		updated_at             DATETIME DEFAULT CURRENT_TIMESTAMP,
+		CHECK (downloaded_chapters <= total_chapters),
+		CHECK (downloaded_chapters + not_downloaded_chapters = total_chapters)
+	);
+	CREATE INDEX IF NOT EXISTS idx_manga_chapter_stats_title
+		ON manga_chapter_stats (title);
+	PRAGMA user_version = 3;
 	`
 	_, err := s.conn.Exec(schema)
 	return err
+}
+
+type ChapterStats struct {
+	Title         string
+	Site          string
+	URL           string
+	Total         int
+	Downloaded    int
+	NotDownloaded int
 }
 
 // rowMeta is the persistent form of a MangaInfo record inside the database.
@@ -337,6 +424,64 @@ func (s *Store) Upsert(info *MangaInfo) error {
 	return nil
 }
 
+func (s *Store) UpsertChapterStats(key string, stats ChapterStats) error {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return fmt.Errorf("cannot store chapter stats without a manga key")
+	}
+	if stats.Total < 0 || stats.Downloaded < 0 || stats.NotDownloaded < 0 {
+		return fmt.Errorf("chapter counts cannot be negative")
+	}
+	if stats.Downloaded > stats.Total || stats.Downloaded+stats.NotDownloaded != stats.Total {
+		return fmt.Errorf("chapter counts must add up to the total")
+	}
+
+	_, err := s.conn.Exec(`INSERT INTO manga_chapter_stats
+		(manga_key, title, site, url, total_chapters, downloaded_chapters,
+		 not_downloaded_chapters, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(manga_key) DO UPDATE SET
+			title = excluded.title,
+			site = excluded.site,
+			url = excluded.url,
+			total_chapters = excluded.total_chapters,
+			downloaded_chapters = excluded.downloaded_chapters,
+			not_downloaded_chapters = excluded.not_downloaded_chapters,
+			updated_at = CURRENT_TIMESTAMP`,
+		key, stats.Title, stats.Site, stats.URL, stats.Total,
+		stats.Downloaded, stats.NotDownloaded)
+	if err != nil {
+		return fmt.Errorf("store chapter stats for %s: %w", key, err)
+	}
+	return nil
+}
+
+func (s *Store) LookupChapterStats(key string) (*ChapterStats, error) {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return nil, nil
+	}
+
+	var stats ChapterStats
+	err := s.conn.QueryRow(`SELECT title, site, url, total_chapters,
+		downloaded_chapters, not_downloaded_chapters
+		FROM manga_chapter_stats WHERE manga_key = ?`, key).Scan(
+		&stats.Title,
+		&stats.Site,
+		&stats.URL,
+		&stats.Total,
+		&stats.Downloaded,
+		&stats.NotDownloaded,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("lookup chapter stats for %s: %w", key, err)
+	}
+	return &stats, nil
+}
+
 // Count returns the number of stored title records.
 func (s *Store) Count() (int, error) {
 	var n int
@@ -352,7 +497,7 @@ func (s *Store) Backup(dest string) error {
 	}
 	quoted := strings.ReplaceAll(dest, "'", "''")
 	if _, err := s.conn.Exec(fmt.Sprintf("VACUUM INTO '%s'", quoted)); err != nil {
-		return fmt.Errorf("backup mangadex database: %w", err)
+		return fmt.Errorf("backup Kansho database: %w", err)
 	}
 	return nil
 }
@@ -370,10 +515,10 @@ func (s *Store) IntegrityCheck() (string, error) {
 // Compact optimizes and shrinks the database file.
 func (s *Store) Compact() error {
 	if _, err := s.conn.Exec("PRAGMA optimize"); err != nil {
-		return fmt.Errorf("optimize mangadex database: %w", err)
+		return fmt.Errorf("optimize Kansho database: %w", err)
 	}
 	if _, err := s.conn.Exec("VACUUM"); err != nil {
-		return fmt.Errorf("vacuum mangadex database: %w", err)
+		return fmt.Errorf("vacuum Kansho database: %w", err)
 	}
 	return nil
 }
@@ -439,7 +584,7 @@ func (s *Store) Restore(src string) error {
 		return fmt.Errorf("restore rejected: %w", err)
 	}
 
-	safetyBackup := filepath.Join(filepath.Dir(s.path), "mangadex.pre-restore.db")
+	safetyBackup := filepath.Join(filepath.Dir(s.path), PreRestoreFileName)
 	_ = s.Backup(safetyBackup)
 
 	tempPath := s.path + ".restore"
