@@ -6,13 +6,6 @@ on:
 jobs:
   build-windows:
     runs-on: ubuntu-latest
-    env:
-      GOOS: windows
-      GOARCH: amd64
-      CGO_ENABLED: 1
-      CC: zig cc -target x86_64-windows-gnu
-      CXX: zig c++ -target x86_64-windows-gnu
-      CGO_LDFLAGS: -Wl,--subsystem,windows
 
     steps:
       - name: Checkout source
@@ -38,6 +31,13 @@ jobs:
             -o rsrc_windows_amd64.syso
 
       - name: Build Windows executable
+        env:
+          GOOS: windows
+          GOARCH: amd64
+          CGO_ENABLED: 1
+          CC: zig cc -target x86_64-windows-gnu
+          CXX: zig c++ -target x86_64-windows-gnu
+          CGO_LDFLAGS: -Wl,--subsystem,windows
         run: |
           BUILD_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
           COMMIT=$(git rev-parse --short HEAD)
