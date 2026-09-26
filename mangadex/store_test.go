@@ -239,9 +239,6 @@ func TestChapterStatsRoundTripAndReopen(t *testing.T) {
 	if got == nil || *got != stats {
 		t.Fatalf("chapter stats after reopen = %+v, want %+v", got, stats)
 	}
-	if got.LastRefresh != "2026-09-26" {
-		t.Fatalf("stored last refresh = %q, want 2026-09-26", got.LastRefresh)
-	}
 
 	stats.Downloaded = 5
 	stats.NotDownloaded = 7
