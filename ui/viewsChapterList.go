@@ -372,6 +372,7 @@ func chapterStatsFromItems(manga *config.Bookmarks, items []*ChapterItem) mangad
 		Total:         len(items),
 		Downloaded:    downloaded,
 		NotDownloaded: len(items) - downloaded,
+		LastRefresh:   "",
 	}
 }
 
@@ -504,6 +505,7 @@ func (v *ChapterListView) updateStatusBar() {
 			Total:         v.chapterStats.Total,
 			Downloaded:    v.chapterStats.Downloaded,
 			NotDownloaded: v.chapterStats.NotDownloaded,
+			LastRefresh:   v.chapterStats.LastRefresh,
 		}
 	}
 	v.statusBar.ShowManga(site, counts)
@@ -752,8 +754,10 @@ func (v *ChapterListView) applyRefreshedChapters(manga *config.Bookmarks, remote
 	items := buildChapterItems(localNames, v.remoteChapters[key])
 	var saved *mangadex.ChapterStats
 	if localErr == nil {
+		stats := chapterStatsFromItems(manga, items)
+		stats.LastRefresh = time.Now().UTC().Format("2006-01-02")
 		var err error
-		saved, err = v.saveChapterStats(manga, chapterStatsFromItems(manga, items))
+		saved, err = v.saveChapterStats(manga, stats)
 		if err != nil {
 			log.Printf("[UI] Failed to store chapter counts for %s: %v", manga.Title, err)
 		}

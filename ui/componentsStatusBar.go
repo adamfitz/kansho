@@ -54,6 +54,7 @@ type chapterCounts struct {
 	Total         int
 	Downloaded    int
 	NotDownloaded int
+	LastRefresh   string
 }
 
 // SetWindow provides the window used for the refresh-status dialog. Must be
@@ -113,7 +114,11 @@ func (s *MainStatusBar) ShowManga(site string, counts *chapterCounts) {
 		s.message.SetText("")
 		return
 	}
-	s.message.SetText(fmt.Sprintf("%d of %d chapters downloaded · %d to download", counts.Downloaded, counts.Total, counts.NotDownloaded))
+	msg := fmt.Sprintf("%d of %d chapters downloaded · %d to download", counts.Downloaded, counts.Total, counts.NotDownloaded)
+	if counts.LastRefresh != "" {
+		msg += fmt.Sprintf(" · Last Refresh: %s", counts.LastRefresh)
+	}
+	s.message.SetText(msg)
 }
 
 // SetIdle resets the bar to its initial state when no manga is selected.

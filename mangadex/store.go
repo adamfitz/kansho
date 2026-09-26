@@ -200,16 +200,48 @@ func (s *Store) EnsureSchema() error {
 		total_chapters         INTEGER NOT NULL CHECK (total_chapters >= 0),
 		downloaded_chapters    INTEGER NOT NULL CHECK (downloaded_chapters >= 0),
 		not_downloaded_chapters INTEGER NOT NULL CHECK (not_downloaded_chapters >= 0),
+		last_refresh          TEXT NOT NULL DEFAULT '',
 		updated_at             DATETIME DEFAULT CURRENT_TIMESTAMP,
 		CHECK (downloaded_chapters <= total_chapters),
 		CHECK (downloaded_chapters + not_downloaded_chapters = total_chapters)
 	);
 	CREATE INDEX IF NOT EXISTS idx_manga_chapter_stats_title
 		ON manga_chapter_stats (title);
-	PRAGMA user_version = 3;
+	PRAGMA user_version = 4;
 	`
 	_, err := s.conn.Exec(schema)
-	return err
+	if err != nil {
+		return err
+	}
+
+	columns, err := s.conn.Query("PRAGMA table_info(manga_chapter_stats)")
+	if err != nil {
+		return fmt.Errorf("read chapter stats schema: %w", err)
+	}
+	defer columns.Close()
+
+	hasLastRefresh := false
+	for columns.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt interface{}
+		if err := columns.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return fmt.Errorf("read chapter stats column: %w", err)
+		}
+		if name == "last_refresh" {
+			hasLastRefresh = true
+		}
+	}
+	if err := columns.Err(); err != nil {
+		return fmt.Errorf("read chapter stats columns: %w", err)
+	}
+	if !hasLastRefresh {
+		if _, err := s.conn.Exec("ALTER TABLE manga_chapter_stats ADD COLUMN last_refresh TEXT NOT NULL DEFAULT ''"); err != nil {
+			return fmt.Errorf("add last_refresh column: %w", err)
+		}
+	}
+	return nil
 }
 
 type ChapterStats struct {
@@ -219,6 +251,7 @@ type ChapterStats struct {
 	Total         int
 	Downloaded    int
 	NotDownloaded int
+	LastRefresh   string
 }
 
 // rowMeta is the persistent form of a MangaInfo record inside the database.
@@ -438,8 +471,8 @@ func (s *Store) UpsertChapterStats(key string, stats ChapterStats) error {
 
 	_, err := s.conn.Exec(`INSERT INTO manga_chapter_stats
 		(manga_key, title, site, url, total_chapters, downloaded_chapters,
-		 not_downloaded_chapters, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		 not_downloaded_chapters, last_refresh, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 		ON CONFLICT(manga_key) DO UPDATE SET
 			title = excluded.title,
 			site = excluded.site,
@@ -447,9 +480,10 @@ func (s *Store) UpsertChapterStats(key string, stats ChapterStats) error {
 			total_chapters = excluded.total_chapters,
 			downloaded_chapters = excluded.downloaded_chapters,
 			not_downloaded_chapters = excluded.not_downloaded_chapters,
+			last_refresh = excluded.last_refresh,
 			updated_at = CURRENT_TIMESTAMP`,
 		key, stats.Title, stats.Site, stats.URL, stats.Total,
-		stats.Downloaded, stats.NotDownloaded)
+		stats.Downloaded, stats.NotDownloaded, stats.LastRefresh)
 	if err != nil {
 		return fmt.Errorf("store chapter stats for %s: %w", key, err)
 	}
@@ -464,7 +498,7 @@ func (s *Store) LookupChapterStats(key string) (*ChapterStats, error) {
 
 	var stats ChapterStats
 	err := s.conn.QueryRow(`SELECT title, site, url, total_chapters,
-		downloaded_chapters, not_downloaded_chapters
+		downloaded_chapters, not_downloaded_chapters, last_refresh
 		FROM manga_chapter_stats WHERE manga_key = ?`, key).Scan(
 		&stats.Title,
 		&stats.Site,
@@ -472,6 +506,7 @@ func (s *Store) LookupChapterStats(key string) (*ChapterStats, error) {
 		&stats.Total,
 		&stats.Downloaded,
 		&stats.NotDownloaded,
+		&stats.LastRefresh,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil

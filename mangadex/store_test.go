@@ -210,6 +210,7 @@ func TestChapterStatsRoundTripAndReopen(t *testing.T) {
 		Total:         12,
 		Downloaded:    4,
 		NotDownloaded: 8,
+		LastRefresh:   "2026-09-26",
 	}
 
 	missing, err := store.LookupChapterStats(key)
@@ -238,6 +239,9 @@ func TestChapterStatsRoundTripAndReopen(t *testing.T) {
 	if got == nil || *got != stats {
 		t.Fatalf("chapter stats after reopen = %+v, want %+v", got, stats)
 	}
+	if got.LastRefresh != "2026-09-26" {
+		t.Fatalf("stored last refresh = %q, want 2026-09-26", got.LastRefresh)
+	}
 
 	stats.Downloaded = 5
 	stats.NotDownloaded = 7
@@ -263,8 +267,8 @@ func TestEnsureSchemaMigratesExistingDatabase(t *testing.T) {
 	if err := store.conn.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		t.Fatalf("read user_version: %v", err)
 	}
-	if version != 3 {
-		t.Fatalf("user_version = %d, want 3", version)
+	if version != 4 {
+		t.Fatalf("user_version = %d, want 4", version)
 	}
 
 	stats := ChapterStats{Title: "One Piece", Total: 2, NotDownloaded: 2}
