@@ -300,7 +300,7 @@ func extractChaptersWithSelector(ctx context.Context, mangaURL string, site Site
 
 // extractChaptersCustom uses site's custom parser
 func extractChaptersCustom(ctx context.Context, mangaURL string, site SitePlugin, method *ChapterExtractionMethod) (map[string]string, error) {
-	if method.CustomParser == nil {
+	if method.CustomParser == nil && method.ContextParser == nil {
 		return nil, fmt.Errorf("custom parser not provided")
 	}
 
@@ -322,6 +322,9 @@ func extractChaptersCustom(ctx context.Context, mangaURL string, site SitePlugin
 		return nil, fmt.Errorf("failed to get HTML via executor: %w", err)
 	}
 
+	if method.ContextParser != nil {
+		return method.ContextParser(fetchCtx, html)
+	}
 	return method.CustomParser(html)
 }
 
@@ -447,7 +450,7 @@ func extractImagesCustom(ctx context.Context, chapterURL string, site SitePlugin
 
 // extractChaptersWithAPI uses API-based extraction
 func extractChaptersWithAPI(ctx context.Context, mangaURL string, site SitePlugin, method *ChapterExtractionMethod) (map[string]string, error) {
-	if method.APIFunc == nil {
+	if method.APIFunc == nil && method.ContextAPIFunc == nil {
 		return nil, fmt.Errorf("API function not provided")
 	}
 
@@ -456,7 +459,12 @@ func extractChaptersWithAPI(ctx context.Context, mangaURL string, site SitePlugi
 		return nil, fmt.Errorf("failed to create API client: %w", err)
 	}
 
-	rawData, err := method.APIFunc(mangaURL, client)
+	var rawData []map[string]string
+	if method.ContextAPIFunc != nil {
+		rawData, err = method.ContextAPIFunc(ctx, mangaURL, client)
+	} else {
+		rawData, err = method.APIFunc(mangaURL, client)
+	}
 	if err != nil {
 		return nil, err
 	}

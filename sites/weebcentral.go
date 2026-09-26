@@ -51,8 +51,8 @@ func (w *WeebcentralSite) Debugger() *downloader.Debugger {
 // The response is plain HTML with <a href="/chapters/...">Chapter N</a> links.
 func (w *WeebcentralSite) GetChapterExtractionMethod() *downloader.ChapterExtractionMethod {
 	return &downloader.ChapterExtractionMethod{
-		Type:         "custom",
-		CustomParser: parseWeebcentralChapters,
+		Type:          "custom",
+		ContextParser: parseWeebcentralChapters,
 	}
 }
 
@@ -126,7 +126,7 @@ func (w *WeebcentralSite) NormalizeChapterFilename(data map[string]string) strin
 //	hx-get="https://weebcentral.com/series/{ID}/full-chapter-list"
 //
 // That endpoint returns a plain HTML fragment with all chapter <a> links.
-func parseWeebcentralChapters(html string) (map[string]string, error) {
+func parseWeebcentralChapters(ctx context.Context, html string) (map[string]string, error) {
 	// Find the full-chapter-list endpoint URL from the "Show All Chapters" button
 	endpointRe := regexp.MustCompile(`hx-get="(https://weebcentral\.com/series/[^"]+/full-chapter-list[^"]*)"`)
 	matches := endpointRe.FindStringSubmatch(html)
@@ -147,7 +147,6 @@ func parseWeebcentralChapters(html string) (map[string]string, error) {
 		return nil, fmt.Errorf("WeebCentral: failed to create executor for chapter list: %w", err)
 	}
 
-	ctx := context.Background()
 	fullListHTML, err := exec.FetchHTML(ctx, fullListURL, "")
 	if err != nil {
 		return nil, fmt.Errorf("WeebCentral: failed to fetch full chapter list: %w", err)

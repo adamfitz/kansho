@@ -55,12 +55,12 @@ func (s *CubariSite) GetChapterExtractionMethod() *downloader.ChapterExtractionM
 	return &downloader.ChapterExtractionMethod{
 		Type:         "custom",
 		WaitSelector: "",
-		CustomParser: func(html string) (map[string]string, error) {
+		ContextParser: func(ctx context.Context, html string) (map[string]string, error) {
 			var dbg *downloader.Debugger
 			if d, ok := any(s).(downloader.DebugSite); ok {
 				dbg = d.Debugger()
 			}
-			return parseCubariChapters(html, dbg)
+			return parseCubariChapters(ctx, html, dbg)
 		},
 	}
 }
@@ -102,7 +102,7 @@ func CubariDownloadChapters(ctx context.Context, manga *config.Bookmarks, progre
 // Chapter extraction
 // -------------------------
 
-func parseCubariChapters(html string, dbg *downloader.Debugger) (map[string]string, error) {
+func parseCubariChapters(ctx context.Context, html string, dbg *downloader.Debugger) (map[string]string, error) {
 	// Try normal Cubari series first
 	jsonText, err := extractNextDataJSON(html)
 	if err == nil {
@@ -123,7 +123,7 @@ func parseCubariChapters(html string, dbg *downloader.Debugger) (map[string]stri
 		return nil, fmt.Errorf("Cubari: failed to create executor: %w", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 
 	rawJSON, err := exec.FetchHTML(ctx, gistURL, "")

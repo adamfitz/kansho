@@ -10,6 +10,7 @@ import (
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 )
 
@@ -213,7 +214,7 @@ func (s *MainStatusBar) stopPoolSpinner() {
 
 // refreshDotsFrames is the animated "ongoing" indicator shown in the refresh
 // dialog, cycling one to three dots.
-var refreshDotsFrames = []string{".", "..", "..."}
+var refreshDotsFrames = []string{"...", "..", "."}
 
 // dotsInterval is how often the dialog's dot indicator advances its frame.
 const dotsInterval = 400 * time.Millisecond
@@ -260,9 +261,15 @@ func (s *MainStatusBar) rebuildDomainRows(sites []string) {
 		domain := widget.NewLabel(site)
 		dots := widget.NewLabel(refreshDotsFrames[0])
 		dots.TextStyle = fyne.TextStyle{Monospace: true}
+		cancelBtn := widget.NewButtonWithIcon("", theme.CancelIcon(), func() {
+			refreshpool.Get().CancelSite(site)
+		})
+		cancelBtn.Importance = widget.DangerImportance
+		cancelBtn.SetText("")
+		cancelBtn.Resize(fyne.NewSize(18, 18))
 		s.domainLabels = append(s.domainLabels, domain)
 		s.dotsLabels = append(s.dotsLabels, dots)
-		s.rowsBox.Add(container.NewBorder(nil, nil, nil, dots, domain))
+		s.rowsBox.Add(container.NewBorder(nil, nil, nil, container.NewHBox(dots, cancelBtn), domain))
 	}
 	s.rowsBox.Refresh()
 

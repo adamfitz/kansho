@@ -1,9 +1,9 @@
 package downloader
 
 import (
+	"context"
 	"time"
 
-	//"context"
 	"kansho/config"
 )
 
@@ -36,9 +36,16 @@ type ChapterExtractionMethod struct {
 	// Receives HTML, returns map[filename]url
 	CustomParser func(html string) (map[string]string, error)
 
+	// ContextParser is an optional context-aware variant for custom chapter
+	// parsing that performs additional requests after the initial page fetch.
+	ContextParser func(ctx context.Context, html string) (map[string]string, error)
+
 	// For Type="api": Custom API extraction function
 	// Receives base URL and API client, returns raw chapter data
 	APIFunc func(baseURL string, client *APIClient) ([]map[string]string, error)
+
+	// ContextAPIFunc is the context-aware variant for API extraction.
+	ContextAPIFunc func(ctx context.Context, baseURL string, client *APIClient) ([]map[string]string, error)
 }
 
 // ImageExtractionMethod defines how to extract images from a chapter page

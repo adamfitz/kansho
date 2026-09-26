@@ -66,7 +66,7 @@ func (s *StonescapeSite) NeedsCFBypass() bool {
 func (s *StonescapeSite) GetChapterExtractionMethod() *downloader.ChapterExtractionMethod {
 	return &downloader.ChapterExtractionMethod{
 		Type: "api",
-		APIFunc: func(mangaURL string, client *downloader.APIClient) ([]map[string]string, error) {
+		ContextAPIFunc: func(ctx context.Context, mangaURL string, client *downloader.APIClient) ([]map[string]string, error) {
 			slug, err := stonescapeExtractSlug(mangaURL)
 			if err != nil {
 				return nil, fmt.Errorf("[Stonescape] could not extract slug from %q: %w", mangaURL, err)
@@ -77,7 +77,7 @@ func (s *StonescapeSite) GetChapterExtractionMethod() *downloader.ChapterExtract
 			log.Printf("[Stonescape] Fetching series info: %s", seriesURL)
 
 			var seriesResp stonescapeSeriesResponse
-			if err := client.FetchJSON(context.Background(), seriesURL, &seriesResp); err != nil {
+			if err := client.FetchJSON(ctx, seriesURL, &seriesResp); err != nil {
 				return nil, fmt.Errorf("[Stonescape] failed to fetch series info: %w", err)
 			}
 			if seriesResp.SeriesID == "" {
@@ -89,7 +89,7 @@ func (s *StonescapeSite) GetChapterExtractionMethod() *downloader.ChapterExtract
 			log.Printf("[Stonescape] Fetching chapters: %s", chaptersURL)
 
 			var chaptersResp stonescapeChaptersResponse
-			if err := client.FetchJSON(context.Background(), chaptersURL, &chaptersResp); err != nil {
+			if err := client.FetchJSON(ctx, chaptersURL, &chaptersResp); err != nil {
 				return nil, fmt.Errorf("[Stonescape] failed to fetch chapters: %w", err)
 			}
 			if len(chaptersResp.Chapters) == 0 {

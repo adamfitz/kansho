@@ -50,8 +50,8 @@ func (k *KunmangaSite) NeedsManualCFPrompt() bool { return true }
 func (k *KunmangaSite) GetChapterExtractionMethod() *downloader.ChapterExtractionMethod {
 	return &downloader.ChapterExtractionMethod{
 		Type: "api",
-		APIFunc: func(baseURL string, client *downloader.APIClient) ([]map[string]string, error) {
-			return k.fetchChaptersViaAPI(baseURL, client)
+		ContextAPIFunc: func(ctx context.Context, baseURL string, client *downloader.APIClient) ([]map[string]string, error) {
+			return k.fetchChaptersViaAPI(ctx, baseURL, client)
 		},
 	}
 }
@@ -94,7 +94,7 @@ type kunmangaChapterItem struct {
 	Name string  `json:"chapter_name"`
 }
 
-func (k *KunmangaSite) fetchChaptersViaAPI(baseURL string, client *downloader.APIClient) ([]map[string]string, error) {
+func (k *KunmangaSite) fetchChaptersViaAPI(ctx context.Context, baseURL string, client *downloader.APIClient) ([]map[string]string, error) {
 	slug, err := extractKunmangaSlug(baseURL)
 	if err != nil {
 		return nil, fmt.Errorf("[kunmanga] %w", err)
@@ -110,7 +110,7 @@ func (k *KunmangaSite) fetchChaptersViaAPI(baseURL string, client *downloader.AP
 		apiURL := fmt.Sprintf("%s?page=%d", apiBase, page)
 
 		var resp kunmangaChapterResponse
-		if err := client.FetchJSON(context.Background(), apiURL, &resp); err != nil {
+		if err := client.FetchJSON(ctx, apiURL, &resp); err != nil {
 			return nil, fmt.Errorf("[kunmanga] failed to fetch page %d: %w", page, err)
 		}
 
@@ -133,7 +133,11 @@ func (k *KunmangaSite) fetchChaptersViaAPI(baseURL string, client *downloader.AP
 		page++
 
 		// Rate limiting — be nice to the API
-		time.Sleep(200 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(200 * time.Millisecond):
+		}
 	}
 
 	log.Printf("[kunmanga] Found %d chapters", len(allChapters))

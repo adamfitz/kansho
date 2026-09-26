@@ -82,9 +82,7 @@ func (s *RoliascansSite) NeedsCFBypass() bool {
 func (s *RoliascansSite) GetChapterExtractionMethod() *downloader.ChapterExtractionMethod {
 	return &downloader.ChapterExtractionMethod{
 		Type: "api",
-		APIFunc: func(mangaURL string, client *downloader.APIClient) ([]map[string]string, error) {
-			ctx := context.Background()
-
+		ContextAPIFunc: func(ctx context.Context, mangaURL string, client *downloader.APIClient) ([]map[string]string, error) {
 			mangaID, err := roliascansMangaID(ctx, mangaURL, client)
 			if err != nil {
 				return nil, err

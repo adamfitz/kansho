@@ -79,7 +79,7 @@ func (m *MangadexSite) NeedsCFBypass() bool {
 func (m *MangadexSite) GetChapterExtractionMethod() *downloader.ChapterExtractionMethod {
 	return &downloader.ChapterExtractionMethod{
 		Type: "api",
-		APIFunc: func(baseURL string, client *downloader.APIClient) ([]map[string]string, error) {
+		ContextAPIFunc: func(ctx context.Context, baseURL string, client *downloader.APIClient) ([]map[string]string, error) {
 			// The site plugin may be constructed without a pre-set manga ID
 			// (e.g. GetSitePlugin for UI chapter refresh), so derive it from
 			// the base URL here rather than relying on the struct field.
@@ -90,7 +90,7 @@ func (m *MangadexSite) GetChapterExtractionMethod() *downloader.ChapterExtractio
 			m.mangaID = mangaID
 
 			// Get all chapters from API with pagination
-			allChapters, err := m.getAllChaptersAPI(client)
+			allChapters, err := m.getAllChaptersAPI(ctx, client)
 			if err != nil {
 				return nil, err
 			}
@@ -176,7 +176,7 @@ func (m *MangadexSite) NormalizeChapterFilename(data map[string]string) string {
 }
 
 // getAllChaptersAPI retrieves all chapters for a manga with pagination using APIClient
-func (m *MangadexSite) getAllChaptersAPI(client *downloader.APIClient) ([]MangaDexChapter, error) {
+func (m *MangadexSite) getAllChaptersAPI(ctx context.Context, client *downloader.APIClient) ([]MangaDexChapter, error) {
 	var allChapters []MangaDexChapter
 	offset := 0
 	limit := 100 // MangaDex allows up to 100 per request
@@ -203,7 +203,7 @@ func (m *MangadexSite) getAllChaptersAPI(client *downloader.APIClient) ([]MangaD
 		log.Printf("<mangadex> Fetching chapters: offset=%d, limit=%d", offset, limit)
 
 		var chapterList MangaDexChapterList
-		if err := client.FetchJSON(context.Background(), apiURL, &chapterList); err != nil {
+		if err := client.FetchJSON(ctx, apiURL, &chapterList); err != nil {
 			return nil, fmt.Errorf("failed to fetch chapters: %w", err)
 		}
 
@@ -219,7 +219,13 @@ func (m *MangadexSite) getAllChaptersAPI(client *downloader.APIClient) ([]MangaD
 		offset += limit
 
 		// Rate limiting - be nice to MangaDex API
-		time.Sleep(250 * time.Millisecond)
+		timer := time.NewTimer(250 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
 	}
 
 	log.Printf("<mangadex> Successfully retrieved %d total chapters", len(allChapters))
