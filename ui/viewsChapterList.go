@@ -388,6 +388,7 @@ func chapterStatsWithDownloaded(manga *config.Bookmarks, current mangadex.Chapte
 		Total:         total,
 		Downloaded:    downloaded,
 		NotDownloaded: total - downloaded,
+		LastRefresh:   current.LastRefresh,
 	}
 }
 
@@ -668,6 +669,7 @@ func (v *ChapterListView) onRefreshClicked() {
 	gen := v.loadGeneration
 	bookmark := *manga
 	title, siteName, targetURL := bookmark.Title, bookmark.Site, bookmark.Url
+	var remote map[string]string
 
 	submitted := refreshpool.Get().Submit(&refreshpool.Task{
 		Site: siteName,
@@ -687,17 +689,18 @@ func (v *ChapterListView) onRefreshClicked() {
 		AttemptTimeout: refreshAttemptTimeout,
 		TimeoutStep:    refreshAttemptTimeoutStep,
 		Run: func(ctx context.Context) error {
-			remote, err := downloader.FetchChapterURLsSingle(ctx, targetURL, site)
+			fetched, err := downloader.FetchChapterURLsSingle(ctx, targetURL, site)
 			if err != nil {
 				return err
 			}
-			fyne.Do(func() {
-				v.applyRefreshedChapters(&bookmark, remote, gen)
-			})
+			remote = fetched
 			return nil
 		},
 		OnSuccess: func() {
-			fyne.Do(func() { v.finishRefresh(gen, "") })
+			fyne.Do(func() {
+				v.applyRefreshedChapters(&bookmark, remote, gen)
+				v.finishRefresh(gen, "")
+			})
 		},
 		OnError: func(err error) {
 			var cfErr *cf.CfChallengeError
@@ -752,28 +755,28 @@ func (v *ChapterListView) applyRefreshedChapters(manga *config.Bookmarks, remote
 	v.cacheRemoteChapters(key, remote)
 	localNames, localErr := readLocalChapterNames(manga)
 	items := buildChapterItems(localNames, v.remoteChapters[key])
-	var saved *mangadex.ChapterStats
-	if localErr == nil {
-		stats := chapterStatsFromItems(manga, items)
-		stats.LastRefresh = time.Now().UTC().Format("2006-01-02")
-		var err error
-		saved, err = v.saveChapterStats(manga, stats)
-		if err != nil {
-			log.Printf("[UI] Failed to store chapter counts for %s: %v", manga.Title, err)
-		}
-	}
 
 	selected := v.state.GetSelectedManga()
 	isSelected := selected != nil && mangaSourceKey(selected) == key
-	if saved != nil && isSelected {
-		v.chapterStats = saved
+	if v.loadGeneration == gen && isSelected {
+		v.presentChapterItems(items)
+		v.refreshAfterTaskChange()
 	}
+
+	if localErr == nil {
+		stats := chapterStatsFromItems(manga, items)
+		stats.LastRefresh = parser.CurrentDate()
+		saved, err := v.saveChapterStats(manga, stats)
+		if err != nil {
+			log.Printf("[UI] Failed to store chapter counts for %s: %v", manga.Title, err)
+		} else if saved != nil && isSelected {
+			v.chapterStats = saved
+		}
+	}
+
 	if v.loadGeneration != gen || !isSelected {
 		return
 	}
-
-	v.presentChapterItems(items)
-	v.refreshAfterTaskChange()
 	v.updateStatusBar()
 }
 

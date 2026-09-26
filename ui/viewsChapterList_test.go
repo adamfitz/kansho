@@ -481,6 +481,36 @@ func TestStatusBarLoadsCompleteChapterCountsFromDatabase(t *testing.T) {
 	}
 }
 
+func TestStatusBarUsesSavedRefreshDateAndRefreshUpdatesIt(t *testing.T) {
+	state, view, _ := newChapterListViewTest(t, "")
+	bar := NewMainStatusBar()
+	view.SetStatusBar(bar)
+	manga := &state.MangaData.Manga[0]
+	key := mangaSourceKey(manga)
+	store := testChapterStatsStore(view)
+	store.seed(manga, 2, 1)
+	saved := store.stats[key]
+	saved.LastRefresh = "2026-09-26"
+	store.stats[key] = saved
+
+	view.onMangaSelected(0)
+	if !strings.HasSuffix(bar.message.Text, "Last Refresh: 2026-09-26") {
+		t.Fatalf("status bar should use saved refresh date, got %q", bar.message.Text)
+	}
+
+	view.applyRefreshedChapters(manga, map[string]string{"ch003.cbz": "u3"}, view.loadGeneration)
+	updated, err := store.LookupChapterStats(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated == nil || updated.LastRefresh == "" || updated.LastRefresh == "2026-09-26" {
+		t.Fatalf("refresh should save a new refresh date, got %+v", updated)
+	}
+	if !strings.HasSuffix(bar.message.Text, "Last Refresh: "+updated.LastRefresh) {
+		t.Fatalf("status bar should show refreshed date, got %q", bar.message.Text)
+	}
+}
+
 func TestChapterCountsReloadAfterMangaSwitch(t *testing.T) {
 	state, view, _ := newChapterListViewTest(t, "")
 	first := &state.MangaData.Manga[0]
