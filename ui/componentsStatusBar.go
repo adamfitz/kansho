@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"time"
 
-	"kansho/parser"
 	"kansho/refreshpool"
 
 	"fyne.io/fyne/v2"
@@ -117,9 +116,9 @@ func (s *MainStatusBar) ShowManga(site string, counts *chapterCounts) {
 		return
 	}
 	msg := fmt.Sprintf("%d of %d chapters downloaded · %d to download", counts.Downloaded, counts.Total, counts.NotDownloaded)
-	// calculate the current date
-	counts.LastRefresh = parser.CurrentDate()
-	msg += fmt.Sprintf(" · Last Refresh: %s", counts.LastRefresh)
+	if counts.LastRefresh != "" {
+		msg += fmt.Sprintf(" · Last Refresh: %s", counts.LastRefresh)
+	}
 	s.message.SetText(msg)
 }
 
