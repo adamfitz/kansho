@@ -87,7 +87,8 @@ The queue SHALL support cancelling individual tasks, all tasks, or a single mang
 - THEN the task's status SHALL be set to "cancelled" immediately
 - AND the StatusMessage SHALL be set to "Cancelling..."
 - AND the UI callback SHALL be notified BEFORE the cancel function unwinds (so the user sees feedback right away)
-- THEN the task's cancel function SHALL be called to abort the download
+- AND the queue SHALL have created a cancellable `context.Context` for the task and stored its `CancelFunc` on the task record
+- THEN the stored `CancelFunc` SHALL be invoked to abort the chapter download and all in-flight waits, including retry sleeps and rate-limit pauses
 
 #### Scenario: Cancel all tasks
 - GIVEN multiple tasks exist in the queue

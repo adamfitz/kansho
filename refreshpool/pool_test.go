@@ -200,6 +200,132 @@ func TestDifferentSitesRunInParallel(t *testing.T) {
 	close(release)
 }
 
+func TestCancelSiteCancelsQueuedTasks(t *testing.T) {
+	p := newTestPool(1, time.Millisecond, 0)
+	defer p.Close()
+
+	start := make(chan struct{})
+	blocked := make(chan struct{})
+	cancelled := make(chan error, 1)
+	if !p.Submit(&Task{
+		Site: "alpha",
+		Run: func(ctx context.Context) error {
+			close(start)
+			<-blocked
+			return nil
+		},
+		OnError: func(err error) { cancelled <- err },
+	}) {
+		t.Fatal("first submission rejected")
+	}
+
+	<-start
+	if !p.Submit(&Task{Site: "alpha", Run: func(context.Context) error { return nil }}) {
+		t.Fatal("second submission rejected")
+	}
+	if !p.CancelSite("alpha") {
+		t.Fatal("CancelSite should cancel queued work for the site")
+	}
+	close(blocked)
+
+	select {
+	case err := <-cancelled:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancelled error = %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("queued task was not cancelled")
+	}
+}
+
+func TestCancelSiteCancelsDuringBackoff(t *testing.T) {
+	p := NewPool(1, time.Millisecond, time.Hour, 2)
+	defer p.Close()
+
+	started := make(chan struct{})
+	cancelled := make(chan error, 1)
+	var attempts atomic.Int32
+	if !p.Submit(&Task{
+		Site: "alpha",
+		Run: func(context.Context) error {
+			attempts.Add(1)
+			close(started)
+			return errors.New("retry me")
+		},
+		OnError: func(err error) { cancelled <- err },
+	}) {
+		t.Fatal("submission rejected")
+	}
+
+	<-started
+	waitFor(t, time.Second, func() bool {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		return p.sites["alpha"].backoff > p.baseBackoff
+	})
+	if !p.CancelSite("alpha") {
+		t.Fatal("CancelSite should cancel a task in retry backoff")
+	}
+
+	select {
+	case err := <-cancelled:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancelled error = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("backoff task was not cancelled")
+	}
+	if got := attempts.Load(); got != 1 {
+		t.Fatalf("attempts = %d, want 1", got)
+	}
+}
+
+func TestCancelSiteCancelsWhileWaitingForWorkerSlot(t *testing.T) {
+	p := newTestPool(1, time.Millisecond, 0)
+	defer p.Close()
+
+	blockerStarted := make(chan struct{})
+	releaseBlocker := make(chan struct{})
+	defer close(releaseBlocker)
+	if !p.Submit(&Task{
+		Site: "blocker",
+		Run: func(context.Context) error {
+			close(blockerStarted)
+			<-releaseBlocker
+			return nil
+		},
+	}) {
+		t.Fatal("blocker submission rejected")
+	}
+	<-blockerStarted
+
+	cancelled := make(chan error, 1)
+	if !p.Submit(&Task{
+		Site:    "waiting",
+		Run:     func(context.Context) error { return nil },
+		OnError: func(err error) { cancelled <- err },
+	}) {
+		t.Fatal("waiting task submission rejected")
+	}
+	waitFor(t, time.Second, func() bool {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		return p.sites["waiting"].cancelCurrent != nil
+	})
+	if !p.CancelSite("waiting") {
+		t.Fatal("CancelSite should cancel a task waiting for a worker slot")
+	}
+
+	select {
+	case err := <-cancelled:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancelled error = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("waiting task was not cancelled")
+	}
+}
+
 func TestDuplicateDedupeKeyRejectedUntilFinished(t *testing.T) {
 	p := newTestPool(1, time.Millisecond, 0)
 	defer p.Close()

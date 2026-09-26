@@ -39,6 +39,14 @@ func TestMainStatusBarIsSlim(t *testing.T) {
 
 // TestRefreshAreaClickableOnlyWhileBusy verifies the bottom-right refresh
 // readout only becomes a click target while the pool has work in flight.
+func TestMainStatusBarShowsLastRefreshWhenAvailable(t *testing.T) {
+	bar := NewMainStatusBar()
+	bar.ShowManga("test", &chapterCounts{Total: 4, Downloaded: 2, NotDownloaded: 2, LastRefresh: "2026-09-26"})
+	if got, want := bar.message.Text, "2 of 4 chapters downloaded · 2 to download · Last Refresh: 2026-09-26"; got != want {
+		t.Fatalf("message = %q, want %q", got, want)
+	}
+}
+
 func TestRefreshAreaClickableOnlyWhileBusy(t *testing.T) {
 	bar := NewMainStatusBar()
 	if bar.refreshArea.clickable {

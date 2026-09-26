@@ -28,9 +28,11 @@ package refreshpool
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -131,6 +133,10 @@ func (t *Task) describe() string {
 // siteWorker owns the serial execution and backoff state of a single site.
 type siteWorker struct {
 	queue chan *Task
+
+	// cancelCurrent aborts the task currently running on this site. It is set
+	// when a task begins and cleared once that attempt returns.
+	cancelCurrent context.CancelFunc
 
 	// backoff is the delay applied before this site's next retry. It grows
 	// exponentially while scrapes keep failing and resets to the base value
@@ -234,6 +240,49 @@ func (p *Pool) Status() Status {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.snapshotLocked()
+}
+
+// CancelSite cancels every queued or running task for a given site. It returns
+// true when at least one task existed for that site and was cancelled or drained.
+func (p *Pool) CancelSite(site string) bool {
+	site = strings.TrimSpace(site)
+	if site == "" {
+		return false
+	}
+
+	p.mu.Lock()
+	w := p.sites[site]
+	if w == nil {
+		p.mu.Unlock()
+		return false
+	}
+
+	cancelled := false
+	if w.cancelCurrent != nil {
+		log.Printf("[RefreshPool] Cancelling active refresh for site %s", site)
+		w.cancelCurrent()
+		w.cancelCurrent = nil
+		cancelled = true
+	}
+
+	for {
+		select {
+		case task := <-w.queue:
+			if task == nil {
+				continue
+			}
+			log.Printf("[RefreshPool] Cancelling queued refresh for %s/%s", site, task.describe())
+			p.queued--
+			p.releaseSiteLocked(site)
+			p.removeDedupeLocked(task)
+			p.notifyLocked()
+			cancelled = true
+			task.OnErrorSafe(context.Canceled)
+		default:
+			p.mu.Unlock()
+			return cancelled
+		}
+	}
 }
 
 // Submit enqueues a chapter-list refresh task. It returns false if the task
@@ -354,17 +403,32 @@ func (p *Pool) runWorker(site string, w *siteWorker) {
 // current backoff between attempts and doubling it after each failure. On
 // success the site's backoff resets to the base value.
 func (p *Pool) runTask(w *siteWorker, task *Task) {
+	taskCtx, cancelTask := context.WithCancel(p.ctx)
+	p.mu.Lock()
+	w.cancelCurrent = cancelTask
+	p.mu.Unlock()
+	defer func() {
+		cancelTask()
+		p.mu.Lock()
+		w.cancelCurrent = nil
+		p.mu.Unlock()
+	}()
+
 	// Wait for a free global slot; the site stays serialized because each
 	// site only ever has this one worker.
 	select {
 	case p.sem <- struct{}{}:
-	case <-p.ctx.Done():
+	case <-taskCtx.Done():
 		// Still counted as queued (never became running), so abandon
 		// rather than finish to keep the status counters consistent.
 		p.abandon(task)
 		return
 	}
 	defer func() { <-p.sem }()
+	if taskCtx.Err() != nil {
+		p.abandon(task)
+		return
+	}
 
 	p.mu.Lock()
 	p.queued--
@@ -374,10 +438,19 @@ func (p *Pool) runTask(w *siteWorker, task *Task) {
 
 	attempt := 0
 	for {
-		attemptCtx, cancel := p.attemptContext(w, task)
+		attemptCtx, cancel := p.attemptContext(taskCtx, w, task)
 		err := p.safeRun(task, attemptCtx)
-		if cancel != nil {
-			cancel()
+		attemptErr := attemptCtx.Err()
+		cancel()
+		if taskCtx.Err() != nil {
+			err = context.Canceled
+		} else if err == nil && attemptErr != nil {
+			err = attemptErr
+		}
+		if errors.Is(err, context.Canceled) {
+			log.Printf("[RefreshPool] Attempt for %s/%s was cancelled", task.Site, task.describe())
+			p.finish(task, context.Canceled, false)
+			return
 		}
 		if err == nil {
 			p.mu.Lock()
@@ -423,7 +496,7 @@ func (p *Pool) runTask(w *siteWorker, task *Task) {
 			}
 		}
 
-		if !parser.SleepCtx(p.ctx, wait) {
+		if !parser.SleepCtx(taskCtx, wait) {
 			log.Printf("[RefreshPool] Cancelled during backoff - dropping fetch for %s/%s",
 				task.Site, task.describe())
 			p.finish(task, context.Canceled, false)
@@ -464,14 +537,15 @@ func (p *Pool) finish(task *Task, err error, success bool) {
 // attemptContext wraps the pool context with the site's adaptive timeout for
 // one scrape attempt, if the task opted into one (Task.AttemptTimeout). Runs
 // on the site worker goroutine, which owns w.timeout (like w.backoff).
-func (p *Pool) attemptContext(w *siteWorker, task *Task) (context.Context, context.CancelFunc) {
+func (p *Pool) attemptContext(parent context.Context, w *siteWorker, task *Task) (context.Context, context.CancelFunc) {
 	if task.AttemptTimeout <= 0 {
-		return p.ctx, nil
+		ctx, cancel := context.WithCancel(parent)
+		return ctx, cancel
 	}
 	if w.timeout < task.AttemptTimeout {
 		w.timeout = task.AttemptTimeout // first use: seed with the base
 	}
-	return context.WithTimeout(p.ctx, w.timeout)
+	return context.WithTimeout(parent, w.timeout)
 }
 
 // safeRun invokes Run once, converting panics into errors so a broken task
