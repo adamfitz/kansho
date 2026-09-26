@@ -1,10 +1,63 @@
-name: Build and Release Debian Package
+name: Build and Release Package (deb / win)
 
 on:
   workflow_dispatch:
 
 jobs:
+  build-windows:
+    runs-on: ubuntu-latest
+    env:
+      GOOS: windows
+      GOARCH: amd64
+      CGO_ENABLED: 1
+      CC: zig cc -target x86_64-windows-gnu
+      CXX: zig c++ -target x86_64-windows-gnu
+      CGO_LDFLAGS: -Wl,--subsystem,windows
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Set up Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.14.1
+
+      - name: Embed Windows icon
+        run: |
+          go install github.com/akavel/rsrc@latest
+          "$(go env GOPATH)/bin/rsrc" \
+            -ico packaging/kansho.ico \
+            -o rsrc_windows_amd64.syso
+
+      - name: Build Windows executable
+        run: |
+          BUILD_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          COMMIT=$(git rev-parse --short HEAD)
+          VERSION=$(git describe --tags --abbrev=0)
+          mkdir -p builds
+          go build \
+            -tags release \
+            -ldflags "-H windowsgui -X kansho/config.Version=${VERSION} -X kansho/config.GitCommit=${COMMIT} -X kansho/config.BuildTime=${BUILD_TIME}" \
+            -o builds/kansho.exe \
+            .
+
+      - name: Upload Windows executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: kansho-windows-amd64
+          path: builds/kansho.exe
+          if-no-files-found: error
+
   build-release-deb:
+    needs: build-windows
     runs-on: ubuntu-latest
     permissions:
       contents: write   # Needed to create GitHub Release
@@ -112,6 +165,12 @@ jobs:
           dpkg-deb --build rootfs \
           builds/${APP_NAME}_${{ steps.version.outputs.version }}_amd64.deb
 
+      - name: Download Windows executable
+        uses: actions/download-artifact@v4
+        with:
+          name: kansho-windows-amd64
+          path: builds/
+
       - name: Create GitHub Release (gh-release)
         id: release
         uses: softprops/action-gh-release@v2
@@ -122,5 +181,6 @@ jobs:
           prerelease: false
           files: |
             builds/*.deb
+            builds/kansho.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
