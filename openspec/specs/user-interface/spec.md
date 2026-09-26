@@ -91,6 +91,7 @@ The system SHALL display the chapters of the currently selected manga with per-c
 - AND SHALL merge new (not yet downloaded) chapters into the list
 - AND SHALL cache the fetched chapters for that manga so they persist for the lifetime of the application
 - AND SHALL save the displayed total, downloaded, and not-downloaded chapter counts for that manga in the local SQLite database
+- AND SHALL store the refresh date as `last_refresh` alongside the chapter-count snapshot so the UI can show when the data was last updated
 - AND new chapters SHALL NOT be downloaded automatically
 - AND the "Refresh" button SHALL be disabled while the fetch is in progress
 
@@ -100,6 +101,12 @@ The system SHALL display the chapters of the currently selected manga with per-c
 - THEN the main status bar SHALL load and display that snapshot
 - AND it SHALL display downloaded chapters out of the total chapters plus the not-downloaded chapter count
 - AND the displayed values SHALL come from the database rather than from only the currently loaded chapter rows
+
+#### Scenario: Main status bar shows saved refresh date
+- GIVEN a manga has a chapter-count snapshot with a non-empty `last_refresh` value stored in SQLite
+- WHEN the main status bar renders that manga
+- THEN it SHALL append the saved refresh date to the counts line as `Last Refresh: YYYY-MM-DD`
+- AND it SHALL use that stored value rather than falling back to the current time when the last refresh is not fresh
 
 #### Scenario: Chapter counts are hidden until first refresh
 - GIVEN a manga has no complete chapter-count snapshot in the local SQLite database
