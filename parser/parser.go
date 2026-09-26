@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // LocalChapterList returns a list of all files from the provided rootDir.
@@ -202,4 +203,8 @@ func CreateCbzFromDir(sourceDir, zipName string) error {
 	}
 
 	return nil
+}
+
+func CurrentDate() string {
+	return time.Now().Format("2006-01-02")
 }
