@@ -40,4 +40,5 @@ Shared mechanics:
 | roliascans | `roliascans.go` | API (anti-scraping token) → API | [roliascans.md](roliascans.md) |
 | stonescape | `stonescape.go` | API → API | [stonescape.md](stonescape.md) |
 | thunderscans | `thunderscans.go` | custom HTML → custom (`ts_reader.run` JSON) | [thunderscans.md](thunderscans.md) |
+| valirscans | `valirscans.go` | custom (Next.js RSC flight payload) → custom (RSC flight payload) | [valirscans.md](valirscans.md) |
 | weebcentral | `weebcentral.go` | custom HTMX endpoint → custom HTMX endpoint | [weebcentral.md](weebcentral.md) |

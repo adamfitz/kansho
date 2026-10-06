@@ -146,3 +146,10 @@ sites:
       shortname: false
       title: true
       location: true
+  - name: valirscans
+    display_name: valirscans
+    required_fields:
+      url: true
+      shortname: false
+      title: true
+      location: true
