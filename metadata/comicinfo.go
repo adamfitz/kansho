@@ -121,6 +121,9 @@ func FromMangaInfo(info *mangadex.MangaInfo) *ComicInfo {
 	}
 
 	series := info.PrimaryEnglishTitle()
+	if series == "" && len(info.EnglishTitleCandidates()) == 0 {
+		series = info.EnglishTitle()
+	}
 	if series != "" {
 		ci.Series = series
 		ci.Title = series

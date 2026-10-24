@@ -23,13 +23,14 @@ func TestFromMangaInfoUsesSelectedEnglishTitleForSeries(t *testing.T) {
 	}
 }
 
-func TestFromMangaInfoDoesNotUseNonEnglishSeries(t *testing.T) {
+func TestFromMangaInfoFallsBackToNonEnglishSeriesWithoutEnglishTitle(t *testing.T) {
 	info := &mangadex.MangaInfo{
-		Title: map[string]string{"ko": "Jeoldae Gunrim"},
+		Title:            map[string]string{"ko": "Jeoldae Gunrim"},
+		OriginalLanguage: "ko",
 	}
 
 	comicInfo := FromMangaInfo(info)
-	if comicInfo.Series != "" {
-		t.Fatalf("Series = %q, want empty when no English title exists", comicInfo.Series)
+	if comicInfo.Series != "Jeoldae Gunrim" {
+		t.Fatalf("Series = %q, want %q", comicInfo.Series, "Jeoldae Gunrim")
 	}
 }
