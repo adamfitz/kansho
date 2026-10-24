@@ -514,6 +514,7 @@ func chapterTitle(ci *ComicInfo, fileName, chapterNum string) string {
 type Result struct {
 	Name   string
 	Status string
+	Error  string
 }
 
 func GenerateForDirectory(store *mangadex.Store, info *mangadex.MangaInfo, dir string) []Result {
@@ -560,7 +561,7 @@ func GenerateForDirectory(store *mangadex.Store, info *mangadex.MangaInfo, dir s
 		}
 		ci.Title = chapterTitle(base, fileName, chapterNum)
 		if err := applyComicInfo(cbzPath, &ci, coverBytes); err != nil {
-			results = append(results, Result{Name: fileName, Status: "Failed"})
+			results = append(results, Result{Name: fileName, Status: "Failed", Error: err.Error()})
 			continue
 		}
 		results = append(results, Result{Name: fileName, Status: "OK"})
@@ -572,19 +573,26 @@ func VerifyForDirectory(store *mangadex.Store, info *mangadex.MangaInfo, dir str
 	if info == nil {
 		return nil
 	}
-	files, err := parser.LocalChapterList(dir)
+	expandedDir, err := parser.ExpandPath(dir)
+	if err != nil {
+		return []Result{{Name: dir, Status: "Failed", Error: err.Error()}}
+	}
+	files, err := parser.LocalChapterList(expandedDir)
 	if err != nil {
 		files = nil
 	}
 	if len(files) == 0 {
-		entries, err := os.ReadDir(dir)
+		entries, err := os.ReadDir(expandedDir)
 		if err == nil {
 			for _, e := range entries {
 				if !e.IsDir() && strings.EqualFold(filepath.Ext(e.Name()), ".cbz") {
-					files = append(files, filepath.Join(dir, e.Name()))
+					files = append(files, e.Name())
 				}
 			}
 		}
+	}
+	for i, file := range files {
+		files[i] = filepath.Join(expandedDir, file)
 	}
 	sort.Strings(files)
 	base := FromMangaInfo(info)
@@ -617,7 +625,7 @@ func VerifyForDirectory(store *mangadex.Store, info *mangadex.MangaInfo, dir str
 		}
 		ci.Title = chapterTitle(base, fileName, chapterNum)
 		if err := applyComicInfo(cbzPath, &ci, coverBytes); err != nil {
-			results = append(results, Result{Name: fileName, Status: "Failed"})
+			results = append(results, Result{Name: fileName, Status: "Failed", Error: err.Error()})
 			continue
 		}
 		results = append(results, Result{Name: fileName, Status: "Fixed"})

@@ -416,6 +416,7 @@ func buildMangaInfoContent(parentWindow fyne.Window, replace func(fyne.CanvasObj
 						fixedCount++
 					} else if r.Status == "Failed" {
 						failCount++
+						log.Printf("[UI] Verify metadata failed for %s: %s", r.Name, r.Error)
 					}
 				}
 				if len(res) == 0 {
