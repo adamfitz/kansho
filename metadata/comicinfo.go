@@ -120,15 +120,7 @@ func FromMangaInfo(info *mangadex.MangaInfo) *ComicInfo {
 		Manga: "Yes",
 	}
 
-	series := info.EnglishTitle()
-	if series == "" {
-		for _, t := range info.Title {
-			if t != "" {
-				series = t
-				break
-			}
-		}
-	}
+	series := info.PrimaryEnglishTitle()
 	if series != "" {
 		ci.Series = series
 		ci.Title = series

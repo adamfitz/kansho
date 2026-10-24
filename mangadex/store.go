@@ -166,6 +166,7 @@ func (s *Store) EnsureSchema() error {
 		id                     INTEGER PRIMARY KEY AUTOINCREMENT,
 		mangadex_id            TEXT NOT NULL UNIQUE,
 		primary_title          TEXT NOT NULL,
+		selected_english_title TEXT NOT NULL DEFAULT '',
 		title_json             TEXT NOT NULL DEFAULT '{}',
 		alt_titles_json        TEXT NOT NULL DEFAULT '[]',
 		description_json       TEXT NOT NULL DEFAULT '{}',
@@ -218,7 +219,7 @@ func (s *Store) EnsureSchema() error {
 		cover_url   TEXT NOT NULL DEFAULT '',
 		updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
-	PRAGMA user_version = 5;
+	PRAGMA user_version = 6;
 	`
 	_, err := s.conn.Exec(schema)
 	if err != nil {
@@ -252,6 +253,37 @@ func (s *Store) EnsureSchema() error {
 			return fmt.Errorf("add last_refresh column: %w", err)
 		}
 	}
+
+	titleColumns, err := s.conn.Query("PRAGMA table_info(manga_title)")
+	if err != nil {
+		return fmt.Errorf("read manga title schema: %w", err)
+	}
+	hasSelectedEnglishTitle := false
+	for titleColumns.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt interface{}
+		if err := titleColumns.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			titleColumns.Close()
+			return fmt.Errorf("read manga title column: %w", err)
+		}
+		if name == "selected_english_title" {
+			hasSelectedEnglishTitle = true
+		}
+	}
+	if err := titleColumns.Err(); err != nil {
+		titleColumns.Close()
+		return fmt.Errorf("read manga title columns: %w", err)
+	}
+	if err := titleColumns.Close(); err != nil {
+		return fmt.Errorf("close manga title schema: %w", err)
+	}
+	if !hasSelectedEnglishTitle {
+		if _, err := s.conn.Exec("ALTER TABLE manga_title ADD COLUMN selected_english_title TEXT NOT NULL DEFAULT ''"); err != nil {
+			return fmt.Errorf("add selected English title column: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -270,6 +302,7 @@ type rowMeta struct {
 	ID                     int64
 	MangaDexID             string
 	PrimaryTitle           string
+	SelectedEnglishTitle   string
 	TitleJSON              string
 	AltTitlesJSON          string
 	DescriptionJSON        string
@@ -285,7 +318,7 @@ type rowMeta struct {
 	URL                    string
 }
 
-const rowColumns = `id, mangadex_id, primary_title, title_json, alt_titles_json,
+const rowColumns = `id, mangadex_id, primary_title, selected_english_title, title_json, alt_titles_json,
 	description_json, original_language, publication_demographic, year, content_rating,
 	status, tags_json, author, artist, cover_url, url`
 
@@ -293,7 +326,7 @@ func scanRow(row interface {
 	Scan(dest ...interface{}) error
 }) (*rowMeta, error) {
 	var m rowMeta
-	if err := row.Scan(&m.ID, &m.MangaDexID, &m.PrimaryTitle, &m.TitleJSON,
+	if err := row.Scan(&m.ID, &m.MangaDexID, &m.PrimaryTitle, &m.SelectedEnglishTitle, &m.TitleJSON,
 		&m.AltTitlesJSON, &m.DescriptionJSON, &m.OriginalLanguage,
 		&m.PublicationDemographic, &m.Year, &m.ContentRating, &m.Status,
 		&m.TagsJSON, &m.Author, &m.Artist, &m.CoverURL, &m.URL); err != nil {
@@ -305,6 +338,7 @@ func scanRow(row interface {
 func rowToInfo(m *rowMeta) (*MangaInfo, error) {
 	info := &MangaInfo{
 		ID:                     m.MangaDexID,
+		SelectedEnglishTitle:   m.SelectedEnglishTitle,
 		OriginalLanguage:       m.OriginalLanguage,
 		PublicationDemographic: m.PublicationDemographic,
 		Year:                   m.Year,
@@ -323,6 +357,9 @@ func rowToInfo(m *rowMeta) (*MangaInfo, error) {
 	_ = json.Unmarshal([]byte(m.AltTitlesJSON), &info.AltTitles)
 	_ = json.Unmarshal([]byte(m.DescriptionJSON), &info.Description)
 	_ = json.Unmarshal([]byte(m.TagsJSON), &info.Tags)
+	if !info.hasEnglishTitleCandidate(info.SelectedEnglishTitle) {
+		info.SelectedEnglishTitle = ""
+	}
 	if info.Title == nil {
 		info.Title = map[string]string{}
 	}
@@ -340,7 +377,8 @@ func marshalledInfo(info *MangaInfo) *rowMeta {
 	tagsJSON, _ := json.Marshal(info.Tags)
 	return &rowMeta{
 		MangaDexID:             info.ID,
-		PrimaryTitle:           info.EnglishTitle(),
+		PrimaryTitle:           info.PrimaryEnglishTitle(),
+		SelectedEnglishTitle:   info.SelectedEnglishTitle,
 		TitleJSON:              string(titleJSON),
 		AltTitlesJSON:          string(altJSON),
 		DescriptionJSON:        string(descJSON),
@@ -436,15 +474,29 @@ func (s *Store) Upsert(info *MangaInfo) error {
 	if info == nil || info.ID == "" {
 		return fmt.Errorf("cannot store mangadex info without an ID")
 	}
-	m := marshalledInfo(info)
+	storedInfo := *info
+	if !storedInfo.hasEnglishTitleCandidate(storedInfo.SelectedEnglishTitle) {
+		storedInfo.SelectedEnglishTitle = ""
+	}
+	if storedInfo.SelectedEnglishTitle == "" {
+		existing, err := s.LookupByID(info.ID)
+		if err != nil {
+			return err
+		}
+		if existing != nil && storedInfo.hasEnglishTitleCandidate(existing.SelectedEnglishTitle) {
+			storedInfo.SelectedEnglishTitle = existing.SelectedEnglishTitle
+		}
+	}
+	m := marshalledInfo(&storedInfo)
 
 	_, err := s.conn.Exec(`INSERT INTO manga_title
-		(mangadex_id, primary_title, title_json, alt_titles_json, description_json,
+		(mangadex_id, primary_title, selected_english_title, title_json, alt_titles_json, description_json,
 		 original_language, publication_demographic, year, content_rating, status,
 		 tags_json, author, artist, cover_url, url, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 		ON CONFLICT(mangadex_id) DO UPDATE SET
 			primary_title = excluded.primary_title,
+			selected_english_title = excluded.selected_english_title,
 			title_json = excluded.title_json,
 			alt_titles_json = excluded.alt_titles_json,
 			description_json = excluded.description_json,
@@ -459,7 +511,7 @@ func (s *Store) Upsert(info *MangaInfo) error {
 			cover_url = excluded.cover_url,
 			url = excluded.url,
 			updated_at = CURRENT_TIMESTAMP`,
-		m.MangaDexID, m.PrimaryTitle, m.TitleJSON, m.AltTitlesJSON, m.DescriptionJSON,
+		m.MangaDexID, m.PrimaryTitle, m.SelectedEnglishTitle, m.TitleJSON, m.AltTitlesJSON, m.DescriptionJSON,
 		m.OriginalLanguage, m.PublicationDemographic, m.Year, m.ContentRating, m.Status,
 		m.TagsJSON, m.Author, m.Artist, m.CoverURL, m.URL)
 	if err != nil {
