@@ -15,6 +15,7 @@ type MangaInfo struct {
 	ID                     string              `json:"id"`
 	Title                  map[string]string   `json:"title"`
 	AltTitles              []map[string]string `json:"altTitles"`
+	SelectedEnglishTitle   string              `json:"-"`
 	OriginalLanguage       string              `json:"originalLanguage"`
 	Description            map[string]string   `json:"description"`
 	Status                 string              `json:"status"`
@@ -34,9 +35,57 @@ type TagInfo struct {
 	Name map[string]string `json:"name"`
 }
 
-// EnglishTitle returns the title in English, falling back to the original
-// language title, then to the first available title.
+// EnglishTitleCandidates returns MangaDex title values published in English,
+// with duplicates removed and the primary title first.
+func (m *MangaInfo) EnglishTitleCandidates() []string {
+	seen := make(map[string]bool)
+	var titles []string
+	add := func(title string) {
+		title = strings.TrimSpace(title)
+		if title != "" && !seen[title] {
+			seen[title] = true
+			titles = append(titles, title)
+		}
+	}
+	add(m.Title["en"])
+	for _, alt := range m.AltTitles {
+		add(alt["en"])
+	}
+	return titles
+}
+
+func (m *MangaInfo) hasEnglishTitleCandidate(title string) bool {
+	for _, candidate := range m.EnglishTitleCandidates() {
+		if candidate == title {
+			return true
+		}
+	}
+	return false
+}
+
+// PrimaryEnglishTitle returns the selected English title, or the sole English
+// candidate when unambiguous. It is empty when a choice is needed or no English
+// title exists.
+func (m *MangaInfo) PrimaryEnglishTitle() string {
+	if m.hasEnglishTitleCandidate(m.SelectedEnglishTitle) {
+		return m.SelectedEnglishTitle
+	}
+	titles := m.EnglishTitleCandidates()
+	if len(titles) == 1 {
+		return titles[0]
+	}
+	return ""
+}
+
+// EnglishTitle returns a display title, preferring English and falling back to
+// the original language title, then to the first available title.
 func (m *MangaInfo) EnglishTitle() string {
+	if title := m.PrimaryEnglishTitle(); title != "" {
+		return title
+	}
+	if titles := m.EnglishTitleCandidates(); len(titles) > 0 {
+		return titles[0]
+	}
 	if t, ok := m.Title["en"]; ok && t != "" {
 		return t
 	}

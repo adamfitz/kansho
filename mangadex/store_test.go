@@ -67,6 +67,65 @@ func TestUpsertAndLookupByID(t *testing.T) {
 	}
 }
 
+func TestEnglishTitleCandidatesIncludeAlternates(t *testing.T) {
+	info := &MangaInfo{
+		Title: map[string]string{"ko": "Jeoldae Gunrim"},
+		AltTitles: []map[string]string{
+			{"en": "Absolute Dominion"},
+			{"en": "Absolute Rule"},
+			{"en": "Absolute Dominion"},
+		},
+	}
+
+	want := []string{"Absolute Dominion", "Absolute Rule"}
+	got := info.EnglishTitleCandidates()
+	if len(got) != len(want) {
+		t.Fatalf("EnglishTitleCandidates() = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("EnglishTitleCandidates() = %v, want %v", got, want)
+		}
+	}
+	if got := info.PrimaryEnglishTitle(); got != "" {
+		t.Fatalf("unresolved PrimaryEnglishTitle() = %q, want empty", got)
+	}
+}
+
+func TestSelectedEnglishTitlePersistsAcrossUpsert(t *testing.T) {
+	store := tempStore(t)
+	info := &MangaInfo{
+		ID:        "english-title-selection",
+		Title:     map[string]string{"ko": "Jeoldae Gunrim"},
+		AltTitles: []map[string]string{{"en": "Absolute Dominion"}, {"en": "Absolute Rule"}},
+	}
+	if err := store.Upsert(info); err != nil {
+		t.Fatalf("initial Upsert: %v", err)
+	}
+
+	info.SelectedEnglishTitle = "Absolute Rule"
+	if err := store.Upsert(info); err != nil {
+		t.Fatalf("store selected title: %v", err)
+	}
+
+	refreshed := &MangaInfo{
+		ID:        info.ID,
+		Title:     map[string]string{"ko": "Jeoldae Gunrim"},
+		AltTitles: []map[string]string{{"en": "Absolute Dominion"}, {"en": "Absolute Rule"}},
+	}
+	if err := store.Upsert(refreshed); err != nil {
+		t.Fatalf("refresh Upsert: %v", err)
+	}
+
+	got, err := store.LookupByID(info.ID)
+	if err != nil {
+		t.Fatalf("LookupByID: %v", err)
+	}
+	if got.SelectedEnglishTitle != "Absolute Rule" || got.PrimaryEnglishTitle() != "Absolute Rule" {
+		t.Fatalf("saved title = %q, resolved title = %q; want Absolute Rule", got.SelectedEnglishTitle, got.PrimaryEnglishTitle())
+	}
+}
+
 func TestUpsertUpdatesExisting(t *testing.T) {
 	store := tempStore(t)
 
