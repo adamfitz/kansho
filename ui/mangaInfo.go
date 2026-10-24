@@ -402,10 +402,12 @@ func buildMangaInfoContent(parentWindow fyne.Window, replace func(fyne.CanvasObj
 		generateButton.Disable()
 		verifyButton.Disable()
 		notifyLabel.SetText("Verifying metadata...")
+		generateSpinner.Start()
 		go func() {
 			store, _ := mangadex.GetStore()
 			res := metadata.VerifyForDirectory(store, info, matchedBookmark.Location)
 			fyne.Do(func() {
+				generateSpinner.Stop()
 				generateButton.Enable()
 				verifyButton.Enable()
 				okCount, fixedCount, failCount := 0, 0, 0
