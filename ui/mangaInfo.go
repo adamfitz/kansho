@@ -183,6 +183,7 @@ func buildMangaInfoContent(parentWindow fyne.Window, replace func(fyne.CanvasObj
 
 	notifyLabel := widget.NewLabel("")
 	notifyLabel.Wrapping = fyne.TextWrapWord
+	generateSpinner := newBashSpinner()
 
 	// The scrollable field area; swapped in place when the language changes.
 	fieldScroll := container.NewVScroll(container.NewVBox())
@@ -300,10 +301,12 @@ func buildMangaInfoContent(parentWindow fyne.Window, replace func(fyne.CanvasObj
 		generateButton.Disable()
 		verifyButton.Disable()
 		notifyLabel.SetText("Generating metadata for all files...")
+		generateSpinner.Start()
 		go func() {
 			store, _ := mangadex.GetStore()
 			res := metadata.GenerateForDirectory(store, info, matchedBookmark.Location)
 			fyne.Do(func() {
+				generateSpinner.Stop()
 				generateButton.Enable()
 				verifyButton.Enable()
 				okCount, failCount := 0, 0
@@ -358,7 +361,8 @@ func buildMangaInfoContent(parentWindow fyne.Window, replace func(fyne.CanvasObj
 		titleLabel,
 		container.NewHBox(infoFieldLabel("Language:"), langSelect, refreshButton, generateButton, verifyButton),
 	)
-	header := container.NewVBox(titleBlock, notifyLabel, NewSeparator())
+	statusRow := container.NewBorder(nil, nil, nil, generateSpinner, notifyLabel)
+	header := container.NewVBox(titleBlock, statusRow, NewSeparator())
 
 	return container.NewBorder(header, nil, nil, nil, fieldScroll)
 }
