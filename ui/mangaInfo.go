@@ -15,6 +15,7 @@ import (
 
 	"kansho/config"
 	"kansho/mangadex"
+	"kansho/metadata"
 )
 
 // DisplayMangaInfoFunc renders a fetched MangaDex title record. It is supplied
@@ -264,9 +265,98 @@ func buildMangaInfoContent(parentWindow fyne.Window, replace func(fyne.CanvasObj
 		}()
 	}
 
+	// Find matching bookmark for this title
+	var matchedBookmark *config.Bookmarks
+	all := config.LoadBookmarks()
+	for i := range all.Manga {
+		m := all.Manga[i]
+		if strings.EqualFold(m.Title, bookmarkTitle) {
+			mm := m
+			matchedBookmark = &mm
+			break
+		}
+	}
+	if matchedBookmark == nil {
+		for i := range all.Manga {
+			m := all.Manga[i]
+			if strings.Contains(strings.ToLower(m.Title), strings.ToLower(bookmarkTitle)) || strings.Contains(strings.ToLower(bookmarkTitle), strings.ToLower(m.Title)) {
+				mm := m
+				matchedBookmark = &mm
+				break
+			}
+		}
+	}
+
+	generateButton := widget.NewButton("Generate", nil)
+	verifyButton := widget.NewButton("Verify", nil)
+	if matchedBookmark == nil || strings.TrimSpace(matchedBookmark.Location) == "" {
+		generateButton.Disable()
+		verifyButton.Disable()
+	}
+	generateButton.OnTapped = func() {
+		if matchedBookmark == nil {
+			return
+		}
+		generateButton.Disable()
+		verifyButton.Disable()
+		notifyLabel.SetText("Generating metadata for all files...")
+		go func() {
+			store, _ := mangadex.GetStore()
+			res := metadata.GenerateForDirectory(store, info, matchedBookmark.Location)
+			fyne.Do(func() {
+				generateButton.Enable()
+				verifyButton.Enable()
+				okCount, failCount := 0, 0
+				for _, r := range res {
+					if r.Status == "OK" {
+						okCount++
+					} else if r.Status == "Failed" {
+						failCount++
+					}
+				}
+				if len(res) == 0 {
+					notifyLabel.SetText("No CBZ files found in directory.")
+					return
+				}
+				notifyLabel.SetText(fmt.Sprintf("Generate: %d OK, %d Failed", okCount, failCount))
+			})
+		}()
+	}
+	verifyButton.OnTapped = func() {
+		if matchedBookmark == nil {
+			return
+		}
+		generateButton.Disable()
+		verifyButton.Disable()
+		notifyLabel.SetText("Verifying metadata...")
+		go func() {
+			store, _ := mangadex.GetStore()
+			res := metadata.VerifyForDirectory(store, info, matchedBookmark.Location)
+			fyne.Do(func() {
+				generateButton.Enable()
+				verifyButton.Enable()
+				okCount, fixedCount, failCount := 0, 0, 0
+				for _, r := range res {
+					if r.Status == "OK" {
+						okCount++
+					} else if r.Status == "Fixed" {
+						fixedCount++
+					} else if r.Status == "Failed" {
+						failCount++
+					}
+				}
+				if len(res) == 0 {
+					notifyLabel.SetText("No CBZ files found in directory.")
+					return
+				}
+				notifyLabel.SetText(fmt.Sprintf("Verify: %d OK, %d Fixed, %d Failed", okCount, fixedCount, failCount))
+			})
+		}()
+	}
+
 	titleBlock := container.NewVBox(
 		titleLabel,
-		container.NewHBox(infoFieldLabel("Language:"), langSelect, refreshButton),
+		container.NewHBox(infoFieldLabel("Language:"), langSelect, refreshButton, generateButton, verifyButton),
 	)
 	header := container.NewVBox(titleBlock, notifyLabel, NewSeparator())
 

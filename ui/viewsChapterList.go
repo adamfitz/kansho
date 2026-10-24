@@ -17,6 +17,7 @@ import (
 	"kansho/config"
 	"kansho/downloader"
 	"kansho/mangadex"
+	"kansho/metadata"
 	"kansho/parser"
 	"kansho/refreshpool"
 	"kansho/sites"
@@ -774,10 +775,68 @@ func (v *ChapterListView) applyRefreshedChapters(manga *config.Bookmarks, remote
 		}
 	}
 
+	// Prompt to link MangaDex metadata if not already linked
+	if v.loadGeneration == gen && isSelected {
+		go v.promptForMangaDexMetadataIfNeeded(manga)
+	}
+
 	if v.loadGeneration != gen || !isSelected {
 		return
 	}
 	v.updateStatusBar()
+}
+
+func (v *ChapterListView) promptForMangaDexMetadataIfNeeded(manga *config.Bookmarks) {
+	if manga == nil {
+		return
+	}
+	store, err := mangadex.GetStore()
+	if err != nil {
+		return
+	}
+	key := mangaSourceKey(manga)
+	allowed, err := store.GetMetadataPromptAllowed(key)
+	if err != nil || !allowed {
+		return
+	}
+	info, _ := metadata.GetMangaInfoForBookmark(*manga)
+	if info != nil {
+		return
+	}
+	if id, parseErr := mangadex.ExtractID(manga.Url); parseErr == nil {
+		local, _ := store.LookupByID(id)
+		if local != nil {
+			return
+		}
+	}
+	fyne.Do(func() {
+		cbox := widget.NewCheck("Don't ask again for this title", func(bool) {})
+		dlg := dialog.NewCustomConfirm("Search MangaDex for title?", "Yes", "No", container.NewVBox(
+			widget.NewLabel("This allows metadata to be added to the chapter file"),
+			cbox,
+		), func(yes bool) {
+			if !yes {
+				if cbox.Checked {
+					_ = store.SetMetadataPromptAllowed(key, false)
+				}
+				return
+			}
+			if cbox.Checked {
+				_ = store.SetMetadataPromptAllowed(key, false)
+			}
+			if v.state.Window == nil {
+				return
+			}
+			ui := v.state
+			ShowMangaTitleInfo(*manga, ui.Window, func(info *mangadex.MangaInfo, bookmarkTitle string) {
+				if v == nil {
+					return
+				}
+				v.ShowMangaInfo(info, bookmarkTitle)
+			})
+		}, v.state.Window)
+		dlg.Show()
+	})
 }
 
 // createChapterRow builds the template object for a chapter list row. It is
@@ -1182,4 +1241,9 @@ func (v *ChapterListView) showNoSelection() {
 	v.contentContainer.Refresh()
 	v.stopLoading()
 	v.updateStatusBar()
+}
+
+// RefreshChapterList triggers a chapter refresh (used by other UI components).
+func (v *ChapterListView) RefreshChapterList() {
+	v.onRefreshClicked()
 }

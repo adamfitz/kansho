@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"kansho/mangadex"
+	"kansho/metadata"
 	"kansho/parser"
 )
 
@@ -484,6 +486,19 @@ func (m *Manager) downloadChapter(ctx context.Context, chapterURL, cbzName strin
 	}
 
 	log.Printf("[Downloader] ✓ Created CBZ: %s (%d images)", cbzName, successCount)
+	go func() {
+		info, err := metadata.GetMangaInfoForBookmark(*manga)
+		if err != nil || info == nil {
+			return
+		}
+		store, err := mangadex.GetStore()
+		if err != nil {
+			return
+		}
+		if err := metadata.ApplyToCBZ(store, info, cbzPath); err != nil {
+			log.Printf("[Metadata] failed to apply metadata to %s: %v", cbzPath, err)
+		}
+	}()
 	return nil
 }
 

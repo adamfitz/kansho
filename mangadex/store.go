@@ -207,7 +207,18 @@ func (s *Store) EnsureSchema() error {
 	);
 	CREATE INDEX IF NOT EXISTS idx_manga_chapter_stats_title
 		ON manga_chapter_stats (title);
-	PRAGMA user_version = 4;
+	CREATE TABLE IF NOT EXISTS manga_metadata_prefs (
+		manga_key                TEXT PRIMARY KEY,
+		prompt_mangadex_metadata INTEGER NOT NULL DEFAULT 1,
+		updated_at               DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
+	CREATE TABLE IF NOT EXISTS manga_cover_cache (
+		mangadex_id TEXT PRIMARY KEY,
+		cover_jpeg  BLOB NOT NULL,
+		cover_url   TEXT NOT NULL DEFAULT '',
+		updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
+	PRAGMA user_version = 5;
 	`
 	_, err := s.conn.Exec(schema)
 	if err != nil {
@@ -670,4 +681,68 @@ func (s *Store) Restore(src string) error {
 		return fmt.Errorf("upgrade restored database schema: %w", err)
 	}
 	return nil
+}
+
+// GetMetadataPromptAllowed reports whether the prompt to link a manga to
+// MangaDex metadata is allowed for the given manga key. Returns true by
+// default when no preference is stored.
+func (s *Store) GetMetadataPromptAllowed(key string) (bool, error) {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return true, nil
+	}
+	var v int
+	err := s.conn.QueryRow(`SELECT prompt_mangadex_metadata FROM manga_metadata_prefs WHERE manga_key = ?`, key).Scan(&v)
+	if err == sql.ErrNoRows {
+		return true, nil
+	}
+	if err != nil {
+		return true, err
+	}
+	return v == 1, nil
+}
+
+// SetMetadataPromptAllowed stores the prompt preference for a manga key.
+func (s *Store) SetMetadataPromptAllowed(key string, allowed bool) error {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return nil
+	}
+	val := 0
+	if allowed {
+		val = 1
+	}
+	_, err := s.conn.Exec(`INSERT INTO manga_metadata_prefs (manga_key, prompt_mangadex_metadata, updated_at)
+		VALUES (?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(manga_key) DO UPDATE SET prompt_mangadex_metadata = excluded.prompt_mangadex_metadata, updated_at = CURRENT_TIMESTAMP`, key, val)
+	return err
+}
+
+// GetCoverCache returns cached cover JPEG bytes for a MangaDex ID.
+func (s *Store) GetCoverCache(id string) ([]byte, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return nil, nil
+	}
+	var b []byte
+	err := s.conn.QueryRow(`SELECT cover_jpeg FROM manga_cover_cache WHERE mangadex_id = ?`, id).Scan(&b)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return b, nil
+}
+
+// SetCoverCache stores cover JPEG bytes for a MangaDex ID.
+func (s *Store) SetCoverCache(id string, data []byte, coverURL string) error {
+	id = strings.TrimSpace(id)
+	if id == "" || len(data) == 0 {
+		return nil
+	}
+	_, err := s.conn.Exec(`INSERT INTO manga_cover_cache (mangadex_id, cover_jpeg, cover_url, updated_at)
+		VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(mangadex_id) DO UPDATE SET cover_jpeg = excluded.cover_jpeg, cover_url = excluded.cover_url, updated_at = CURRENT_TIMESTAMP`, id, data, coverURL)
+	return err
 }

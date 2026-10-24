@@ -38,7 +38,8 @@ type KanshoAppState struct {
 
 	// OnMangaAdded is called when a new manga is successfully added
 	// This allows the manga list to refresh and show the new entry
-	OnMangaAdded []func()
+	OnMangaAdded         []func()
+	OnMangaAddedDetailed []func(config.Bookmarks)
 
 	// OnMangaDeleted is called when a manga is removed
 	// This allows the list to refresh and remove the deleted entry
@@ -55,13 +56,14 @@ type KanshoAppState struct {
 //   - *KanshoAppState: A new state instance with initialized data
 func NewKanshoAppState(window fyne.Window) *KanshoAppState {
 	return &KanshoAppState{
-		Window:          window,
-		MangaData:       config.LoadBookmarks(),
-		SitesConfig:     models.SitesConfig{}, // Will be loaded by config package
-		SelectedMangaID: -1,                   // No selection initially
-		OnMangaSelected: make([]func(int), 0),
-		OnMangaAdded:    make([]func(), 0),
-		OnMangaDeleted:  make([]func(int), 0),
+		Window:               window,
+		MangaData:            config.LoadBookmarks(),
+		SitesConfig:          models.SitesConfig{}, // Will be loaded by config package
+		SelectedMangaID:      -1,                   // No selection initially
+		OnMangaSelected:      make([]func(int), 0),
+		OnMangaAdded:         make([]func(), 0),
+		OnMangaAddedDetailed: make([]func(config.Bookmarks), 0),
+		OnMangaDeleted:       make([]func(int), 0),
 	}
 }
 
@@ -100,6 +102,9 @@ func (s *KanshoAppState) AddManga(manga config.Bookmarks) {
 	// Notify all registered callbacks that a manga was added
 	for _, callback := range s.OnMangaAdded {
 		callback()
+	}
+	for _, callback := range s.OnMangaAddedDetailed {
+		callback(manga)
 	}
 }
 
@@ -165,6 +170,11 @@ func (s *KanshoAppState) RegisterMangaSelectedCallback(callback func(int)) {
 //   - callback: Function to call when a manga is added
 func (s *KanshoAppState) RegisterMangaAddedCallback(callback func()) {
 	s.OnMangaAdded = append(s.OnMangaAdded, callback)
+}
+
+// RegisterMangaAddedDetailedCallback registers a callback with the added manga.
+func (s *KanshoAppState) RegisterMangaAddedDetailedCallback(callback func(config.Bookmarks)) {
+	s.OnMangaAddedDetailed = append(s.OnMangaAddedDetailed, callback)
 }
 
 // RegisterMangaDeletedCallback registers a callback to be called when a manga is deleted.
