@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"fmt"
+
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
@@ -21,7 +23,7 @@ import (
 //
 // Returns:
 //   - fyne.CanvasObject: A container with the formatted header content
-func NewHeader(rightObject fyne.CanvasObject) fyne.CanvasObject {
+func NewHeader(rightObject fyne.CanvasObject) (fyne.CanvasObject, func(int)) {
 	// Create the main title text with Japanese characters and romanization
 	// "鑑賞" means "appreciation" or "viewing" in Japanese
 	titleText := canvas.NewText("鑑賞 kansho", TextColorLight)
@@ -37,11 +39,16 @@ func NewHeader(rightObject fyne.CanvasObject) fyne.CanvasObject {
 	subtitleText.TextSize = SubtitleTextSize      // Smaller font (16pt)
 	subtitleText.Alignment = fyne.TextAlignCenter // Centered to match title
 
+	titleCountText := canvas.NewText("Manga titles: 0", TextColorLight)
+	titleCountText.TextSize = SubtitleTextSize
+	titleCountText.Alignment = fyne.TextAlignCenter
+
 	// Combine title and subtitle in a vertical box with spacing
 	// layout.NewSpacer() adds flexible space that pushes content apart
 	titleAndSubtitle := container.NewVBox(
 		titleText,
 		subtitleText,
+		titleCountText,
 	)
 
 	var right fyne.CanvasObject
@@ -58,5 +65,9 @@ func NewHeader(rightObject fyne.CanvasObject) fyne.CanvasObject {
 		container.NewBorder(nil, nil, nil, right),
 	)
 
-	return header
+	updateTitleCount := func(count int) {
+		titleCountText.Text = fmt.Sprintf("Manga titles: %d", count)
+		titleCountText.Refresh()
+	}
+	return header, updateTitleCount
 }

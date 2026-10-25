@@ -55,7 +55,7 @@ func BuildMainLayout(window fyne.Window) fyne.CanvasObject {
 	// Create the header component
 	// Shows application title "鑑賞 kansho" and subtitle, with the download
 	// queue summary button on the right
-	header := NewHeader(downloadQueueButton.Card)
+	header, updateMangaCount := NewHeader(downloadQueueButton.Card)
 
 	// Create the three main view components
 	// Each view is self-contained and manages its own state through callbacks
@@ -63,6 +63,7 @@ func BuildMainLayout(window fyne.Window) fyne.CanvasObject {
 	// Manga List View (top-left card)
 	// Displays all manga bookmarks in a scrollable list
 	mangaListView := NewMangaListView(state)
+	mangaListView.SetCountChangedHandler(updateMangaCount)
 
 	// Edit Manga View (bottom-left card)
 	// Form for adding new manga to the library or editing existing ones

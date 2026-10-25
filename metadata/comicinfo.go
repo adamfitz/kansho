@@ -305,6 +305,11 @@ func getCoverBytes(store *mangadex.Store, info *mangadex.MangaInfo) ([]byte, err
 	return nil, nil
 }
 
+// GetCoverBytes returns a cached cover JPEG or downloads and caches it.
+func GetCoverBytes(store *mangadex.Store, info *mangadex.MangaInfo) ([]byte, error) {
+	return getCoverBytes(store, info)
+}
+
 func extractCBZ(cbzPath, destDir string) error {
 	r, err := zip.OpenReader(cbzPath)
 	if err != nil {

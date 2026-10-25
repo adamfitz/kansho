@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 
@@ -785,6 +786,89 @@ func (s *Store) GetCoverCache(id string) ([]byte, error) {
 		return nil, err
 	}
 	return b, nil
+}
+
+// CachedCover is a saved MangaDex title with optional cover URL and image data.
+type CachedCover struct {
+	MangaID  string
+	Title    string
+	CoverURL string
+	JPEG     []byte
+}
+
+// ListCoverCache returns saved MangaDex titles and cached covers, ordered by title.
+func (s *Store) ListCoverCache() ([]CachedCover, error) {
+	rows, err := s.conn.Query(`SELECT c.mangadex_id,
+		COALESCE(m.primary_title, ''), COALESCE(m.title_json, '{}'), COALESCE(m.alt_titles_json, '[]'),
+		COALESCE(NULLIF(m.cover_url, ''), c.cover_url), c.cover_jpeg
+		FROM manga_cover_cache c
+		LEFT JOIN manga_title m ON m.mangadex_id = c.mangadex_id
+		UNION ALL
+		SELECT m.mangadex_id, m.primary_title, m.title_json, m.alt_titles_json, m.cover_url, NULL
+		FROM manga_title m
+		LEFT JOIN manga_cover_cache c ON c.mangadex_id = m.mangadex_id
+		WHERE c.mangadex_id IS NULL
+		ORDER BY 1`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var covers []CachedCover
+	for rows.Next() {
+		var cover CachedCover
+		var primaryTitle, titleJSON, altTitlesJSON string
+		if err := rows.Scan(&cover.MangaID, &primaryTitle, &titleJSON, &altTitlesJSON, &cover.CoverURL, &cover.JPEG); err != nil {
+			return nil, err
+		}
+		cover.Title = storedCoverTitle(primaryTitle, titleJSON, altTitlesJSON)
+		covers = append(covers, cover)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return covers, nil
+}
+
+func storedCoverTitle(primaryTitle, titleJSON, altTitlesJSON string) string {
+	var titles map[string]string
+	_ = json.Unmarshal([]byte(titleJSON), &titles)
+	if title := strings.TrimSpace(titles["en"]); title != "" {
+		return title
+	}
+	var altTitles []map[string]string
+	_ = json.Unmarshal([]byte(altTitlesJSON), &altTitles)
+	for _, alternate := range altTitles {
+		if title := strings.TrimSpace(alternate["en"]); title != "" {
+			return title
+		}
+	}
+	if title := strings.TrimSpace(primaryTitle); title != "" {
+		return title
+	}
+	languages := make([]string, 0, len(titles))
+	for language := range titles {
+		languages = append(languages, language)
+	}
+	sort.Strings(languages)
+	for _, language := range languages {
+		if title := strings.TrimSpace(titles[language]); title != "" {
+			return title
+		}
+	}
+	for _, alternate := range altTitles {
+		languages = languages[:0]
+		for language := range alternate {
+			languages = append(languages, language)
+		}
+		sort.Strings(languages)
+		for _, language := range languages {
+			if title := strings.TrimSpace(alternate[language]); title != "" {
+				return title
+			}
+		}
+	}
+	return "Untitled manga"
 }
 
 // SetCoverCache stores cover JPEG bytes for a MangaDex ID.

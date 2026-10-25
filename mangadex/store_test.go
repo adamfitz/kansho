@@ -67,6 +67,67 @@ func TestUpsertAndLookupByID(t *testing.T) {
 	}
 }
 
+func TestListCoverCache(t *testing.T) {
+	store := tempStore(t)
+	info := sampleInfo()
+	if err := store.Upsert(info); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	uncachedInfo := &MangaInfo{ID: "uncached-cover", Title: map[string]string{"en": "Uncached Manga"}, CoverURL: "https://example.com/uncached.jpg"}
+	if err := store.Upsert(uncachedInfo); err != nil {
+		t.Fatalf("Upsert uncached title: %v", err)
+	}
+	missingURLInfo := &MangaInfo{ID: "missing-cover-url", Title: map[string]string{"ja": "題名のないカバー"}}
+	if err := store.Upsert(missingURLInfo); err != nil {
+		t.Fatalf("Upsert title without cover URL: %v", err)
+	}
+	coverBytes := []byte("jpeg data")
+	if err := store.SetCoverCache(info.ID, coverBytes, info.CoverURL); err != nil {
+		t.Fatalf("SetCoverCache: %v", err)
+	}
+
+	covers, err := store.ListCoverCache()
+	if err != nil {
+		t.Fatalf("ListCoverCache: %v", err)
+	}
+	if len(covers) != 3 {
+		t.Fatalf("ListCoverCache returned %d covers, want 3", len(covers))
+	}
+	var cached, uncached *CachedCover
+	var missingURL *CachedCover
+	for i := range covers {
+		switch covers[i].MangaID {
+		case info.ID:
+			cached = &covers[i]
+		case uncachedInfo.ID:
+			uncached = &covers[i]
+		case missingURLInfo.ID:
+			missingURL = &covers[i]
+		}
+	}
+	if cached == nil || cached.Title != "One Piece" || string(cached.JPEG) != string(coverBytes) {
+		t.Errorf("ListCoverCache cached cover = %+v, want the cached One Piece JPEG", cached)
+	}
+	if uncached == nil || uncached.Title != "Uncached Manga" || uncached.CoverURL != uncachedInfo.CoverURL || len(uncached.JPEG) != 0 {
+		t.Errorf("ListCoverCache uncached cover = %+v, want metadata with no JPEG", uncached)
+	}
+	if missingURL == nil || missingURL.Title != "題名のないカバー" || missingURL.CoverURL != "" || len(missingURL.JPEG) != 0 {
+		t.Errorf("ListCoverCache missing-URL title = %+v, want metadata with no URL or JPEG", missingURL)
+	}
+}
+
+func TestStoredCoverTitlePrefersEnglishOverPrimary(t *testing.T) {
+	got := storedCoverTitle("Selected English title", `{"ja":"日本語タイトル","en":"English title"}`, `[{"en":"Alternate English title"}]`)
+	if got != "English title" {
+		t.Fatalf("storedCoverTitle() = %q, want English title", got)
+	}
+
+	got = storedCoverTitle("Selected primary title", `{"ja":"日本語タイトル"}`, `[]`)
+	if got != "Selected primary title" {
+		t.Fatalf("storedCoverTitle() fallback = %q, want primary title", got)
+	}
+}
+
 func TestEnglishTitleCandidatesIncludeAlternates(t *testing.T) {
 	info := &MangaInfo{
 		Title: map[string]string{"ko": "Jeoldae Gunrim"},
