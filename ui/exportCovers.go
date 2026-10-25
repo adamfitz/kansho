@@ -41,15 +41,7 @@ func ShowExportCoversDialog(_ fyne.App, window fyne.Window) {
 	}
 	client := mangadex.NewClient()
 
-	options := []string{fmt.Sprintf("%s (%d saved titles)", allCoversOption, len(covers))}
-	coverByOption := make(map[string]mangadex.CachedCover, len(covers))
-	for _, cover := range covers {
-		option := fmt.Sprintf("%s (%s)", cover.Title, cover.MangaID)
-		options = append(options, option)
-		coverByOption[option] = cover
-	}
-	allOption := options[0]
-	selectedOption := allOption
+	selectedIndex := 0
 	var destination string
 
 	if homePath, err := os.UserHomeDir(); err == nil {
@@ -59,23 +51,36 @@ func ShowExportCoversDialog(_ fyne.App, window fyne.Window) {
 	folderLabel.Wrapping = fyne.TextTruncate
 	preview := container.NewMax(widget.NewLabel("All available covers will be exported."))
 
-	coverSelect := widget.NewSelect(options, func(option string) {
-		selectedOption = option
+	coverList := widget.NewList(
+		func() int { return len(covers) + 1 },
+		func() fyne.CanvasObject {
+			label := widget.NewLabel("template")
+			label.Truncation = fyne.TextTruncateEllipsis
+			return label
+		},
+		func(id widget.ListItemID, item fyne.CanvasObject) {
+			label := item.(*widget.Label)
+			if id == 0 {
+				label.SetText(fmt.Sprintf("All covers (%d)", len(covers)))
+				return
+			}
+			cover := covers[int(id)-1]
+			label.SetText(fmt.Sprintf("%s (%s)", cover.Title, cover.MangaID))
+		},
+	)
+	coverList.OnSelected = func(id widget.ListItemID) {
+		selectedIndex = int(id)
 		preview.RemoveAll()
-		if option == allOption {
+		if selectedIndex == 0 {
 			preview.Add(widget.NewLabel("All available covers will be exported."))
 			return
 		}
-		cover, ok := coverByOption[option]
-		if !ok {
-			preview.Add(widget.NewLabel("Cover preview unavailable."))
-			return
-		}
+		cover := covers[selectedIndex-1]
 		preview.Add(widget.NewLabel("Loading cover preview..."))
 		go func() {
 			resolved, err := resolveExportCover(store, client, cover)
 			fyne.Do(func() {
-				if selectedOption != option {
+				if selectedIndex != int(id) {
 					return
 				}
 				preview.RemoveAll()
@@ -89,8 +94,8 @@ func ShowExportCoversDialog(_ fyne.App, window fyne.Window) {
 				preview.Add(image)
 			})
 		}()
-	})
-	coverSelect.SetSelected(allOption)
+	}
+	coverList.Select(0)
 
 	folderButton := widget.NewButton("Choose Folder...", func() {
 		folderDialog := dialog.NewFolderOpen(func(uri fyne.ListableURI, err error) {
@@ -113,13 +118,14 @@ func ShowExportCoversDialog(_ fyne.App, window fyne.Window) {
 		folderDialog.Show()
 	})
 
-	selection := container.NewVBox(
-		widget.NewLabel("Cover to export:"),
-		coverSelect,
-		widget.NewLabel("Destination folder:"),
-		container.NewBorder(nil, nil, folderButton, nil, folderLabel),
+	listArea := container.NewGridWrap(fyne.NewSize(380, 300), coverList)
+	folderControls := container.NewVBox(
+		widget.NewLabel("Export directory:"),
+		folderLabel,
+		folderButton,
 	)
-	content := container.NewHBox(selection, widget.NewSeparator(), preview)
+	leftPane := container.NewVBox(listArea, folderControls)
+	content := container.NewHBox(leftPane, widget.NewSeparator(), preview)
 
 	var exportDialog dialog.Dialog
 	exportDialog = dialog.NewCustomConfirm("Export Covers", "Export", "Cancel", content, func(confirm bool) {
@@ -127,8 +133,8 @@ func ShowExportCoversDialog(_ fyne.App, window fyne.Window) {
 			return
 		}
 		selectedID := ""
-		if selectedOption != allOption {
-			selectedID = coverByOption[selectedOption].MangaID
+		if selectedIndex > 0 {
+			selectedID = covers[selectedIndex-1].MangaID
 		}
 		progress := dialog.NewProgressInfinite("Export Covers", "Downloading and exporting covers...", window)
 		progress.Show()
