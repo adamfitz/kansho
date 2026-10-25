@@ -84,6 +84,11 @@ func main() {
 	)
 
 	databaseMenu := fyne.NewMenu("Database",
+		fyne.NewMenuItem("Export Covers", func() {
+			log.Println("[UI] MangaDex cover export triggered (GUI)")
+			ui.ShowExportCoversDialog(kanshoApp, myWindow)
+		}),
+		fyne.NewMenuItemSeparator(),
 		fyne.NewMenuItem("Backup", func() {
 			log.Println("[UI] Kansho database backup triggered (GUI)")
 			ui.ShowDatabaseBackupDialog(kanshoApp, myWindow)

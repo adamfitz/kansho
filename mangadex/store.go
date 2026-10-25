@@ -787,6 +787,47 @@ func (s *Store) GetCoverCache(id string) ([]byte, error) {
 	return b, nil
 }
 
+// CachedCover is a saved MangaDex title with optional cover URL and image data.
+type CachedCover struct {
+	MangaID  string
+	Title    string
+	CoverURL string
+	JPEG     []byte
+}
+
+// ListCoverCache returns saved MangaDex titles and cached covers, ordered by title.
+func (s *Store) ListCoverCache() ([]CachedCover, error) {
+	rows, err := s.conn.Query(`SELECT c.mangadex_id,
+		COALESCE(NULLIF(m.primary_title, ''), c.mangadex_id),
+		COALESCE(NULLIF(m.cover_url, ''), c.cover_url), c.cover_jpeg
+		FROM manga_cover_cache c
+		LEFT JOIN manga_title m ON m.mangadex_id = c.mangadex_id
+		UNION ALL
+		SELECT m.mangadex_id, COALESCE(NULLIF(m.primary_title, ''), m.mangadex_id),
+			m.cover_url, NULL
+		FROM manga_title m
+		LEFT JOIN manga_cover_cache c ON c.mangadex_id = m.mangadex_id
+		WHERE c.mangadex_id IS NULL
+		ORDER BY 2 COLLATE NOCASE, 1`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var covers []CachedCover
+	for rows.Next() {
+		var cover CachedCover
+		if err := rows.Scan(&cover.MangaID, &cover.Title, &cover.CoverURL, &cover.JPEG); err != nil {
+			return nil, err
+		}
+		covers = append(covers, cover)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return covers, nil
+}
+
 // SetCoverCache stores cover JPEG bytes for a MangaDex ID.
 func (s *Store) SetCoverCache(id string, data []byte, coverURL string) error {
 	id = strings.TrimSpace(id)

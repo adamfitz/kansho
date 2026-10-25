@@ -164,9 +164,9 @@ func (c *Client) SearchManga(ctx context.Context, title string, offset int) ([]S
 	q.Add("contentRating[]", "suggestive")
 	q.Add("contentRating[]", "erotica")
 	q.Add("contentRating[]", "pornographic")
-	q.Set("includes[]", "cover_art")
-	q.Set("includes[]", "author")
-	q.Set("includes[]", "artist")
+	q.Add("includes[]", "cover_art")
+	q.Add("includes[]", "author")
+	q.Add("includes[]", "artist")
 	u.RawQuery = q.Encode()
 
 	var resp mangaCollectionResponse
@@ -199,9 +199,9 @@ func (c *Client) GetManga(ctx context.Context, id string) (*MangaInfo, error) {
 		return nil, err
 	}
 	q := u.Query()
-	q.Set("includes[]", "cover_art")
-	q.Set("includes[]", "author")
-	q.Set("includes[]", "artist")
+	q.Add("includes[]", "cover_art")
+	q.Add("includes[]", "author")
+	q.Add("includes[]", "artist")
 	u.RawQuery = q.Encode()
 
 	var resp mangaEntityResponse
