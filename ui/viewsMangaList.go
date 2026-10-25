@@ -53,6 +53,7 @@ type MangaListView struct {
 	editMangaView *EditMangaView
 
 	infoDisplayHandler func(info *mangadex.MangaInfo, bookmarkTitle string)
+	onCountChanged     func(int)
 
 	onUnfoldEdit func()
 	onToggleEdit func()
@@ -190,6 +191,13 @@ func (v *MangaListView) SetEditMangaView(editView *EditMangaView) {
 	v.editMangaView = editView
 }
 
+func (v *MangaListView) SetCountChangedHandler(handler func(int)) {
+	v.onCountChanged = handler
+	if handler != nil {
+		handler(len(v.state.MangaData.Manga))
+	}
+}
+
 // SetUnfoldEditHandler registers a callback invoked when the user asks to
 // open the edit manga panel (via the "Edit Manga" button).
 func (v *MangaListView) SetUnfoldEditHandler(fn func()) {
@@ -224,6 +232,9 @@ func (v *MangaListView) refresh() {
 	v.currentSearchIdx = -1
 
 	v.List.Refresh()
+	if v.onCountChanged != nil {
+		v.onCountChanged(len(v.state.MangaData.Manga))
+	}
 }
 
 func (v *MangaListView) onDeleteButtonClicked() {
