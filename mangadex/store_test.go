@@ -77,7 +77,7 @@ func TestListCoverCache(t *testing.T) {
 	if err := store.Upsert(uncachedInfo); err != nil {
 		t.Fatalf("Upsert uncached title: %v", err)
 	}
-	missingURLInfo := &MangaInfo{ID: "missing-cover-url", Title: map[string]string{"en": "Missing Cover URL"}}
+	missingURLInfo := &MangaInfo{ID: "missing-cover-url", Title: map[string]string{"ja": "題名のないカバー"}}
 	if err := store.Upsert(missingURLInfo); err != nil {
 		t.Fatalf("Upsert title without cover URL: %v", err)
 	}
@@ -111,8 +111,20 @@ func TestListCoverCache(t *testing.T) {
 	if uncached == nil || uncached.Title != "Uncached Manga" || uncached.CoverURL != uncachedInfo.CoverURL || len(uncached.JPEG) != 0 {
 		t.Errorf("ListCoverCache uncached cover = %+v, want metadata with no JPEG", uncached)
 	}
-	if missingURL == nil || missingURL.Title != "Missing Cover URL" || missingURL.CoverURL != "" || len(missingURL.JPEG) != 0 {
+	if missingURL == nil || missingURL.Title != "題名のないカバー" || missingURL.CoverURL != "" || len(missingURL.JPEG) != 0 {
 		t.Errorf("ListCoverCache missing-URL title = %+v, want metadata with no URL or JPEG", missingURL)
+	}
+}
+
+func TestStoredCoverTitlePrefersEnglishOverPrimary(t *testing.T) {
+	got := storedCoverTitle("Selected English title", `{"ja":"日本語タイトル","en":"English title"}`, `[{"en":"Alternate English title"}]`)
+	if got != "English title" {
+		t.Fatalf("storedCoverTitle() = %q, want English title", got)
+	}
+
+	got = storedCoverTitle("Selected primary title", `{"ja":"日本語タイトル"}`, `[]`)
+	if got != "Selected primary title" {
+		t.Fatalf("storedCoverTitle() fallback = %q, want primary title", got)
 	}
 }
 

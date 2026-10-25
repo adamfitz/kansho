@@ -65,7 +65,7 @@ func ShowExportCoversDialog(_ fyne.App, window fyne.Window) {
 				return
 			}
 			cover := covers[int(id)-1]
-			label.SetText(fmt.Sprintf("%s (%s)", cover.Title, cover.MangaID))
+			label.SetText(cover.Title)
 		},
 	)
 	coverList.OnSelected = func(id widget.ListItemID) {
