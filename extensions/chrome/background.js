@@ -13,6 +13,8 @@ const SUPPORTED_DOMAINS = [
   "*://*.manhuaus.com/*",
   "*://manhuaus.org/*",
   "*://*.manhuaus.org/*",
+  "*://manhuaus.co/*",
+  "*://*.manhuaus.co/*",
   "*://kunmanga.com/*",
   "*://*.kunmanga.com/*",
   "*://asuracomic.net/*",

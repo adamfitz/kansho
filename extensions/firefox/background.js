@@ -5,6 +5,8 @@ const SUPPORTED_DOMAINS = [
   "*://*.manhuaus.com/*",
   "*://manhuaus.org/*",
   "*://*.manhuaus.org/*",
+  "*://manhuaus.co/*",
+  "*://*.manhuaus.co/*",
   "*://kunmanga.com/*",
   "*://*.kunmanga.com/*",
   "*://asuracomic.net/*",
@@ -17,6 +19,10 @@ const SUPPORTED_DOMAINS = [
   "*://*.flamecomics.xyz/*",
   "*://weebcentral.com/*",
   "*://*.weebcentral.com/*",
+  "*://comix.to/*",
+  "*://*.comix.to/*",
+  "*://arenascan.com/*",
+  "*://*.arenascan.com/*",
   "*://en-thunderscans.com/*",
   "*://*.en-thunderscans.com/*"
 ];

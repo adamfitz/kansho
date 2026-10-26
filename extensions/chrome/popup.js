@@ -48,31 +48,27 @@ document.getElementById('captureBtn').addEventListener('click', async () => {
     // -------------------------------------------------------------------------
     // Step 3: Get all cookies for the current domain
     // -------------------------------------------------------------------------
-    // chrome.cookies.getAll() queries the browser's cookie store
-    // This is like calling the Chrome API from Go using CGO
-    const cookies = await chrome.cookies.getAll({ domain: domain });
-    
-    // Also get cookies from the parent domain (e.g., ".mgeko.cc")
-    // Some cookies are set on the parent domain and apply to all subdomains
-    // Split by '.' and take last 2 parts: "www.mgeko.cc" -> ["mgeko", "cc"] -> "mgeko.cc"
+    const cookiesByDomain = await chrome.cookies.getAll({ domain: domain });
+    const cookiesByUrl = await chrome.cookies.getAll({ url: tab.url });
     const parentDomain = domain.split('.').slice(-2).join('.');
-    const parentCookies = await chrome.cookies.getAll({ domain: parentDomain });
+    const cookiesByParent = await chrome.cookies.getAll({ domain: parentDomain });
+    let cookiesByDotDomain = [];
+    try { cookiesByDotDomain = await chrome.cookies.getAll({ domain: '.' + domain }); } catch(e) {}
+    let cookiesByDotParent = [];
+    try { cookiesByDotParent = await chrome.cookies.getAll({ domain: '.' + parentDomain }); } catch(e) {}
+    let cookiesAll = [];
+    try { cookiesAll = await chrome.cookies.getAll({}); } catch(e) {}
     
     // -------------------------------------------------------------------------
     // Step 4: Combine and deduplicate cookies
     // -------------------------------------------------------------------------
-    // We might get the same cookie from multiple queries, so deduplicate using a Map
-    // Map is like Go's map[string]Cookie - key is "name-domain", value is cookie object
-    const allCookies = [...cookies, ...parentCookies].reduce((acc, cookie) => {
-      // Create a unique key for each cookie (name + domain combination)
+    const allCookies = [...cookiesByDomain, ...cookiesByUrl, ...cookiesByParent, ...cookiesByDotDomain, ...cookiesByDotParent, ...cookiesAll].reduce((acc, cookie) => {
       const key = `${cookie.name}-${cookie.domain}`;
-      
-      // Only add if we haven't seen this cookie before
       if (!acc.has(key)) {
-        acc.set(key, cookie);  // Map.set() is like Go's map[key] = value
+        acc.set(key, cookie);
       }
-      return acc;  // Return the accumulator for the next iteration
-    }, new Map());  // Start with an empty Map
+      return acc;
+    }, new Map());
     
     // -------------------------------------------------------------------------
     // Step 5: Filter for cf-specific cookies
@@ -230,7 +226,7 @@ document.getElementById('captureBtn').addEventListener('click', async () => {
       if (cookie.path) raw += `; Path=${cookie.path}`;
       if (cookie.sameSite) raw += `; SameSite=${cookie.sameSite}`;
       if (cookie.secure) raw += `; Secure`;
-      raw += `; HttpOnly`;
+      if (cookie.httpOnly) raw += `; HttpOnly`;
       if (cookie.expirationDate) raw += `; Expires=${new Date(cookie.expirationDate * 1000).toUTCString()}`;
       return raw;
     };

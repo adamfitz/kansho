@@ -10,8 +10,7 @@
     "scripting",
     "storage",
     "clipboardWrite",
-    "webRequest",
-    "webRequestBlocking"
+    "webRequest"
   ],
   "host_permissions": [
     "<all_urls>"
