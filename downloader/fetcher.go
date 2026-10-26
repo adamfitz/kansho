@@ -51,6 +51,10 @@ func FetchChapterURLs(ctx context.Context, mangaURL string, site SitePlugin, bac
 		log.Printf("[Downloader] ⚠️ CF challenge detected - returning error to queue")
 		return nil, cfErr
 	}
+	if IsMissingDependency(err) {
+		log.Printf("[Downloader] ⚠️ Missing browser dependency - not retrying: %v", err)
+		return nil, err
+	}
 
 	policy := siteRetryPolicy(site)
 	maxRetries := policy.MaxFetchRetries
@@ -82,6 +86,10 @@ func FetchChapterURLs(ctx context.Context, mangaURL string, site SitePlugin, bac
 		if errors.As(err, &cfErr) {
 			log.Printf("[Downloader] ⚠️ CF challenge detected - returning error to queue")
 			return nil, cfErr
+		}
+		if IsMissingDependency(err) {
+			log.Printf("[Downloader] ⚠️ Missing browser dependency - not retrying: %v", err)
+			return nil, err
 		}
 
 		lastErr = err
@@ -134,6 +142,10 @@ func FetchChapterImages(ctx context.Context, chapterURL string, site SitePlugin,
 		log.Printf("[Downloader] ⚠️ CF challenge detected - returning error to queue")
 		return nil, cfErr
 	}
+	if IsMissingDependency(err) {
+		log.Printf("[Downloader] ⚠️ Missing browser dependency - not retrying: %v", err)
+		return nil, err
+	}
 
 	policy := siteRetryPolicy(site)
 	maxRetries := policy.MaxFetchRetries
@@ -165,6 +177,10 @@ func FetchChapterImages(ctx context.Context, chapterURL string, site SitePlugin,
 		if errors.As(err, &cfErr) {
 			log.Printf("[Downloader] ⚠️ CF challenge detected - returning error to queue")
 			return nil, cfErr
+		}
+		if IsMissingDependency(err) {
+			log.Printf("[Downloader] ⚠️ Missing browser dependency - not retrying: %v", err)
+			return nil, err
 		}
 
 		lastErr = err

@@ -20,6 +20,24 @@ The system SHALL manage chromedp browser sessions with configurable options.
 - WHEN `Close` is called
 - THEN both the browser context and allocator context SHALL be cancelled
 
+### Requirement: Browser Dependency Detection
+The system SHALL verify that a supported Chrome/Chromium executable is available before it tries to start browser automation, and SHALL report a missing browser as an actionable dependency error instead of repeatedly retrying a browser launch that cannot succeed.
+
+#### Scenario: Browser executable missing
+- GIVEN no supported Chrome/Chromium executable can be found in `PATH` or the platform's standard install locations
+- WHEN a site requires browser automation or an HTTP fetch falls back to the browser
+- THEN `NewBrowserSession` SHALL return a `MissingDependencyError`
+- AND the error SHALL name the missing browser dependency
+- AND the error SHALL include platform-specific installation instructions
+- AND refresh-pool and fetch retry loops SHALL treat it as terminal rather than retrying
+- AND the UI SHALL show the error to the user in a dialog
+
+#### Scenario: Custom browser path
+- GIVEN `KANSHO_CHROME_PATH` is set to an executable
+- WHEN a browser session is created
+- THEN that executable SHALL be used even when it is not in `PATH`
+- AND if the path is not executable, a `MissingDependencyError` SHALL explain the invalid override
+
 ### Requirement: Navigation and JavaScript Evaluation
 The system SHALL support navigating to pages and executing JavaScript for content extraction, including paginated chapter lists and lazy-loaded readers.
 

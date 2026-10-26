@@ -6,6 +6,18 @@ The `downloader` package is a **centralized download orchestration system** for 
 
 It implements a **plugin architecture** where site-specific code only handles parsing logic, while all download execution, network error handling, and bypass mechanisms are managed automatically by the downloader.
 
+## Runtime Requirements
+
+Sites that need JavaScript rendering, or that fall back from HTTP to a real
+browser, require a local Chromium/Google Chrome installation. Kansho searches
+the usual executable names and install locations automatically. If the browser
+is installed elsewhere, set `KANSHO_CHROME_PATH` to its full path before
+starting Kansho.
+
+If no browser can be found, Kansho returns a `MissingDependencyError` with
+install instructions and shows it in the UI instead of retrying the browser
+launch.
+
 ## Key Features ✨
 
 ### Automatic & Transparent

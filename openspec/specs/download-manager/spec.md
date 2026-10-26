@@ -78,12 +78,19 @@ The system SHALL automatically retry failed downloads with exponential backoff, 
 
 #### Scenario: Retry failed chapter download
 - GIVEN a chapter download fails
-- WHEN the error is not a CF challenge
+- WHEN the error is not a CF challenge or a missing dependency
 - THEN the system SHALL retry up to `MaxChapterRetries` times (default 3)
 - AND SHALL wait `2^attempt * ChapterBackoff` between retries (default base 1s → 2, 4, 8 seconds)
 - AND SHALL use `SleepCtx(ctx, backoff)` so the wait is cancelled immediately if the context is cancelled
 - WHEN all retries are exhausted
 - THEN the system SHALL log the failure and continue to the next chapter
+
+#### Scenario: Missing dependency is terminal
+- GIVEN a chapter download needs a browser and no supported Chrome/Chromium executable is installed
+- WHEN the error is a `MissingDependencyError`
+- THEN the system SHALL NOT retry the chapter download
+- AND SHALL stop downloading the remaining chapters of that manga
+- AND SHALL return the error so the download queue can show the install instructions
 
 #### Scenario: Retry failed image download
 - GIVEN an image download fails
@@ -96,12 +103,14 @@ The system SHALL automatically retry failed downloads with exponential backoff, 
 
 #### Scenario: Retry failed chapter-list or image-list fetch
 - GIVEN `FetchChapterURLs` or `FetchChapterImages` fails to extract from the site
-- WHEN the error is not a CF challenge
+- WHEN the error is not a CF challenge or a missing dependency
 - THEN the system SHALL retry up to `MaxFetchRetries` times (default 3)
 - AND SHALL use an exponential backoff of `2^attempt * FetchBackoff` between retries, or the decay controller's effective base when the site enables decay
 - AND SHALL use `SleepCtx(ctx, backoff)` so the wait is cancelled immediately if the context is cancelled
 - WHEN a CF challenge is detected at any attempt
 - THEN the fetch SHALL return the CF challenge error immediately to the queue with no further retries
+- WHEN a missing dependency is detected at any attempt
+- THEN the fetch SHALL return the missing dependency error immediately with no further retries
 
 #### Scenario: Per-site retry policy overrides
 - GIVEN a site implements `RetryPolicySite`

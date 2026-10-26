@@ -206,6 +206,11 @@ func (m *Manager) Download(ctx context.Context) error {
 		err := m.downloadChapterWithRetry(ctx, chapterURL, cbzName, actualChapterNum, currentDownload, totalChaptersFound, newChaptersToDownload, progress)
 		if err != nil {
 			log.Printf("[Downloader:%s] Failed to download chapter %s: %v", manga.Title, cbzName, err)
+			// A missing dependency affects every remaining chapter too, so stop
+			// here and let the queue surface the install instructions.
+			if IsMissingDependency(err) {
+				return fmt.Errorf("failed to download chapter %s: %w", cbzName, err)
+			}
 			continue
 		}
 
@@ -286,6 +291,12 @@ func (m *Manager) downloadChapterWithRetry(ctx context.Context, chapterURL, cbzN
 
 		lastErr = err
 		log.Printf("[Downloader:%s] Failed (attempt %d/%d): %v", cbzName, attempt+1, maxRetries, err)
+
+		// Retrying cannot install a missing browser, so fail fast and let the
+		// queue show the install instructions.
+		if IsMissingDependency(err) {
+			return err
+		}
 	}
 
 	return fmt.Errorf("failed after %d retries: %w", maxRetries, lastErr)

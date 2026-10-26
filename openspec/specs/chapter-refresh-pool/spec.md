@@ -64,7 +64,7 @@ A failed scrape attempt SHALL be retried up to 10 times with a delay that double
 - THEN the failure SHALL only affect the affected task, logged via OnError, without impacting other sites
 
 #### Scenario: Terminal errors are not retried
-- GIVEN a task whose error is marked terminal via its `NoRetry` predicate (e.g. a Cloudflare challenge waiting for user input)
+- GIVEN a task whose error is marked terminal via its `NoRetry` predicate (e.g. a Cloudflare challenge waiting for user input or a missing browser dependency)
 - WHEN Run returns that error
 - THEN OnError SHALL fire immediately with no further attempts
 - AND no browser window SHALL be reopened for the same failure

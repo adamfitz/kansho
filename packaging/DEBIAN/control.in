@@ -4,7 +4,8 @@ Section: utils
 Priority: optional
 Architecture: amd64
 Maintainer: Adam adam@networknoob.net
-Depends: libc6
+Depends: libc6, libgl1, libx11-6, libxcursor1, libxrandr2, libxinerama1, libxi6, libxxf86vm1, xdg-utils
+Recommends: chromium | chromium-browser | google-chrome-stable
 Provides: rlv
 Conflicts: rlv
 Replaces: rlv

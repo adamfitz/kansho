@@ -185,6 +185,14 @@ The system SHALL display the chapters of the currently selected manga with per-c
 - AND a CF dialog SHALL be shown so the user can solve the challenge and import cf data
 - AND on success the chapter list SHALL be reloaded
 
+#### Scenario: Missing browser dependency
+- GIVEN a chapter-list refresh or a queued download needs a browser and no supported Chrome/Chromium executable is installed
+- WHEN the missing dependency error reaches the UI
+- THEN the refresh or download SHALL stop retrying
+- AND a dialog SHALL be shown naming the missing browser and explaining how to install it
+- AND for queued downloads the dialog SHALL be shown only once per app session, while the failed task SHALL remain in the queue with the full error
+- AND a non-standard browser location SHALL be usable via the `KANSHO_CHROME_PATH` environment variable
+
 ### Requirement: Download Queue Button
 The system SHALL display an overall download progress summary instead of a dedicated queue screen.
 

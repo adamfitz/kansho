@@ -31,7 +31,18 @@ type BrowserSession struct {
 
 // NewBrowserSession creates a new browser session with optional CF bypass
 func NewBrowserSession(ctx context.Context, domain string, needsCF bool) (*BrowserSession, error) {
+	// Locate Chrome/Chromium ourselves before chromedp tries to launch it. If it
+	// is missing, chromedp would otherwise fail only after a launch attempt with
+	// a generic "google-chrome: executable file not found" error, which gives
+	// the user no hint about what to install.
+	browserPath, err := findBrowserExecutable()
+	if err != nil {
+		return nil, err
+	}
+	log.Printf("[Browser:%s] Using browser executable: %s", domain, browserPath)
+
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
+		chromedp.ExecPath(browserPath),
 		chromedp.Flag("headless", "new"),
 		chromedp.Flag("disable-blink-features", "AutomationControlled"),
 		chromedp.Flag("disable-gpu", true),

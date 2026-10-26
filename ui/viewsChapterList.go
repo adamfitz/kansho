@@ -75,19 +75,20 @@ type chapterStatsRepository interface {
 // populated only when the user clicks Refresh. New chapters are added to the
 // list but NOT downloaded until the user explicitly starts them.
 type ChapterListView struct {
-	Card                fyne.CanvasObject
-	selectedMangaLabel  *widget.Label
-	chapterList         *widget.List
-	contentContainer    *fyne.Container
-	downloadAllButton   *widget.Button
-	refreshButton       *widget.Button
-	downloadQueueButton *DownloadQueueButton
-	loadingIndicator    *bashSpinner
-	state               *KanshoAppState
-	chapters            []*ChapterItem
-	cfDialogShown       map[string]bool
-	loadGeneration      int
-	refreshing          bool
+	Card                       fyne.CanvasObject
+	selectedMangaLabel         *widget.Label
+	chapterList                *widget.List
+	contentContainer           *fyne.Container
+	downloadAllButton          *widget.Button
+	refreshButton              *widget.Button
+	downloadQueueButton        *DownloadQueueButton
+	loadingIndicator           *bashSpinner
+	state                      *KanshoAppState
+	chapters                   []*ChapterItem
+	cfDialogShown              map[string]bool
+	queueDependencyDialogShown bool
+	loadGeneration             int
+	refreshing                 bool
 	// remoteChapters caches, per manga source identity, the chapters fetched
 	// from the target site (chapter name -> download URL). It persists for the
 	// lifetime of the application so refreshed chapters stay visible across
@@ -229,6 +230,13 @@ func NewChapterListView(state *KanshoAppState, downloadQueueButton *DownloadQueu
 				if task.Status == "waiting_cf" && !view.cfDialogShown[task.ID] {
 					view.showCFDialog(task)
 					view.cfDialogShown[task.ID] = true
+				}
+				if task.Status == "failed" && !view.queueDependencyDialogShown {
+					var depErr *downloader.MissingDependencyError
+					if errors.As(task.Error, &depErr) {
+						view.queueDependencyDialogShown = true
+						showMissingDependencyDialog(view.state.Window, depErr)
+					}
 				}
 				view.refreshAfterTaskChange()
 			})
@@ -678,12 +686,13 @@ func (v *ChapterListView) onRefreshClicked() {
 		// Reject duplicate submissions while this manga's fetch is already
 		// pending or running somewhere in the pool.
 		DedupeKey: "chapters:" + targetURL,
-		// A CF challenge waits for the user to import bypass data; retrying
-		// would just keep reopening the browser, so fail immediately and let
-		// OnError show the import dialog.
+		// A CF challenge waits for the user to import bypass data, and a missing
+		// browser dependency needs the user to install software; retrying either
+		// one cannot help, so fail immediately and let OnError explain what the
+		// user needs to do.
 		NoRetry: func(err error) bool {
 			var cfErr *cf.CfChallengeError
-			return errors.As(err, &cfErr)
+			return errors.As(err, &cfErr) || downloader.IsMissingDependency(err)
 		},
 		// Adaptive attempt timeout: starts at refreshAttemptTimeout and grows
 		// by TimeoutStep after every failed attempt until a scrape succeeds.
@@ -710,6 +719,17 @@ func (v *ChapterListView) onRefreshClicked() {
 				fyne.Do(func() { v.finishRefresh(gen, url) })
 				return
 			}
+
+			var depErr *downloader.MissingDependencyError
+			if errors.As(err, &depErr) {
+				log.Printf("[UI] Missing browser dependency for %s: %v", title, err)
+				fyne.Do(func() {
+					v.finishRefresh(gen, "")
+					showMissingDependencyDialog(v.state.Window, depErr)
+				})
+				return
+			}
+
 			log.Printf("[UI] Failed to fetch remote chapters for %s: %v", title, err)
 			fyne.Do(func() { v.finishRefresh(gen, "") })
 		},
