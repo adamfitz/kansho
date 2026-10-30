@@ -153,6 +153,48 @@ func ShowDatabaseCompactDialog(_ fyne.App, window fyne.Window) {
 	)
 }
 
+// ShowClearTransactionLocksDialog removes Kansho's advisory database write
+// locks. It is intentionally guarded by a warning because clearing a lock that
+// another running instance is using can allow two writers at once.
+func ShowClearTransactionLocksDialog(_ fyne.App, window fyne.Window) {
+	store, err := mangadex.GetStore()
+	if err != nil {
+		dialog.ShowError(fmt.Errorf("cannot open Kansho database: %v", err), window)
+		return
+	}
+
+	count, err := store.LockCount()
+	if err != nil {
+		dialog.ShowError(err, window)
+		return
+	}
+
+	warning := fmt.Sprintf(
+		"WARNING: Only use this when Kansho reports a database lock error that you cannot clear, and you are sure no other Kansho instance is writing to the database.\n\n"+
+			"Clearing a lock that is really in use can allow two writers to change the database at the same time.\n\n"+
+			"Clear %d stored transaction lock(s)?",
+		count,
+	)
+
+	dialog.ShowConfirm(
+		"Clear Transaction Locks",
+		warning,
+		func(confirmed bool) {
+			if !confirmed {
+				return
+			}
+			cleared, err := store.ClearLocks()
+			if err != nil {
+				dialog.ShowError(err, window)
+				return
+			}
+			dialog.ShowInformation("Transaction Locks Cleared",
+				fmt.Sprintf("Cleared %d transaction lock(s).", cleared), window)
+		},
+		window,
+	)
+}
+
 // databaseStore is the small slice of mangadex.Store used by the database menu,
 // kept as a narrow interface so the handlers are easy to test.
 type databaseStore interface {

@@ -338,7 +338,14 @@ func buildMangaInfoContent(parentWindow fyne.Window, replace func(fyne.CanvasObj
 
 	// Find matching bookmark for this title
 	var matchedBookmark *config.Bookmarks
-	all := config.LoadBookmarks()
+	all := config.Manga{Manga: []config.Bookmarks{}}
+	if store, storeErr := mangadex.GetStore(); storeErr != nil {
+		log.Printf("[UI] cannot open Kansho database: %v", storeErr)
+	} else if loaded, loadErr := store.LoadBookmarks(); loadErr != nil {
+		log.Printf("[UI] cannot load bookmarks: %v", loadErr)
+	} else {
+		all = loaded
+	}
 	for i := range all.Manga {
 		m := all.Manga[i]
 		if strings.EqualFold(m.Title, bookmarkTitle) {

@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"kansho/models"
 )
 
 func tempStore(t *testing.T) *Store {
@@ -384,8 +386,8 @@ func TestEnsureSchemaMigratesExistingDatabase(t *testing.T) {
 	if err := store.conn.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		t.Fatalf("read user_version: %v", err)
 	}
-	if version != 4 {
-		t.Fatalf("user_version = %d, want 4", version)
+	if version != 7 {
+		t.Fatalf("user_version = %d, want 7", version)
 	}
 
 	stats := ChapterStats{Title: "One Piece", Total: 2, NotDownloaded: 2}
@@ -674,5 +676,153 @@ func TestTitleInFallback(t *testing.T) {
 	}
 	if got := info.TitleIn("zz"); got != "One Piece" {
 		t.Errorf("TitleIn(zz) fallback = %q", got)
+	}
+}
+
+func TestBookmarksRoundTripAndReplace(t *testing.T) {
+	store := tempStore(t)
+
+	first := models.Manga{Manga: []models.Bookmarks{
+		{Title: "One Piece", Url: "https://example.test/one", Site: "Example", Location: "/tmp/one"},
+		{Title: "Berserk", Url: "https://example.test/berserk", Site: "Example", Location: "/tmp/berserk"},
+	}}
+	if err := store.SaveBookmarks(first); err != nil {
+		t.Fatalf("SaveBookmarks: %v", err)
+	}
+
+	loaded, err := store.LoadBookmarks()
+	if err != nil {
+		t.Fatalf("LoadBookmarks: %v", err)
+	}
+	if len(loaded.Manga) != 2 {
+		t.Fatalf("loaded %d bookmarks, want 2", len(loaded.Manga))
+	}
+
+	second := models.Manga{Manga: []models.Bookmarks{{Title: "Berserk"}}}
+	if err := store.SaveBookmarks(second); err != nil {
+		t.Fatalf("SaveBookmarks replace: %v", err)
+	}
+	loaded, err = store.LoadBookmarks()
+	if err != nil {
+		t.Fatalf("LoadBookmarks after replace: %v", err)
+	}
+	if len(loaded.Manga) != 1 || loaded.Manga[0].Title != "Berserk" {
+		t.Fatalf("bookmarks after replace = %+v", loaded.Manga)
+	}
+}
+
+func TestLegacyBookmarksMigrationRenamesFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	configDir := filepath.Join(home, ".config", "kansho")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		t.Fatalf("create config dir: %v", err)
+	}
+	legacy := filepath.Join(configDir, "bookmarks.json")
+	if err := os.WriteFile(legacy, []byte(`{"manga":[{"title":"Migrated","url":"u","chapters":"","location":"","site":"s","shortname":""}]}`), 0644); err != nil {
+		t.Fatalf("write legacy bookmarks: %v", err)
+	}
+
+	store, err := Open()
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer store.Close()
+
+	loaded, err := store.LoadBookmarks()
+	if err != nil {
+		t.Fatalf("LoadBookmarks: %v", err)
+	}
+	if len(loaded.Manga) != 1 || loaded.Manga[0].Title != "Migrated" {
+		t.Fatalf("migrated bookmarks = %+v", loaded.Manga)
+	}
+	if _, err := os.Stat(legacy); !os.IsNotExist(err) {
+		t.Fatalf("legacy bookmarks file still exists: %v", err)
+	}
+	if _, err := os.Stat(legacy + ".bak"); err != nil {
+		t.Fatalf("legacy bookmarks backup missing: %v", err)
+	}
+}
+
+func TestWriteLockBlocksWritesAndCanBeCleared(t *testing.T) {
+	store := tempStore(t)
+	owner, err := store.acquireWriteLock()
+	if err != nil {
+		t.Fatalf("acquireWriteLock: %v", err)
+	}
+	defer store.releaseWriteLock(owner)
+
+	err = store.SaveBookmarks(models.Manga{Manga: []models.Bookmarks{{Title: "Blocked"}}})
+	if err == nil {
+		t.Fatal("SaveBookmarks succeeded while write lock was held")
+	}
+	if _, ok := err.(*LockedError); !ok {
+		t.Fatalf("SaveBookmarks error = %T %v, want *LockedError", err, err)
+	}
+
+	count, err := store.LockCount()
+	if err != nil || count != 1 {
+		t.Fatalf("LockCount = %d, %v; want 1, nil", count, err)
+	}
+	cleared, err := store.ClearLocks()
+	if err != nil || cleared != 1 {
+		t.Fatalf("ClearLocks = %d, %v; want 1, nil", cleared, err)
+	}
+
+	if err := store.SaveBookmarks(models.Manga{Manga: []models.Bookmarks{{Title: "Allowed"}}}); err != nil {
+		t.Fatalf("SaveBookmarks after ClearLocks: %v", err)
+	}
+}
+
+func TestCompareAndMergeMissingRows(t *testing.T) {
+	source := tempStore(t)
+	targetPath := filepath.Join(t.TempDir(), "target.db")
+	target, err := OpenPath(targetPath)
+	if err != nil {
+		t.Fatalf("open target: %v", err)
+	}
+	defer target.Close()
+
+	sourceBookmarks := models.Manga{Manga: []models.Bookmarks{
+		{Title: "Shared", Url: "u1", Site: "s"},
+		{Title: "Only In Source", Url: "u2", Site: "s"},
+	}}
+	if err := source.SaveBookmarks(sourceBookmarks); err != nil {
+		t.Fatalf("source SaveBookmarks: %v", err)
+	}
+	targetBookmarks := models.Manga{Manga: []models.Bookmarks{
+		{Title: "Shared", Url: "u1", Site: "s"},
+		{Title: "Only In Target", Url: "u3", Site: "s"},
+	}}
+	if err := target.SaveBookmarks(targetBookmarks); err != nil {
+		t.Fatalf("target SaveBookmarks: %v", err)
+	}
+
+	diff, err := target.CompareWith(source.Path())
+	if err != nil {
+		t.Fatalf("CompareWith: %v", err)
+	}
+	if diff.TotalMissing != 1 {
+		t.Fatalf("TotalMissing = %d, want 1 (%+v)", diff.TotalMissing, diff)
+	}
+
+	result, err := target.MergeMissingFrom(source.Path(), nil)
+	if err != nil {
+		t.Fatalf("MergeMissingFrom: %v", err)
+	}
+	if result.TotalInserted != 1 {
+		t.Fatalf("TotalInserted = %d, want 1", result.TotalInserted)
+	}
+	if _, err := os.Stat(result.BackupPath); err != nil {
+		t.Fatalf("target backup missing: %v", err)
+	}
+
+	merged, err := target.LoadBookmarks()
+	if err != nil {
+		t.Fatalf("LoadBookmarks after merge: %v", err)
+	}
+	if len(merged.Manga) != 3 {
+		t.Fatalf("merged bookmarks = %+v, want 3 rows", merged.Manga)
 	}
 }

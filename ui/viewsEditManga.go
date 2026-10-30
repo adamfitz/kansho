@@ -422,8 +422,8 @@ func (v *EditMangaView) onSaveButtonClicked() {
 	v.State.MangaData.Manga[v.editingMangaID].Location = newLocation
 	v.State.MangaData.Manga[v.editingMangaID].Shortname = "" // Remove shortname
 
-	// Save to disk
-	err = config.SaveBookmarks(v.State.MangaData)
+	// Save to the database
+	err = saveBookmarksToStore(v.State.MangaData)
 	if err != nil {
 		dialog.ShowError(
 			fmt.Errorf("failed to save bookmarks: %v", err),

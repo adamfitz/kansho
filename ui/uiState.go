@@ -1,7 +1,10 @@
 package ui
 
 import (
+	"log"
+
 	"kansho/config"
+	"kansho/mangadex"
 	"kansho/models"
 
 	"fyne.io/fyne/v2"
@@ -55,9 +58,19 @@ type KanshoAppState struct {
 // Returns:
 //   - *KanshoAppState: A new state instance with initialized data
 func NewKanshoAppState(window fyne.Window) *KanshoAppState {
+	bookmarks := config.Manga{Manga: []config.Bookmarks{}}
+	store, err := mangadex.GetStore()
+	if err != nil {
+		log.Printf("[UI] cannot open Kansho database: %v", err)
+	} else if loaded, loadErr := store.LoadBookmarks(); loadErr != nil {
+		log.Printf("[UI] cannot load bookmarks: %v", loadErr)
+	} else {
+		bookmarks = loaded
+	}
+
 	return &KanshoAppState{
 		Window:               window,
-		MangaData:            config.LoadBookmarks(),
+		MangaData:            bookmarks,
 		SitesConfig:          models.SitesConfig{}, // Will be loaded by config package
 		SelectedMangaID:      -1,                   // No selection initially
 		OnMangaSelected:      make([]func(int), 0),
@@ -65,6 +78,14 @@ func NewKanshoAppState(window fyne.Window) *KanshoAppState {
 		OnMangaAddedDetailed: make([]func(config.Bookmarks), 0),
 		OnMangaDeleted:       make([]func(int), 0),
 	}
+}
+
+func saveBookmarksToStore(data config.Manga) error {
+	store, err := mangadex.GetStore()
+	if err != nil {
+		return err
+	}
+	return store.SaveBookmarks(data)
 }
 
 // SelectManga updates the selected manga and notifies all registered callbacks.
@@ -92,8 +113,8 @@ func (s *KanshoAppState) AddManga(manga config.Bookmarks) {
 	// Add the manga to our in-memory data
 	s.MangaData.Manga = append(s.MangaData.Manga, manga)
 
-	// Save to disk immediately
-	err := config.SaveBookmarks(s.MangaData)
+	// Save to the database immediately
+	err := saveBookmarksToStore(s.MangaData)
 	if err != nil {
 		// Handle error - maybe show a dialog to the user
 		dialog.ShowError(err, s.Window)
@@ -122,8 +143,8 @@ func (s *KanshoAppState) DeleteManga(id int) {
 	// Remove the manga from the slice
 	s.MangaData.Manga = append(s.MangaData.Manga[:id], s.MangaData.Manga[id+1:]...)
 
-	// Save to disk immediately
-	err := config.SaveBookmarks(s.MangaData)
+	// Save to the database immediately
+	err := saveBookmarksToStore(s.MangaData)
 	if err != nil {
 		// Handle error - show a dialog to the user
 		dialog.ShowError(err, s.Window)

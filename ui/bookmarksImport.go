@@ -11,6 +11,7 @@ import (
 	"fyne.io/fyne/v2/storage"
 
 	"kansho/config"
+	"kansho/mangadex"
 )
 
 // ShowImportBookmarksDialog handles the import of bookmarks.json
@@ -41,14 +42,24 @@ func ShowImportBookmarksDialog(kanshoApp fyne.App, window fyne.Window) {
 			return
 		}
 
-		// Load current bookmarks
-		currentBookmarks := config.LoadBookmarks()
+		store, err := mangadex.GetStore()
+		if err != nil {
+			dialog.ShowError(fmt.Errorf("cannot open Kansho database: %v", err), window)
+			return
+		}
+
+		// Load current bookmarks from the database
+		currentBookmarks, err := store.LoadBookmarks()
+		if err != nil {
+			dialog.ShowError(fmt.Errorf("failed to load bookmarks: %v", err), window)
+			return
+		}
 
 		// Process imported bookmarks
 		result := processImportedBookmarks(&currentBookmarks, &importedData)
 
-		// Save the merged bookmarks
-		if err := config.SaveBookmarks(currentBookmarks); err != nil {
+		// Save the merged bookmarks to the database
+		if err := store.SaveBookmarks(currentBookmarks); err != nil {
 			dialog.ShowError(fmt.Errorf("failed to save bookmarks: %v", err), window)
 			return
 		}

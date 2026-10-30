@@ -13,13 +13,18 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"kansho/parser"
+	"kansho/preferences"
 )
 
-// dbFileName is the name of the SQLite database inside the kansho config
-// directory. It stores MangaDex title information and generic per-manga
-// chapter count snapshots; Kansho's bookmarks live separately in bookmarks.json.
-const dbFileName = "kansho.db"
+// dbFileName is the name of the SQLite database inside the configured
+// database directory. It stores bookmarks, MangaDex title information, generic
+// per-manga chapter count snapshots, and Kansho's advisory write locks.
+const dbFileName = preferences.DatabaseFileName
+
+// sqliteDSN is shared by every connection so all writes use an immediate
+// transaction (avoiding deferred-transaction lock upgrades) and wait for
+// another connection instead of failing instantly.
+const sqliteDSN = "?_journal_mode=WAL&_busy_timeout=10000&_foreign_keys=on&_txlock=immediate"
 
 // legacyDBFileName is the old database file name used before the database
 // became a general Kansho store. Open migrates it to dbFileName once so
@@ -33,16 +38,44 @@ const PreRestoreFileName = "kansho.pre-restore.db"
 // GetStore returns the process-wide default local database, opening it (and its
 // schema) on first use.
 func GetStore() (*Store, error) {
-	defaultStoreOnce.Do(func() {
-		defaultStore, defaultStoreErr = Open()
-	})
-	return defaultStore, defaultStoreErr
+	defaultStoreMu.Lock()
+	defer defaultStoreMu.Unlock()
+
+	if defaultStore != nil {
+		return defaultStore, nil
+	}
+	store, err := Open()
+	if err != nil {
+		return nil, err
+	}
+	defaultStore = store
+	return defaultStore, nil
+}
+
+// ReopenDefault closes the process-wide default database and opens it again at
+// the location currently stored in kansho.conf. This is used after the user
+// changes the database directory in Preferences.
+func ReopenDefault() error {
+	defaultStoreMu.Lock()
+	defer defaultStoreMu.Unlock()
+
+	if defaultStore != nil {
+		if err := defaultStore.Close(); err != nil {
+			log.Printf("[mangadex] close previous default database: %v", err)
+		}
+		defaultStore = nil
+	}
+	store, err := Open()
+	if err != nil {
+		return err
+	}
+	defaultStore = store
+	return nil
 }
 
 var (
-	defaultStoreOnce sync.Once
-	defaultStore     *Store
-	defaultStoreErr  error
+	defaultStoreMu sync.Mutex
+	defaultStore   *Store
 )
 
 // Store is the local SQLite database of MangaDex title information and generic
@@ -53,13 +86,13 @@ type Store struct {
 	path string
 }
 
-// DefaultDBPath returns the database path inside the kansho config directory.
+// DefaultDBPath returns the database path configured in kansho.conf.
 func DefaultDBPath() (string, error) {
-	dir, err := parser.ExpandPath("~/.config/kansho")
+	prefs, err := preferences.Load()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, dbFileName), nil
+	return prefs.DatabasePath()
 }
 
 // migrateLegacyDatabase moves an existing mangadex.db to kansho.db on first
@@ -123,7 +156,15 @@ func Open() (*Store, error) {
 	if err := migrateLegacyDatabase(path); err != nil {
 		return nil, fmt.Errorf("migrate legacy database: %w", err)
 	}
-	return OpenPath(path)
+	store, err := OpenPath(path)
+	if err != nil {
+		return nil, err
+	}
+	if err := store.migrateLegacyBookmarks(); err != nil {
+		_ = store.Close()
+		return nil, fmt.Errorf("migrate legacy bookmarks: %w", err)
+	}
+	return store, nil
 }
 
 // OpenPath opens (or creates) the database at an explicit path.
@@ -132,7 +173,7 @@ func OpenPath(path string) (*Store, error) {
 		return nil, fmt.Errorf("create kansho database directory: %w", err)
 	}
 
-	conn, err := sql.Open("sqlite", path+"?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=on")
+	conn, err := sql.Open("sqlite", path+sqliteDSN)
 	if err != nil {
 		return nil, fmt.Errorf("open Kansho database: %w", err)
 	}
@@ -220,7 +261,31 @@ func (s *Store) EnsureSchema() error {
 		cover_url   TEXT NOT NULL DEFAULT '',
 		updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
-	PRAGMA user_version = 6;
+	CREATE TABLE IF NOT EXISTS bookmarks (
+		id         INTEGER PRIMARY KEY AUTOINCREMENT,
+		title      TEXT NOT NULL DEFAULT '',
+		url        TEXT NOT NULL DEFAULT '',
+		chapters   TEXT NOT NULL DEFAULT '',
+		location   TEXT NOT NULL DEFAULT '',
+		site       TEXT NOT NULL DEFAULT '',
+		shortname  TEXT NOT NULL DEFAULT '',
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
+	CREATE INDEX IF NOT EXISTS idx_bookmarks_title
+		ON bookmarks (title);
+	CREATE INDEX IF NOT EXISTS idx_bookmarks_identity
+		ON bookmarks (title, url, chapters, location, site, shortname);
+	CREATE TABLE IF NOT EXISTS kansho_meta (
+		key   TEXT PRIMARY KEY,
+		value TEXT NOT NULL DEFAULT ''
+	);
+	CREATE TABLE IF NOT EXISTS kansho_locks (
+		lock_name   TEXT PRIMARY KEY,
+		owner       TEXT NOT NULL DEFAULT '',
+		acquired_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+	);
+	PRAGMA user_version = 7;
 	`
 	_, err := s.conn.Exec(schema)
 	if err != nil {
@@ -406,15 +471,17 @@ func (s *Store) SetTitleAlias(title, id string) error {
 	if title == "" || id == "" {
 		return fmt.Errorf("cannot alias an empty title or id")
 	}
-	_, err := s.conn.Exec(`INSERT INTO manga_title_lookup (lookup_title, mangadex_id, updated_at)
-		VALUES (?, ?, CURRENT_TIMESTAMP)
-		ON CONFLICT(lookup_title) DO UPDATE SET
-			mangadex_id = excluded.mangadex_id,
-			updated_at = CURRENT_TIMESTAMP`, title, id)
-	if err != nil {
-		return fmt.Errorf("store title alias %q -> %s: %w", title, id, err)
-	}
-	return nil
+	return s.withWriteTx(func(tx *sql.Tx) error {
+		_, err := tx.Exec(`INSERT INTO manga_title_lookup (lookup_title, mangadex_id, updated_at)
+			VALUES (?, ?, CURRENT_TIMESTAMP)
+			ON CONFLICT(lookup_title) DO UPDATE SET
+				mangadex_id = excluded.mangadex_id,
+				updated_at = CURRENT_TIMESTAMP`, title, id)
+		if err != nil {
+			return fmt.Errorf("store title alias %q -> %s: %w", title, id, err)
+		}
+		return nil
+	})
 }
 
 // LookupByTitle finds the best-matching local MangaDex record for a manga
@@ -490,35 +557,37 @@ func (s *Store) Upsert(info *MangaInfo) error {
 	}
 	m := marshalledInfo(&storedInfo)
 
-	_, err := s.conn.Exec(`INSERT INTO manga_title
-		(mangadex_id, primary_title, selected_english_title, title_json, alt_titles_json, description_json,
-		 original_language, publication_demographic, year, content_rating, status,
-		 tags_json, author, artist, cover_url, url, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-		ON CONFLICT(mangadex_id) DO UPDATE SET
-			primary_title = excluded.primary_title,
-			selected_english_title = excluded.selected_english_title,
-			title_json = excluded.title_json,
-			alt_titles_json = excluded.alt_titles_json,
-			description_json = excluded.description_json,
-			original_language = excluded.original_language,
-			publication_demographic = excluded.publication_demographic,
-			year = excluded.year,
-			content_rating = excluded.content_rating,
-			status = excluded.status,
-			tags_json = excluded.tags_json,
-			author = excluded.author,
-			artist = excluded.artist,
-			cover_url = excluded.cover_url,
-			url = excluded.url,
-			updated_at = CURRENT_TIMESTAMP`,
-		m.MangaDexID, m.PrimaryTitle, m.SelectedEnglishTitle, m.TitleJSON, m.AltTitlesJSON, m.DescriptionJSON,
-		m.OriginalLanguage, m.PublicationDemographic, m.Year, m.ContentRating, m.Status,
-		m.TagsJSON, m.Author, m.Artist, m.CoverURL, m.URL)
-	if err != nil {
-		return fmt.Errorf("upsert mangadex info %s: %w", info.ID, err)
-	}
-	return nil
+	return s.withWriteTx(func(tx *sql.Tx) error {
+		_, err := tx.Exec(`INSERT INTO manga_title
+			(mangadex_id, primary_title, selected_english_title, title_json, alt_titles_json, description_json,
+			 original_language, publication_demographic, year, content_rating, status,
+			 tags_json, author, artist, cover_url, url, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+			ON CONFLICT(mangadex_id) DO UPDATE SET
+				primary_title = excluded.primary_title,
+				selected_english_title = excluded.selected_english_title,
+				title_json = excluded.title_json,
+				alt_titles_json = excluded.alt_titles_json,
+				description_json = excluded.description_json,
+				original_language = excluded.original_language,
+				publication_demographic = excluded.publication_demographic,
+				year = excluded.year,
+				content_rating = excluded.content_rating,
+				status = excluded.status,
+				tags_json = excluded.tags_json,
+				author = excluded.author,
+				artist = excluded.artist,
+				cover_url = excluded.cover_url,
+				url = excluded.url,
+				updated_at = CURRENT_TIMESTAMP`,
+			m.MangaDexID, m.PrimaryTitle, m.SelectedEnglishTitle, m.TitleJSON, m.AltTitlesJSON, m.DescriptionJSON,
+			m.OriginalLanguage, m.PublicationDemographic, m.Year, m.ContentRating, m.Status,
+			m.TagsJSON, m.Author, m.Artist, m.CoverURL, m.URL)
+		if err != nil {
+			return fmt.Errorf("upsert mangadex info %s: %w", info.ID, err)
+		}
+		return nil
+	})
 }
 
 func (s *Store) UpsertChapterStats(key string, stats ChapterStats) error {
@@ -533,25 +602,27 @@ func (s *Store) UpsertChapterStats(key string, stats ChapterStats) error {
 		return fmt.Errorf("chapter counts must add up to the total")
 	}
 
-	_, err := s.conn.Exec(`INSERT INTO manga_chapter_stats
-		(manga_key, title, site, url, total_chapters, downloaded_chapters,
-		 not_downloaded_chapters, last_refresh, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-		ON CONFLICT(manga_key) DO UPDATE SET
-			title = excluded.title,
-			site = excluded.site,
-			url = excluded.url,
-			total_chapters = excluded.total_chapters,
-			downloaded_chapters = excluded.downloaded_chapters,
-			not_downloaded_chapters = excluded.not_downloaded_chapters,
-			last_refresh = excluded.last_refresh,
-			updated_at = CURRENT_TIMESTAMP`,
-		key, stats.Title, stats.Site, stats.URL, stats.Total,
-		stats.Downloaded, stats.NotDownloaded, stats.LastRefresh)
-	if err != nil {
-		return fmt.Errorf("store chapter stats for %s: %w", key, err)
-	}
-	return nil
+	return s.withWriteTx(func(tx *sql.Tx) error {
+		_, err := tx.Exec(`INSERT INTO manga_chapter_stats
+			(manga_key, title, site, url, total_chapters, downloaded_chapters,
+			 not_downloaded_chapters, last_refresh, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+			ON CONFLICT(manga_key) DO UPDATE SET
+				title = excluded.title,
+				site = excluded.site,
+				url = excluded.url,
+				total_chapters = excluded.total_chapters,
+				downloaded_chapters = excluded.downloaded_chapters,
+				not_downloaded_chapters = excluded.not_downloaded_chapters,
+				last_refresh = excluded.last_refresh,
+				updated_at = CURRENT_TIMESTAMP`,
+			key, stats.Title, stats.Site, stats.URL, stats.Total,
+			stats.Downloaded, stats.NotDownloaded, stats.LastRefresh)
+		if err != nil {
+			return fmt.Errorf("store chapter stats for %s: %w", key, err)
+		}
+		return nil
+	})
 }
 
 func (s *Store) LookupChapterStats(key string) (*ChapterStats, error) {
@@ -694,7 +765,7 @@ func (s *Store) Restore(src string) error {
 		return fmt.Errorf("close current database: %w", err)
 	}
 	defer func() {
-		s.conn, _ = sql.Open("sqlite", s.path+"?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=on")
+		s.conn, _ = sql.Open("sqlite", s.path+sqliteDSN)
 		_ = s.conn.Ping()
 	}()
 
@@ -714,7 +785,7 @@ func (s *Store) Restore(src string) error {
 	}
 
 	// Re-open and validate the restored database.
-	s.conn, err = sql.Open("sqlite", s.path+"?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=on")
+	s.conn, err = sql.Open("sqlite", s.path+sqliteDSN)
 	if err != nil {
 		return fmt.Errorf("reopen restored database: %w", err)
 	}
@@ -765,10 +836,12 @@ func (s *Store) SetMetadataPromptAllowed(key string, allowed bool) error {
 	if allowed {
 		val = 1
 	}
-	_, err := s.conn.Exec(`INSERT INTO manga_metadata_prefs (manga_key, prompt_mangadex_metadata, updated_at)
-		VALUES (?, ?, CURRENT_TIMESTAMP)
-		ON CONFLICT(manga_key) DO UPDATE SET prompt_mangadex_metadata = excluded.prompt_mangadex_metadata, updated_at = CURRENT_TIMESTAMP`, key, val)
-	return err
+	return s.withWriteTx(func(tx *sql.Tx) error {
+		_, err := tx.Exec(`INSERT INTO manga_metadata_prefs (manga_key, prompt_mangadex_metadata, updated_at)
+			VALUES (?, ?, CURRENT_TIMESTAMP)
+			ON CONFLICT(manga_key) DO UPDATE SET prompt_mangadex_metadata = excluded.prompt_mangadex_metadata, updated_at = CURRENT_TIMESTAMP`, key, val)
+		return err
+	})
 }
 
 // GetCoverCache returns cached cover JPEG bytes for a MangaDex ID.
@@ -877,8 +950,10 @@ func (s *Store) SetCoverCache(id string, data []byte, coverURL string) error {
 	if id == "" || len(data) == 0 {
 		return nil
 	}
-	_, err := s.conn.Exec(`INSERT INTO manga_cover_cache (mangadex_id, cover_jpeg, cover_url, updated_at)
-		VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-		ON CONFLICT(mangadex_id) DO UPDATE SET cover_jpeg = excluded.cover_jpeg, cover_url = excluded.cover_url, updated_at = CURRENT_TIMESTAMP`, id, data, coverURL)
-	return err
+	return s.withWriteTx(func(tx *sql.Tx) error {
+		_, err := tx.Exec(`INSERT INTO manga_cover_cache (mangadex_id, cover_jpeg, cover_url, updated_at)
+			VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+			ON CONFLICT(mangadex_id) DO UPDATE SET cover_jpeg = excluded.cover_jpeg, cover_url = excluded.cover_url, updated_at = CURRENT_TIMESTAMP`, id, data, coverURL)
+		return err
+	})
 }
