@@ -904,6 +904,83 @@ func TestSyncPlatformBookmarksSharesTitlesAndPreservesLocations(t *testing.T) {
 	}
 }
 
+func TestSyncPlatformBookmarksRebasesConfiguredRootsWhenTypeChanges(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	if err := preferences.Save(preferences.Preferences{
+		DatabaseDirectory:  filepath.Join(home, "db"),
+		WindowsMangaRoot:   `D:\Manga`,
+		WindowsWebtoonRoot: `D:\Webtoons`,
+		LinuxMangaRoot:     "/mnt/manga",
+		LinuxWebtoonRoot:   "/mnt/webtoons",
+	}); err != nil {
+		t.Fatalf("save preferences: %v", err)
+	}
+
+	path := filepath.Join(t.TempDir(), "type-change.db")
+	linux, err := openPathForPlatform(path, "linux")
+	if err != nil {
+		t.Fatalf("open Linux store: %v", err)
+	}
+	defer linux.Close()
+	windows, err := openPathForPlatform(path, "windows")
+	if err != nil {
+		t.Fatalf("open Windows store: %v", err)
+	}
+	defer windows.Close()
+
+	if err := linux.SaveBookmarks(models.Manga{Manga: []models.Bookmarks{
+		{Title: "Rooted Title", Site: "Example", Type: "manga", Location: "/mnt/manga/Rooted Title", MangaDexID: "rooted-id"},
+		{Title: "Custom Title", Site: "Example", Type: "manga", Location: "/custom/linux", MangaDexID: "custom-id"},
+	}}); err != nil {
+		t.Fatalf("save initial Linux bookmarks: %v", err)
+	}
+
+	windowsBookmarks, err := windows.LoadBookmarks()
+	if err != nil {
+		t.Fatalf("load initial Windows bookmarks: %v", err)
+	}
+	for i := range windowsBookmarks.Manga {
+		if windowsBookmarks.Manga[i].MangaDexID == "custom-id" {
+			windowsBookmarks.Manga[i].Location = `C:\custom\windows`
+		}
+	}
+	if err := windows.SaveBookmarks(windowsBookmarks); err != nil {
+		t.Fatalf("set custom Windows location: %v", err)
+	}
+
+	linuxBookmarks, err := linux.LoadBookmarks()
+	if err != nil {
+		t.Fatalf("load Linux bookmarks before type change: %v", err)
+	}
+	for i := range linuxBookmarks.Manga {
+		linuxBookmarks.Manga[i].Type = "webtoon"
+		if linuxBookmarks.Manga[i].MangaDexID == "rooted-id" {
+			linuxBookmarks.Manga[i].Location = "/mnt/webtoons/Rooted Title"
+		}
+	}
+	if err := linux.SaveBookmarks(linuxBookmarks); err != nil {
+		t.Fatalf("save Linux bookmarks after type change: %v", err)
+	}
+
+	windowsBookmarks, err = windows.LoadBookmarks()
+	if err != nil {
+		t.Fatalf("load Windows bookmarks after type change: %v", err)
+	}
+	locations := make(map[string]string, len(windowsBookmarks.Manga))
+	for _, bookmark := range windowsBookmarks.Manga {
+		locations[bookmark.MangaDexID] = bookmark.Location
+	}
+	if locations["rooted-id"] != `D:\Webtoons\Rooted Title` {
+		t.Errorf("Windows default-root location after type change = %q, want %q",
+			locations["rooted-id"], `D:\Webtoons\Rooted Title`)
+	}
+	if locations["custom-id"] != `C:\custom\windows` {
+		t.Errorf("Windows custom location after type change = %q, want it preserved", locations["custom-id"])
+	}
+}
+
 func TestLegacyBookmarksMigrationRenamesFile(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

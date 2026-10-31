@@ -101,6 +101,9 @@ func NewEditMangaView(State *KanshoAppState) *EditMangaView {
 	// Create the title/name input field
 	view.Title = widget.NewEntry()
 	view.Title.SetPlaceHolder("Full Manga Name")
+	view.Title.OnChanged = func(string) {
+		view.refreshDirectoryChoice(false)
+	}
 
 	// Create the URL input field
 	view.UrlEntry = widget.NewEntry()
@@ -223,18 +226,23 @@ func (v *EditMangaView) refreshDirectoryChoice(resetCustom bool) {
 	if runtime.GOOS == "windows" {
 		platform = "windows"
 	}
-	root := strings.TrimSpace(prefs.RootDirectory(platform, kind))
-	if resetCustom {
-		v.CustomDirectoryCheck.SetChecked(root == "")
+	rootLocation, err := bookmarkRootLocation(prefs, platform, kind, v.Title.Text)
+	if err != nil {
+		log.Printf("[EditManga] Cannot resolve bookmark root: %v", err)
+		return
 	}
-	if root != "" && !v.CustomDirectoryCheck.Checked {
+	if resetCustom {
+		v.CustomDirectoryCheck.SetChecked(rootLocation == "")
+	}
+	if rootLocation != "" && !v.CustomDirectoryCheck.Checked {
 		v.SelectedDirectoryURI = nil
-		v.DirectoryLabel.SetText(root)
+		v.DirectoryLabel.SetText(rootLocation)
 		v.DirectoryButton.Disable()
 		return
 	}
 	v.DirectoryButton.Enable()
-	if v.SelectedDirectoryURI == nil {
+	if v.SelectedDirectoryURI == nil &&
+		(!v.isEditMode || v.DirectoryLabel.Text == "" || v.DirectoryLabel.Text == "No directory selected") {
 		v.DirectoryLabel.SetText("No directory selected")
 	}
 }
@@ -263,15 +271,35 @@ func (v *EditMangaView) defaultBookmarkLocation(title string) (string, error) {
 	if runtime.GOOS == "windows" {
 		platform = "windows"
 	}
+	return bookmarkRootLocation(prefs, platform, kind, title)
+}
+
+func (v *EditMangaView) defaultBookmarkLocationForType(title, kind string) (string, error) {
+	prefs, err := preferences.Load()
+	if err != nil {
+		return "", err
+	}
+	platform := "linux"
+	if runtime.GOOS == "windows" {
+		platform = "windows"
+	}
+	return bookmarkRootLocation(prefs, platform, kind, title)
+}
+
+func bookmarkRootLocation(prefs preferences.Preferences, platform, kind, title string) (string, error) {
 	root := strings.TrimSpace(prefs.RootDirectory(platform, kind))
 	if root == "" {
 		return "", nil
 	}
+	var err error
 	if platform == "linux" {
 		root, err = preferences.ExpandPath(root)
 		if err != nil {
 			return "", err
 		}
+	}
+	if title == "" {
+		return root, nil
 	}
 	return filepath.Join(root, title), nil
 }
@@ -283,12 +311,6 @@ func (v *EditMangaView) LoadMangaForEditing(mangaID int) {
 	}
 
 	manga := v.State.MangaData.Manga[mangaID]
-	v.CustomDirectoryCheck.SetChecked(true)
-	if manga.Type == "webtoon" {
-		v.TypeSelect.SetSelected("Webtoon")
-	} else {
-		v.TypeSelect.SetSelected("Manga")
-	}
 
 	// Set edit mode
 	v.isEditMode = true
@@ -311,6 +333,22 @@ func (v *EditMangaView) LoadMangaForEditing(mangaID int) {
 	} else {
 		v.SelectedDirectoryURI = listableURI
 	}
+
+	kind := "manga"
+	if manga.Type == "webtoon" {
+		kind = "webtoon"
+	}
+	defaultLocation, rootErr := v.defaultBookmarkLocationForType(manga.Title, kind)
+	if rootErr != nil {
+		log.Printf("[EditManga] Cannot resolve bookmark root for %q: %v", manga.Title, rootErr)
+	}
+	v.CustomDirectoryCheck.SetChecked(defaultLocation == "" || !samePath(manga.Location, defaultLocation))
+	if kind == "webtoon" {
+		v.TypeSelect.SetSelected("Webtoon")
+	} else {
+		v.TypeSelect.SetSelected("Manga")
+	}
+	v.refreshDirectoryChoice(false)
 
 	// Show Save button and Cancel button, hide Add button
 	v.AddButton.Hide()
@@ -489,10 +527,19 @@ func (v *EditMangaView) onSaveButtonClicked() {
 
 	// Get the new location
 	newLocation := ""
-	if v.SelectedDirectoryURI != nil {
-		newLocation = v.SelectedDirectoryURI.Path()
-	} else if v.DirectoryLabel.Text != "No directory selected" {
-		newLocation = v.DirectoryLabel.Text
+	if !v.CustomDirectoryCheck.Checked {
+		newLocation, err = v.defaultBookmarkLocation(title)
+		if err != nil {
+			dialog.ShowError(fmt.Errorf("cannot resolve default bookmark root: %v", err), v.State.Window)
+			return
+		}
+	}
+	if newLocation == "" {
+		if v.SelectedDirectoryURI != nil {
+			newLocation = v.SelectedDirectoryURI.Path()
+		} else if v.DirectoryLabel.Text != "No directory selected" {
+			newLocation = v.DirectoryLabel.Text
+		}
 	}
 
 	// Validate the input

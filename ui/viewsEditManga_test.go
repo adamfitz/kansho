@@ -1,6 +1,12 @@
 package ui
 
-import "testing"
+import (
+	"path/filepath"
+	"runtime"
+	"testing"
+
+	"kansho/preferences"
+)
 
 func TestSelectedBookmarkTypeRequiresExplicitChoice(t *testing.T) {
 	if _, err := selectedBookmarkType(""); err == nil {
@@ -11,5 +17,29 @@ func TestSelectedBookmarkTypeRequiresExplicitChoice(t *testing.T) {
 		if err != nil || got != want {
 			t.Errorf("selectedBookmarkType(%q) = %q, %v; want %q", selection, got, err, want)
 		}
+	}
+}
+
+func TestBookmarkRootLocationUsesPlatformAndType(t *testing.T) {
+	prefs := preferences.Preferences{
+		WindowsMangaRoot:   `D:\Manga`,
+		WindowsWebtoonRoot: `D:\Webtoons`,
+		LinuxMangaRoot:     "/mnt/manga",
+		LinuxWebtoonRoot:   "/mnt/webtoons",
+	}
+	platform := "linux"
+	root := prefs.LinuxWebtoonRoot
+	if runtime.GOOS == "windows" {
+		platform = "windows"
+		root = prefs.WindowsWebtoonRoot
+	}
+
+	got, err := bookmarkRootLocation(prefs, platform, "webtoon", "Title")
+	if err != nil {
+		t.Fatalf("bookmarkRootLocation: %v", err)
+	}
+	want := filepath.Join(root, "Title")
+	if got != want {
+		t.Fatalf("bookmarkRootLocation() = %q, want %q", got, want)
 	}
 }
