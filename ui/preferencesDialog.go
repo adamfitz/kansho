@@ -195,6 +195,9 @@ func applyPreferences(window fyne.Window, oldDir, rawNewDir string,
 			dialog.ShowError(fmt.Errorf("cannot save preferences: %v", err), window)
 			return
 		}
+		if applyRoot {
+			reloadMainWindow(window)
+		}
 		message := fmt.Sprintf("Preferences saved. Updated %d bookmark path(s).", updatedBookmarks)
 		if backupPath != "" {
 			message += "\nDatabase backup: " + backupPath
