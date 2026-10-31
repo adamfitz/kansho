@@ -360,9 +360,26 @@ func syncPlatformBookmarksTx(tx *sql.Tx, prefs preferences.Preferences, preferre
 				continue
 			}
 			bookmark := canonical.bookmark
+			location := target.row.bookmark.Location
+			if bookmarkType(target.row.bookmark.Type) != bookmark.Type {
+				oldRootLocation, err := bookmarkRootLocation(
+					prefs, target.platform, target.row.bookmark.Type, target.row.bookmark.Title)
+				if err != nil {
+					return err
+				}
+				if oldRootLocation != "" && sameBookmarkLocation(target.platform, location, oldRootLocation) {
+					newRootLocation, err := bookmarkRootLocation(prefs, target.platform, bookmark.Type, bookmark.Title)
+					if err != nil {
+						return err
+					}
+					if newRootLocation != "" {
+						location = newRootLocation
+					}
+				}
+			}
 			if _, err := tx.Exec(`UPDATE `+target.table+` SET
-				title = ?, url = ?, chapters = ?, site = ?, shortname = ?, type = ?, mangadex_id = ?, updated_at = CURRENT_TIMESTAMP
-				WHERE id = ?`, bookmark.Title, bookmark.Url, bookmark.Chapters, bookmark.Site,
+				title = ?, url = ?, chapters = ?, location = ?, site = ?, shortname = ?, type = ?, mangadex_id = ?, updated_at = CURRENT_TIMESTAMP
+				WHERE id = ?`, bookmark.Title, bookmark.Url, bookmark.Chapters, location, bookmark.Site,
 				bookmark.Shortname, bookmark.Type, strings.TrimSpace(bookmark.MangaDexID), target.row.id); err != nil {
 				return fmt.Errorf("update %q in %s bookmarks: %w", bookmark.Title, target.platform, err)
 			}
@@ -411,6 +428,15 @@ func bookmarkRootLocation(prefs preferences.Preferences, platform, kind, title s
 		}
 	}
 	return joinBookmarkRoot(root, title, platform), nil
+}
+
+func sameBookmarkLocation(platform, left, right string) bool {
+	if platform == "windows" {
+		left = strings.TrimRight(strings.ReplaceAll(left, "/", `\`), `\`)
+		right = strings.TrimRight(strings.ReplaceAll(right, "/", `\`), `\`)
+		return strings.EqualFold(left, right)
+	}
+	return path.Clean(left) == path.Clean(right)
 }
 
 // SetBookmarkMangaDexID links the current platform's exact bookmark title to a user-confirmed ID.

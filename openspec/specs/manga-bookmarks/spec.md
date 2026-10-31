@@ -13,7 +13,8 @@ The system SHALL persist manga bookmarks in the local SQLite database.
 - WHEN the database is opened
 - THEN Linux SHALL load bookmarks from `bookmarks_linux` and Windows SHALL load bookmarks from `bookmarks_windows`
 - AND SHALL expose them through the shared `models.Manga` structure
-- AND SHALL synchronize shared title metadata between the OS tables while preserving each table's location
+- AND SHALL synchronize shared title metadata between the OS tables while preserving custom locations
+- AND SHALL update a platform location to the new type's configured root when its old location matched the old type's configured root
 - WHEN the database has no bookmark rows
 - THEN the system SHALL return an empty bookmarks structure (`{"manga": []}`)
 
@@ -22,7 +23,7 @@ The system SHALL persist manga bookmarks in the local SQLite database.
 - WHEN `SaveBookmarks` is called
 - THEN the complete in-memory bookmark list SHALL replace the contents of the current OS bookmark table inside one immediate write transaction
 - AND the previous bookmark rows SHALL be removed in the same transaction
-- AND title metadata SHALL be upserted into the other OS table without replacing its location
+- AND title metadata SHALL be upserted into the other OS table while preserving its location unless its type changes and it uses the old type's configured root
 - AND the write SHALL acquire Kansho's advisory write lock before changing the database
 
 #### Scenario: Bookmark ordering
@@ -45,6 +46,14 @@ Each bookmark SHALL track essential manga metadata.
 - THEN the bookmark SHALL be stored in the selected OS table with that type
 - AND the selection SHALL be stored in both OS tables
 - AND no type SHALL be selected by default
+
+#### Scenario: Change type for a bookmark using configured roots
+- GIVEN a bookmark uses the configured root for its current type
+- AND a configured root exists for the other type on each platform
+- WHEN the user changes the bookmark type
+- THEN its location SHALL use the configured root for the new type on the current platform
+- AND the other platform's location SHALL be rebased to its configured root for the new type
+- AND custom locations SHALL remain unchanged
 
 ### Requirement: Config Directory
 The system SHALL ensure the config directory exists before any read/write operations.
@@ -87,6 +96,12 @@ The system SHALL store the database directory in a YAML preferences file.
 - THEN its location SHALL be `<root>/<title>`
 - WHEN the user selects the custom-directory override
 - THEN the selected directory SHALL be used instead
+
+#### Scenario: Edit bookmark type with a configured root
+- GIVEN the bookmark's current location matches the configured root for its current type
+- WHEN the user changes its type
+- THEN the directory field SHALL update to `<new-type-root>/<title>`
+- AND saving SHALL use that updated location
 
 #### Scenario: Apply a new database directory
 - GIVEN the user selects a new database directory in File → Preferences
