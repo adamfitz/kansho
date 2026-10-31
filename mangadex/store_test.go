@@ -423,8 +423,8 @@ func TestMigrateLegacyDatabase(t *testing.T) {
 	if _, err := os.Stat(newPath); os.IsNotExist(err) {
 		t.Fatal("new database was not created")
 	}
-	if _, err := os.Stat(legacy); !os.IsNotExist(err) {
-		t.Errorf("legacy database still present after migration")
+	if _, err := os.Stat(legacy); err != nil {
+		t.Fatalf("legacy database was not retained: %v", err)
 	}
 
 	migrated, err := OpenPath(newPath)
@@ -439,6 +439,15 @@ func TestMigrateLegacyDatabase(t *testing.T) {
 	gotStats, err := migrated.LookupChapterStats("source-key")
 	if err != nil || gotStats == nil || *gotStats != stats {
 		t.Fatalf("migrated chapter stats = %+v, err = %v", gotStats, err)
+	}
+	legacyStore, err := OpenPath(legacy)
+	if err != nil {
+		t.Fatalf("open retained legacy database: %v", err)
+	}
+	defer legacyStore.Close()
+	got, err = legacyStore.LookupByID(sampleInfo().ID)
+	if err != nil || got == nil {
+		t.Fatalf("retained legacy title lookup: %v (got %v)", err, got)
 	}
 }
 

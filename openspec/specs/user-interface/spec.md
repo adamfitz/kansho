@@ -263,7 +263,6 @@ The system SHALL provide a Preferences dialog for the database directory and opt
 - WHEN the user selects File → Preferences
 - THEN a dialog SHALL show the current database directory
 - AND a directory picker SHALL let the user choose a different directory
-- AND the dialog SHALL show a "Move Files" checkbox
 - AND the dialog SHALL show the path of `kansho.conf`
 - AND the dialog SHALL allow optional Linux and Windows roots for manga and webtoons
 - AND each root SHALL have an option to apply it to matching OS/type bookmark rows
@@ -283,36 +282,23 @@ The system SHALL provide a Preferences dialog for the database directory and opt
 - GIVEN the user chooses a directory that does not contain a database
 - WHEN the user saves the preferences
 - THEN Kansho SHALL copy the current database to the new directory when one exists
+- AND Kansho SHALL leave the database in the previous directory
 - AND Kansho SHALL save the new directory to `kansho.conf`
 - AND Kansho SHALL reopen the database at the new location
 - AND Kansho SHALL reload the main interface
 
-#### Scenario: Move files checked
-- GIVEN the user checks "Move Files"
-- WHEN the database has been copied to the new directory and the new database opens successfully
-- THEN the old database SHALL be removed without another confirmation dialog
-
-#### Scenario: Move files unchecked
-- GIVEN the user leaves "Move Files" unchecked
-- WHEN the database has been copied to the new directory and the new database opens successfully
-- THEN a confirmation dialog SHALL ask whether to delete the old database
-- AND the old database SHALL be deleted only if the user confirms
+#### Scenario: Target directory already contains a database
+- GIVEN the selected directory already contains a `kansho.db`
+- WHEN the user saves the preferences
+- THEN Kansho SHALL open the existing target database as-is
+- AND Kansho SHALL NOT merge, overwrite, or delete either database
+- AND Kansho SHALL save the target directory to `kansho.conf`
+- AND Kansho SHALL leave the previous database untouched
 
 #### Scenario: Cancel preferences
 - GIVEN the user clicks Cancel
 - THEN no files SHALL be copied or deleted
 - AND the database location SHALL remain unchanged
-
-#### Scenario: Target directory already contains a database
-- GIVEN the selected directory already contains a `kansho.db`
-- WHEN the user saves the preferences
-- THEN Kansho SHALL compare the current database with the target database
-- AND SHALL show the missing rows for each database table
-- AND the user SHALL be able to merge missing rows from the current database into the target database
-- AND before merging, Kansho SHALL back up the target database
-- AND the merge SHALL show progress and a final per-table result
-- AND the user SHALL alternatively be able to use the target database without merging
-- AND Kansho SHALL warn that the current database will be deleted before using the target database
 
 ### Requirement: Database Maintenance Menu
 The system SHALL provide database maintenance actions in the Database menu.
