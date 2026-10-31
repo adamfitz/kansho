@@ -33,12 +33,47 @@ const (
 
 // Preferences is the on-disk Kansho preferences structure.
 type Preferences struct {
-	DatabaseDirectory string `yaml:"database_directory"`
+	DatabaseDirectory  string `yaml:"database_directory"`
+	WindowsMangaRoot   string `yaml:"windows_manga_root,omitempty"`
+	WindowsWebtoonRoot string `yaml:"windows_webtoon_root,omitempty"`
+	LinuxMangaRoot     string `yaml:"linux_manga_root,omitempty"`
+	LinuxWebtoonRoot   string `yaml:"linux_webtoon_root,omitempty"`
 }
 
 // Default returns the default preferences.
 func Default() Preferences {
 	return Preferences{DatabaseDirectory: DefaultDirectory}
+}
+
+// RootDirectory returns the configured default root for a platform and title type.
+func (p Preferences) RootDirectory(platform, kind string) string {
+	if platform == "windows" {
+		if kind == "webtoon" {
+			return p.WindowsWebtoonRoot
+		}
+		return p.WindowsMangaRoot
+	}
+	if kind == "webtoon" {
+		return p.LinuxWebtoonRoot
+	}
+	return p.LinuxMangaRoot
+}
+
+// SetRootDirectory sets the default root for a platform and title type.
+func (p *Preferences) SetRootDirectory(platform, kind, root string) {
+	if platform == "windows" {
+		if kind == "webtoon" {
+			p.WindowsWebtoonRoot = root
+		} else {
+			p.WindowsMangaRoot = root
+		}
+		return
+	}
+	if kind == "webtoon" {
+		p.LinuxWebtoonRoot = root
+	} else {
+		p.LinuxMangaRoot = root
+	}
 }
 
 // ConfigDirectory returns the expanded default configuration directory and

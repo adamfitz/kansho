@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -78,12 +79,12 @@ var (
 	defaultStore   *Store
 )
 
-// Store is the local SQLite database of MangaDex title information and generic
-// manga chapter count snapshots. It is stored at ~/.config/kansho/kansho.db
-// and is completely separate from the bookmarks JSON.
+// Store is the local SQLite database for bookmarks, MangaDex title information,
+// and generic manga chapter count snapshots. It is stored at ~/.config/kansho/kansho.db.
 type Store struct {
-	conn *sql.DB
-	path string
+	conn     *sql.DB
+	path     string
+	platform string
 }
 
 // DefaultDBPath returns the database path configured in kansho.conf.
@@ -164,11 +165,19 @@ func Open() (*Store, error) {
 		_ = store.Close()
 		return nil, fmt.Errorf("migrate legacy bookmarks: %w", err)
 	}
+	if err := store.migrateLegacyBookmarksToPlatform(); err != nil {
+		_ = store.Close()
+		return nil, fmt.Errorf("migrate bookmarks to %s table: %w", store.platform, err)
+	}
 	return store, nil
 }
 
 // OpenPath opens (or creates) the database at an explicit path.
 func OpenPath(path string) (*Store, error) {
+	return openPathForPlatform(path, runtime.GOOS)
+}
+
+func openPathForPlatform(path, goos string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return nil, fmt.Errorf("create kansho database directory: %w", err)
 	}
@@ -182,7 +191,11 @@ func OpenPath(path string) (*Store, error) {
 		return nil, fmt.Errorf("ping Kansho database: %w", err)
 	}
 
-	s := &Store{conn: conn, path: path}
+	platform := "linux"
+	if goos == "windows" {
+		platform = "windows"
+	}
+	s := &Store{conn: conn, path: path, platform: platform}
 	if err := s.EnsureSchema(); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("ensure Kansho schema: %w", err)
@@ -276,6 +289,40 @@ func (s *Store) EnsureSchema() error {
 		ON bookmarks (title);
 	CREATE INDEX IF NOT EXISTS idx_bookmarks_identity
 		ON bookmarks (title, url, chapters, location, site, shortname);
+	CREATE TABLE IF NOT EXISTS bookmarks_linux (
+		id          INTEGER PRIMARY KEY AUTOINCREMENT,
+		title       TEXT NOT NULL DEFAULT '',
+		url         TEXT NOT NULL DEFAULT '',
+		chapters    TEXT NOT NULL DEFAULT '',
+		location    TEXT NOT NULL DEFAULT '',
+		site        TEXT NOT NULL DEFAULT '',
+		shortname   TEXT NOT NULL DEFAULT '',
+		type        TEXT NOT NULL DEFAULT 'manga',
+		mangadex_id TEXT NOT NULL DEFAULT '',
+		created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+		updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
+	CREATE INDEX IF NOT EXISTS idx_bookmarks_linux_title
+		ON bookmarks_linux (title);
+	CREATE INDEX IF NOT EXISTS idx_bookmarks_linux_mangadex_id
+		ON bookmarks_linux (mangadex_id);
+	CREATE TABLE IF NOT EXISTS bookmarks_windows (
+		id          INTEGER PRIMARY KEY AUTOINCREMENT,
+		title       TEXT NOT NULL DEFAULT '',
+		url         TEXT NOT NULL DEFAULT '',
+		chapters    TEXT NOT NULL DEFAULT '',
+		location    TEXT NOT NULL DEFAULT '',
+		site        TEXT NOT NULL DEFAULT '',
+		shortname   TEXT NOT NULL DEFAULT '',
+		type        TEXT NOT NULL DEFAULT 'manga',
+		mangadex_id TEXT NOT NULL DEFAULT '',
+		created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+		updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
+	CREATE INDEX IF NOT EXISTS idx_bookmarks_windows_title
+		ON bookmarks_windows (title);
+	CREATE INDEX IF NOT EXISTS idx_bookmarks_windows_mangadex_id
+		ON bookmarks_windows (mangadex_id);
 	CREATE TABLE IF NOT EXISTS kansho_meta (
 		key   TEXT PRIMARY KEY,
 		value TEXT NOT NULL DEFAULT ''
@@ -285,7 +332,7 @@ func (s *Store) EnsureSchema() error {
 		owner       TEXT NOT NULL DEFAULT '',
 		acquired_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 	);
-	PRAGMA user_version = 7;
+	PRAGMA user_version = 8;
 	`
 	_, err := s.conn.Exec(schema)
 	if err != nil {

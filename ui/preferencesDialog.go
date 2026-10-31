@@ -17,8 +17,7 @@ import (
 	"kansho/preferences"
 )
 
-// ShowPreferencesDialog lets the user choose the directory that holds
-// kansho.db. kansho.conf itself always stays in ~/.config/kansho.
+// ShowPreferencesDialog lets the user configure database and bookmark root directories.
 func ShowPreferencesDialog(_ fyne.App, window fyne.Window) {
 	prefs, err := preferences.Load()
 	if err != nil {
@@ -49,28 +48,81 @@ func ShowPreferencesDialog(_ fyne.App, window fyne.Window) {
 
 	dirRow := container.NewBorder(nil, nil, nil, browseButton, dirEntry)
 	moveCheck := widget.NewCheck("Move Files (remove files from old location)", nil)
+	rootControls := []rootPreferenceControl{
+		newRootPreferenceControl(prefs, "linux", "manga", window),
+		newRootPreferenceControl(prefs, "linux", "webtoon", window),
+		newRootPreferenceControl(prefs, "windows", "manga", window),
+		newRootPreferenceControl(prefs, "windows", "webtoon", window),
+	}
+	rootRows := make([]fyne.CanvasObject, 0, len(rootControls))
+	for _, control := range rootControls {
+		rootRows = append(rootRows, control.content)
+	}
 
 	configPath, _ := preferences.FilePath()
-	content := container.NewVBox(
+	content := container.NewVScroll(container.NewVBox(
 		widget.NewLabel("Database directory:"),
 		dirRow,
 		moveCheck,
+		widget.NewLabel("Default bookmark roots:"),
+		widget.NewLabel("Applying a root changes saved paths only; it does not move files."),
+		container.NewVBox(rootRows...),
 		widget.NewLabel("Preferences file: "+configPath),
 		widget.NewLabel("Bookmarks are stored in the database; there is no separate bookmarks file."),
-	)
+	))
 
 	prefsDialog := dialog.NewCustom("Preferences", "Cancel", content, window)
 	cancelButton := widget.NewButton("Cancel", prefsDialog.Hide)
 	saveButton := widget.NewButton("Save", func() {
 		prefsDialog.Hide()
-		applyPreferences(window, currentDir, dirEntry.Text, moveCheck.Checked)
+		updatedPrefs := prefs
+		updatedPrefs.DatabaseDirectory = dirEntry.Text
+		for _, control := range rootControls {
+			updatedPrefs.SetRootDirectory(control.platform, control.kind, control.entry.Text)
+		}
+		applyPreferences(window, currentDir, dirEntry.Text, moveCheck.Checked, prefs, updatedPrefs, rootControls)
 	})
 	prefsDialog.SetButtons([]fyne.CanvasObject{cancelButton, saveButton})
-	prefsDialog.Resize(fyne.NewSize(700, 260))
+	prefsDialog.Resize(fyne.NewSize(860, 680))
 	prefsDialog.Show()
 }
 
-func applyPreferences(window fyne.Window, oldDir, rawNewDir string, move bool) {
+type rootPreferenceControl struct {
+	platform string
+	kind     string
+	entry    *widget.Entry
+	apply    *widget.Check
+	content  fyne.CanvasObject
+}
+
+func newRootPreferenceControl(prefs preferences.Preferences, platform, kind string, window fyne.Window) rootPreferenceControl {
+	entry := widget.NewEntry()
+	entry.SetPlaceHolder("Optional path")
+	entry.SetText(prefs.RootDirectory(platform, kind))
+	browseButton := widget.NewButton("Browse...", func() {
+		dialog.ShowFolderOpen(func(uri fyne.ListableURI, err error) {
+			if err != nil {
+				dialog.ShowError(fmt.Errorf("error opening folder dialog: %v", err), window)
+				return
+			}
+			if uri != nil {
+				entry.SetText(uri.Path())
+			}
+		}, window)
+	})
+	apply := widget.NewCheck(fmt.Sprintf("Apply to all %s %s bookmarks", platform, kind), nil)
+	label := fmt.Sprintf("%s %s root:", strings.Title(platform), kind)
+	content := container.NewVBox(
+		widget.NewLabel(label),
+		container.NewBorder(nil, nil, nil, browseButton, entry),
+		apply,
+	)
+	return rootPreferenceControl{platform: platform, kind: kind, entry: entry, apply: apply, content: content}
+}
+
+func applyPreferences(window fyne.Window, oldDir, rawNewDir string, move bool,
+	oldPrefs, newPrefs preferences.Preferences, rootControls []rootPreferenceControl,
+) {
 	newDir, err := preferences.ExpandPath(rawNewDir)
 	if err != nil {
 		dialog.ShowError(fmt.Errorf("invalid database directory: %v", err), window)
@@ -81,16 +133,76 @@ func applyPreferences(window fyne.Window, oldDir, rawNewDir string, move bool) {
 		return
 	}
 
+	rootChanged := oldPrefs.LinuxMangaRoot != newPrefs.LinuxMangaRoot ||
+		oldPrefs.LinuxWebtoonRoot != newPrefs.LinuxWebtoonRoot ||
+		oldPrefs.WindowsMangaRoot != newPrefs.WindowsMangaRoot ||
+		oldPrefs.WindowsWebtoonRoot != newPrefs.WindowsWebtoonRoot
+	applyRoot := false
+	for _, control := range rootControls {
+		applyRoot = applyRoot || control.apply.Checked
+	}
+	backupPath := ""
+	updatedBookmarks := 0
+	var rootUpdates []mangadex.BookmarkRootUpdate
+	if rootChanged || applyRoot {
+		for _, control := range rootControls {
+			if !control.apply.Checked {
+				continue
+			}
+			root := strings.TrimSpace(newPrefs.RootDirectory(control.platform, control.kind))
+			if root == "" {
+				dialog.ShowError(fmt.Errorf("set a %s %s root before applying it", control.platform, control.kind), window)
+				return
+			}
+			if control.platform == "linux" {
+				root, err = preferences.ExpandPath(root)
+				if err != nil {
+					dialog.ShowError(fmt.Errorf("invalid Linux root directory: %v", err), window)
+					return
+				}
+			}
+			rootUpdates = append(rootUpdates, mangadex.BookmarkRootUpdate{Platform: control.platform, Type: control.kind, Root: root})
+		}
+		store, err := mangadex.GetStore()
+		if err != nil {
+			dialog.ShowError(fmt.Errorf("cannot open the current database: %v", err), window)
+			return
+		}
+		backupPath = nextRootSettingsBackupPath(store.Path())
+		if err := store.Backup(backupPath); err != nil {
+			dialog.ShowError(fmt.Errorf("cannot back up the database before changing roots: %v", err), window)
+			return
+		}
+		if len(rootUpdates) > 0 {
+			updatedBookmarks, err = store.ApplyBookmarkRootUpdates(rootUpdates)
+			if err != nil {
+				dialog.ShowError(fmt.Errorf("cannot update bookmark paths: %v", err), window)
+				return
+			}
+		}
+	}
 	oldDB := filepath.Join(oldDir, preferences.DatabaseFileName)
 	newDB := filepath.Join(newDir, preferences.DatabaseFileName)
 
 	if samePath(oldDB, newDB) {
-		if err := preferences.Save(preferences.Preferences{DatabaseDirectory: newDir}); err != nil {
+		newPrefs.DatabaseDirectory = newDir
+		if err := preferences.Save(newPrefs); err != nil {
 			dialog.ShowError(fmt.Errorf("cannot save preferences: %v", err), window)
 			return
 		}
-		dialog.ShowInformation("Preferences", "The database directory is unchanged.", window)
+		message := fmt.Sprintf("Preferences saved. Updated %d bookmark path(s).", updatedBookmarks)
+		if backupPath != "" {
+			message += "\nDatabase backup: " + backupPath
+		}
+		dialog.ShowInformation("Preferences", message, window)
 		return
+	}
+	if rootChanged {
+		newPrefs.DatabaseDirectory = oldPrefs.DatabaseDirectory
+		if err := preferences.Save(newPrefs); err != nil {
+			dialog.ShowError(fmt.Errorf("cannot save root preferences: %v", err), window)
+			return
+		}
 	}
 
 	oldExists := fileExists(oldDB)
@@ -114,6 +226,16 @@ func applyPreferences(window fyne.Window, oldDir, rawNewDir string, move bool) {
 				fmt.Sprintf("Kansho will use a new database at %s.", newDB), window)
 		}
 	}
+}
+
+func nextRootSettingsBackupPath(databasePath string) string {
+	dir := filepath.Join(filepath.Dir(databasePath), "backup")
+	base := filepath.Join(dir, "kansho-root-settings-"+time.Now().UTC().Format("20060102-150405")+".db")
+	candidate := base
+	for i := 1; fileExists(candidate); i++ {
+		candidate = strings.TrimSuffix(base, ".db") + fmt.Sprintf("-%d.db", i)
+	}
+	return candidate
 }
 
 func copyDatabaseAndSwitch(window fyne.Window, oldDir, newDir, oldDB, newDB string, move bool) {
@@ -294,11 +416,18 @@ func nextMigrationBackupPath(dir string) string {
 }
 
 func switchToDatabase(window fyne.Window, oldDir, newDir string, removeOld bool) error {
-	if err := preferences.Save(preferences.Preferences{DatabaseDirectory: newDir}); err != nil {
+	prefs, err := preferences.Load()
+	if err != nil {
+		return fmt.Errorf("cannot load preferences: %v", err)
+	}
+	previousPrefs := prefs
+	prefs.DatabaseDirectory = newDir
+	if err := preferences.Save(prefs); err != nil {
 		return fmt.Errorf("cannot save preferences: %v", err)
 	}
 	if err := mangadex.ReopenDefault(); err != nil {
-		_ = preferences.Save(preferences.Preferences{DatabaseDirectory: oldDir})
+		previousPrefs.DatabaseDirectory = oldDir
+		_ = preferences.Save(previousPrefs)
 		_ = mangadex.ReopenDefault()
 		return fmt.Errorf("cannot open the new database: %v", err)
 	}

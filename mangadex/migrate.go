@@ -41,6 +41,7 @@ type MergeResult struct {
 
 type tableSpec struct {
 	name         string
+	sourceTable  string
 	sourceCount  string
 	targetCount  string
 	missingQuery string
@@ -63,7 +64,7 @@ func (s *Store) CompareWith(sourcePath string) (*DatabaseDiff, error) {
 	}
 	defer detachSource(conn)
 
-	specs, err := comparisonSpecs(conn)
+	specs, err := comparisonSpecs(conn, s.platform)
 	if err != nil {
 		return nil, err
 	}
@@ -133,7 +134,7 @@ func (s *Store) MergeMissingFrom(sourcePath string, progress func(done, total in
 	}
 	defer detachSource(conn)
 
-	specs, err := comparisonSpecs(conn)
+	specs, err := comparisonSpecs(conn, s.platform)
 	if err != nil {
 		return nil, err
 	}
@@ -180,38 +181,26 @@ func detachSource(conn *sql.Conn) error {
 	return nil
 }
 
-func comparisonSpecs(conn *sql.Conn) ([]tableSpec, error) {
-	all := []tableSpec{
-		{
-			name:        "bookmarks",
-			sourceCount: `SELECT COUNT(*) FROM source.bookmarks`,
-			targetCount: `SELECT COUNT(*) FROM main.bookmarks`,
-			missingQuery: `SELECT b.title, b.url, b.chapters, b.location, b.site, b.shortname
-				FROM source.bookmarks b
-				WHERE NOT EXISTS (
-					SELECT 1 FROM main.bookmarks m
-					WHERE m.title = b.title AND m.url = b.url AND m.chapters = b.chapters
-					  AND m.location = b.location AND m.site = b.site AND m.shortname = b.shortname
-				)
-				ORDER BY lower(b.title), b.id`,
-			insertQuery: `INSERT INTO main.bookmarks
-					(title, url, chapters, location, site, shortname, updated_at)
-				SELECT b.title, b.url, b.chapters, b.location, b.site, b.shortname, CURRENT_TIMESTAMP
-				FROM source.bookmarks b
-				WHERE NOT EXISTS (
-					SELECT 1 FROM main.bookmarks m
-					WHERE m.title = b.title AND m.url = b.url AND m.chapters = b.chapters
-					  AND m.location = b.location AND m.site = b.site AND m.shortname = b.shortname
-				)`,
-			describeRow: func(rows *sql.Rows) (string, error) {
-				var title, url, chapters, location, site, shortname string
-				if err := rows.Scan(&title, &url, &chapters, &location, &site, &shortname); err != nil {
-					return "", err
-				}
-				return fmt.Sprintf("%s | site=%s | url=%s | chapters=%s | location=%s | shortname=%s",
-					title, site, url, chapters, location, shortname), nil
-			},
-		},
+func comparisonSpecs(conn *sql.Conn, platform string) ([]tableSpec, error) {
+	linuxBookmarksExist, err := sourceTableExists(conn, "bookmarks_linux")
+	if err != nil {
+		return nil, err
+	}
+	windowsBookmarksExist, err := sourceTableExists(conn, "bookmarks_windows")
+	if err != nil {
+		return nil, err
+	}
+	all := []tableSpec{legacyBookmarkSpec()}
+	if !linuxBookmarksExist && !windowsBookmarksExist {
+		all = append(all, legacyPlatformBookmarkSpec(platform))
+	}
+	if linuxBookmarksExist {
+		all = append(all, platformBookmarkSpec("bookmarks_linux"))
+	}
+	if windowsBookmarksExist {
+		all = append(all, platformBookmarkSpec("bookmarks_windows"))
+	}
+	all = append(all, []tableSpec{
 		{
 			name:        "manga_title",
 			sourceCount: `SELECT COUNT(*) FROM source.manga_title`,
@@ -342,11 +331,15 @@ func comparisonSpecs(conn *sql.Conn) ([]tableSpec, error) {
 				return fmt.Sprintf("%s | cover=%s", id, url), nil
 			},
 		},
-	}
+	}...)
 
 	specs := make([]tableSpec, 0, len(all))
 	for _, spec := range all {
-		exists, err := sourceTableExists(conn, spec.name)
+		sourceTable := spec.sourceTable
+		if sourceTable == "" {
+			sourceTable = spec.name
+		}
+		exists, err := sourceTableExists(conn, sourceTable)
 		if err != nil {
 			return nil, err
 		}
@@ -355,6 +348,105 @@ func comparisonSpecs(conn *sql.Conn) ([]tableSpec, error) {
 		}
 	}
 	return specs, nil
+}
+
+func legacyPlatformBookmarkSpec(platform string) tableSpec {
+	table, _ := bookmarksTable(platform)
+	return tableSpec{
+		name:        "legacy_bookmarks_to_" + table,
+		sourceTable: "bookmarks",
+		sourceCount: `SELECT COUNT(*) FROM source.bookmarks`,
+		targetCount: `SELECT COUNT(*) FROM main.` + table,
+		missingQuery: `SELECT b.title, b.url, b.chapters, b.location, b.site, b.shortname
+			FROM source.bookmarks b
+			WHERE NOT EXISTS (
+				SELECT 1 FROM main.` + table + ` m
+				WHERE m.title = b.title AND m.url = b.url AND m.chapters = b.chapters
+				  AND m.location = b.location AND m.site = b.site AND m.shortname = b.shortname
+			)
+			ORDER BY lower(b.title), b.id`,
+		insertQuery: `INSERT INTO main.` + table + `
+				(title, url, chapters, location, site, shortname, type, mangadex_id, updated_at)
+			SELECT b.title, b.url, b.chapters, b.location, b.site, b.shortname, 'manga', '', CURRENT_TIMESTAMP
+			FROM source.bookmarks b
+			WHERE NOT EXISTS (
+				SELECT 1 FROM main.` + table + ` m
+				WHERE m.title = b.title AND m.url = b.url AND m.chapters = b.chapters
+				  AND m.location = b.location AND m.site = b.site AND m.shortname = b.shortname
+			)`,
+		describeRow: func(rows *sql.Rows) (string, error) {
+			var title, url, chapters, location, site, shortname string
+			if err := rows.Scan(&title, &url, &chapters, &location, &site, &shortname); err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("%s | site=%s | url=%s | location=%s", title, site, url, location), nil
+		},
+	}
+}
+
+func legacyBookmarkSpec() tableSpec {
+	return tableSpec{
+		name:        "bookmarks",
+		sourceCount: `SELECT COUNT(*) FROM source.bookmarks`,
+		targetCount: `SELECT COUNT(*) FROM main.bookmarks`,
+		missingQuery: `SELECT b.title, b.url, b.chapters, b.location, b.site, b.shortname
+			FROM source.bookmarks b
+			WHERE NOT EXISTS (
+				SELECT 1 FROM main.bookmarks m
+				WHERE m.title = b.title AND m.url = b.url AND m.chapters = b.chapters
+				  AND m.location = b.location AND m.site = b.site AND m.shortname = b.shortname
+			)
+			ORDER BY lower(b.title), b.id`,
+		insertQuery: `INSERT INTO main.bookmarks
+				(title, url, chapters, location, site, shortname, updated_at)
+			SELECT b.title, b.url, b.chapters, b.location, b.site, b.shortname, CURRENT_TIMESTAMP
+			FROM source.bookmarks b
+			WHERE NOT EXISTS (
+				SELECT 1 FROM main.bookmarks m
+				WHERE m.title = b.title AND m.url = b.url AND m.chapters = b.chapters
+				  AND m.location = b.location AND m.site = b.site AND m.shortname = b.shortname
+			)`,
+		describeRow: func(rows *sql.Rows) (string, error) {
+			var title, url, chapters, location, site, shortname string
+			if err := rows.Scan(&title, &url, &chapters, &location, &site, &shortname); err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("%s | site=%s | url=%s | chapters=%s | location=%s | shortname=%s",
+				title, site, url, chapters, location, shortname), nil
+		},
+	}
+}
+
+func platformBookmarkSpec(table string) tableSpec {
+	return tableSpec{
+		name:        table,
+		sourceCount: `SELECT COUNT(*) FROM source.` + table,
+		targetCount: `SELECT COUNT(*) FROM main.` + table,
+		missingQuery: `SELECT b.title, b.url, b.chapters, b.location, b.site, b.shortname, b.type, b.mangadex_id
+			FROM source.` + table + ` b
+			WHERE NOT EXISTS (
+				SELECT 1 FROM main.` + table + ` m
+				WHERE m.title = b.title AND m.url = b.url AND m.chapters = b.chapters
+				  AND m.location = b.location AND m.site = b.site AND m.shortname = b.shortname
+			)
+			ORDER BY lower(b.title), b.id`,
+		insertQuery: `INSERT INTO main.` + table + `
+				(title, url, chapters, location, site, shortname, type, mangadex_id, updated_at)
+			SELECT b.title, b.url, b.chapters, b.location, b.site, b.shortname, b.type, b.mangadex_id, CURRENT_TIMESTAMP
+			FROM source.` + table + ` b
+			WHERE NOT EXISTS (
+				SELECT 1 FROM main.` + table + ` m
+				WHERE m.title = b.title AND m.url = b.url AND m.chapters = b.chapters
+				  AND m.location = b.location AND m.site = b.site AND m.shortname = b.shortname
+			)`,
+		describeRow: func(rows *sql.Rows) (string, error) {
+			var title, url, chapters, location, site, shortname, kind, id string
+			if err := rows.Scan(&title, &url, &chapters, &location, &site, &shortname, &kind, &id); err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("%s | type=%s | MangaDex ID=%s | site=%s | location=%s", title, kind, id, site, location), nil
+		},
+	}
 }
 
 func sourceTableExists(conn *sql.Conn, table string) (bool, error) {

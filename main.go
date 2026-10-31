@@ -89,6 +89,11 @@ func main() {
 	)
 
 	databaseMenu := fyne.NewMenu("Database",
+		fyne.NewMenuItem("Sync Linux/Windows Bookmarks", func() {
+			log.Println("[UI] Linux/Windows bookmark sync triggered (GUI)")
+			ui.ShowSyncBookmarksView(myWindow)
+		}),
+		fyne.NewMenuItemSeparator(),
 		fyne.NewMenuItem("Export Covers", func() {
 			log.Println("[UI] MangaDex cover export triggered (GUI)")
 			ui.ShowExportCoversDialog(kanshoApp, myWindow)

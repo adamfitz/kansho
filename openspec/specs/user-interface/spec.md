@@ -256,7 +256,7 @@ The system SHALL display an overall download progress summary instead of a dedic
 - THEN an informational dialog SHALL be shown stating that there are no downloads in queue
 
 ### Requirement: Preferences
-The system SHALL provide a Preferences dialog for choosing the database directory.
+The system SHALL provide a Preferences dialog for the database directory and optional platform-specific bookmark roots.
 
 #### Scenario: Open preferences
 - GIVEN the application menu is visible
@@ -265,6 +265,19 @@ The system SHALL provide a Preferences dialog for choosing the database director
 - AND a directory picker SHALL let the user choose a different directory
 - AND the dialog SHALL show a "Move Files" checkbox
 - AND the dialog SHALL show the path of `kansho.conf`
+- AND the dialog SHALL allow optional Linux and Windows roots for manga and webtoons
+- AND each root SHALL have an option to apply it to matching OS/type bookmark rows
+- AND changing any root SHALL create a database backup in `<database-dir>/backup/` first
+
+#### Scenario: Sync platform bookmarks
+- GIVEN the database menu is visible
+- WHEN the user selects "Sync Linux/Windows Bookmarks"
+- THEN Kansho SHALL replace the main content with a bookmark comparison view
+- AND a Back to Library control SHALL restore the previous main content
+- AND the right side SHALL show Windows and Linux bookmark details in separate columns
+- WHEN the user selects Sync by MangaDex ID in that window
+- THEN Kansho SHALL sync rows without overwriting existing matching IDs
+- AND SHALL report each skipped row that has no MangaDex ID
 
 #### Scenario: Change the database directory
 - GIVEN the user chooses a directory that does not contain a database

@@ -33,10 +33,12 @@ type Manga struct {
 
 // Bookmarks is a single bookmarked manga entry.
 type Bookmarks struct {
-	Title     string `json:"title"`
-	Url       string `json:"url"`
-	Chapters  string `json:"chapters"`
-	Location  string `json:"location"`
-	Site      string `json:"site"`
-	Shortname string `json:"shortname"`
+	Title      string `json:"title"`
+	Url        string `json:"url"`
+	Chapters   string `json:"chapters"`
+	Location   string `json:"location"`
+	Site       string `json:"site"`
+	Shortname  string `json:"shortname"`
+	Type       string `json:"type,omitempty"`
+	MangaDexID string `json:"mangadex_id,omitempty"`
 }

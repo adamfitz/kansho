@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -15,6 +17,7 @@ import (
 
 	"kansho/config"
 	"kansho/models"
+	"kansho/preferences"
 	"kansho/sites"
 	"kansho/validation"
 )
@@ -34,6 +37,7 @@ type EditMangaView struct {
 
 	// UI components that need to be accessed after creation
 	SiteSelect           *widget.Select   // Dropdown for site selection
+	TypeSelect           *widget.Select   // Manga or webtoon bookmark type
 	Title                *widget.Entry    // Text input for manga name
 	UrlEntry             *widget.Entry    // Text input for manga URL
 	DirectoryLabel       *widget.Label    // Label showing selected directory
@@ -41,6 +45,7 @@ type EditMangaView struct {
 	AddButton            *widget.Button   // Button to add new manga
 	SaveButton           *widget.Button   // Button to save changes to existing manga
 	CancelButton         *widget.Button   // Button to cancel editing
+	CustomDirectoryCheck *widget.Check    // Selects a custom root instead of the configured default
 	SelectedDirectoryURI fyne.ListableURI // Stores the selected directory URI
 
 	// state is a reference to the shared application state
@@ -87,6 +92,10 @@ func NewEditMangaView(State *KanshoAppState) *EditMangaView {
 		view.onSiteSelected(selected)
 	})
 	view.SiteSelect.PlaceHolder = "Site name"
+	view.TypeSelect = widget.NewSelect([]string{"Manga", "Webtoon"}, func(string) {
+		view.refreshDirectoryChoice(false)
+	})
+	view.TypeSelect.SetSelected("Manga")
 
 	// Create the title/name input field
 	view.Title = widget.NewEntry()
@@ -101,6 +110,9 @@ func NewEditMangaView(State *KanshoAppState) *EditMangaView {
 	view.DirectoryLabel.Wrapping = fyne.TextTruncate
 	view.DirectoryButton = widget.NewButton("Choose Directory...", func() {
 		view.onDirectoryButtonClicked()
+	})
+	view.CustomDirectoryCheck = widget.NewCheck("Use a custom directory (override default root)", func(bool) {
+		view.refreshDirectoryChoice(false)
 	})
 
 	// Create the Add Manga button
@@ -138,6 +150,14 @@ func NewEditMangaView(State *KanshoAppState) *EditMangaView {
 		view.SiteSelect,
 	)
 
+	typeRow := container.NewBorder(
+		nil,
+		nil,
+		widget.NewLabel("Bookmark type:"),
+		nil,
+		view.TypeSelect,
+	)
+
 	// Create the URL row
 	urlRow := container.NewVBox(
 		widget.NewLabel("URL:"),
@@ -165,7 +185,9 @@ func NewEditMangaView(State *KanshoAppState) *EditMangaView {
 		NewSeparator(),
 		nameRow,
 		siteRow,
+		typeRow,
 		urlRow,
+		view.CustomDirectoryCheck,
 		directoryRow,
 		NewSeparator(),
 		buttonRow,
@@ -173,8 +195,68 @@ func NewEditMangaView(State *KanshoAppState) *EditMangaView {
 
 	// Wrap the content in a card
 	view.Card = NewCard(cardContent)
+	view.refreshDirectoryChoice(true)
 
 	return view
+}
+
+func (v *EditMangaView) refreshDirectoryChoice(resetCustom bool) {
+	if v.TypeSelect == nil || v.CustomDirectoryCheck == nil || v.DirectoryButton == nil {
+		return
+	}
+	kind := "manga"
+	if v.TypeSelect.Selected == "Webtoon" {
+		kind = "webtoon"
+	}
+	prefs, err := preferences.Load()
+	if err != nil {
+		log.Printf("[EditManga] Cannot load root preferences: %v", err)
+		return
+	}
+	platform := "linux"
+	if runtime.GOOS == "windows" {
+		platform = "windows"
+	}
+	root := strings.TrimSpace(prefs.RootDirectory(platform, kind))
+	if resetCustom {
+		v.CustomDirectoryCheck.SetChecked(root == "")
+	}
+	if root != "" && !v.CustomDirectoryCheck.Checked {
+		v.SelectedDirectoryURI = nil
+		v.DirectoryLabel.SetText(root)
+		v.DirectoryButton.Disable()
+		return
+	}
+	v.DirectoryButton.Enable()
+	if v.SelectedDirectoryURI == nil {
+		v.DirectoryLabel.SetText("No directory selected")
+	}
+}
+
+func (v *EditMangaView) defaultBookmarkLocation(title string) (string, error) {
+	prefs, err := preferences.Load()
+	if err != nil {
+		return "", err
+	}
+	kind := "manga"
+	if v.TypeSelect.Selected == "Webtoon" {
+		kind = "webtoon"
+	}
+	platform := "linux"
+	if runtime.GOOS == "windows" {
+		platform = "windows"
+	}
+	root := strings.TrimSpace(prefs.RootDirectory(platform, kind))
+	if root == "" {
+		return "", nil
+	}
+	if platform == "linux" {
+		root, err = preferences.ExpandPath(root)
+		if err != nil {
+			return "", err
+		}
+	}
+	return filepath.Join(root, title), nil
 }
 
 // LoadMangaForEditing loads an existing manga's data into the form for editing
@@ -184,6 +266,12 @@ func (v *EditMangaView) LoadMangaForEditing(mangaID int) {
 	}
 
 	manga := v.State.MangaData.Manga[mangaID]
+	v.CustomDirectoryCheck.SetChecked(true)
+	if manga.Type == "webtoon" {
+		v.TypeSelect.SetSelected("Webtoon")
+	} else {
+		v.TypeSelect.SetSelected("Manga")
+	}
 
 	// Set edit mode
 	v.isEditMode = true
@@ -227,6 +315,8 @@ func (v *EditMangaView) clearForm() {
 	v.DirectoryLabel.SetText("No directory selected")
 	v.SelectedDirectoryURI = nil
 	v.SiteSelect.ClearSelected()
+	v.TypeSelect.SetSelected("Manga")
+	v.refreshDirectoryChoice(true)
 
 	// Reset to add mode
 	v.isEditMode = false
@@ -300,9 +390,16 @@ func (v *EditMangaView) onAddButtonClicked() {
 	}
 
 	location := ""
-	if v.SelectedDirectoryURI != nil {
-		cleanedDirectory := strings.ReplaceAll(v.SelectedDirectoryURI.String(), "file://", "")
-		location = fmt.Sprintf("%s/%s", cleanedDirectory, title)
+	if !v.CustomDirectoryCheck.Checked {
+		var err error
+		location, err = v.defaultBookmarkLocation(title)
+		if err != nil {
+			dialog.ShowError(fmt.Errorf("cannot resolve default bookmark root: %v", err), v.State.Window)
+			return
+		}
+	}
+	if location == "" && v.SelectedDirectoryURI != nil {
+		location = filepath.Join(v.SelectedDirectoryURI.Path(), title)
 	}
 
 	// Validate the input
@@ -333,6 +430,7 @@ func (v *EditMangaView) onAddButtonClicked() {
 		Url:       url,
 		Site:      selectedSite,
 		Location:  location,
+		Type:      strings.ToLower(v.TypeSelect.Selected),
 	}
 
 	// Add to app state
@@ -420,6 +518,7 @@ func (v *EditMangaView) onSaveButtonClicked() {
 	v.State.MangaData.Manga[v.editingMangaID].Site = selectedSite
 	v.State.MangaData.Manga[v.editingMangaID].Url = url
 	v.State.MangaData.Manga[v.editingMangaID].Location = newLocation
+	v.State.MangaData.Manga[v.editingMangaID].Type = strings.ToLower(v.TypeSelect.Selected)
 	v.State.MangaData.Manga[v.editingMangaID].Shortname = "" // Remove shortname
 
 	// Save to the database

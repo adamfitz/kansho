@@ -11,7 +11,7 @@ The system SHALL persist manga bookmarks in the local SQLite database.
 #### Scenario: Load bookmarks on startup
 - GIVEN the application starts
 - WHEN the database is opened
-- THEN the system SHALL load bookmarks from the `bookmarks` table
+- THEN Linux SHALL load bookmarks from `bookmarks_linux` and Windows SHALL load bookmarks from `bookmarks_windows`
 - AND SHALL expose them through the shared `models.Manga` structure
 - WHEN the database has no bookmark rows
 - THEN the system SHALL return an empty bookmarks structure (`{"manga": []}`)
@@ -19,14 +19,14 @@ The system SHALL persist manga bookmarks in the local SQLite database.
 #### Scenario: Save bookmarks
 - GIVEN a manga is added, edited, or deleted
 - WHEN `SaveBookmarks` is called
-- THEN the complete in-memory bookmark list SHALL replace the contents of the `bookmarks` table inside one immediate write transaction
+- THEN the complete in-memory bookmark list SHALL replace the contents of the current OS bookmark table inside one immediate write transaction
 - AND the previous bookmark rows SHALL be removed in the same transaction
 - AND the write SHALL acquire Kansho's advisory write lock before changing the database
 
 #### Scenario: Bookmark ordering
 - GIVEN bookmarks are saved
 - WHEN they are loaded again
-- THEN their order SHALL be preserved by the stored sort position
+- THEN they SHALL be ordered by title and row ID
 
 ### Requirement: Bookmark Data Structure
 Each bookmark SHALL track essential manga metadata.
@@ -34,7 +34,13 @@ Each bookmark SHALL track essential manga metadata.
 #### Scenario: Bookmark fields
 - GIVEN a manga bookmark is stored
 - WHEN its data is loaded
-- THEN it SHALL contain: title, url, chapters, location, site, and shortname fields
+- THEN it SHALL contain: title, url, chapters, location, site, shortname, type, and optional MangaDex ID fields
+- AND `type` SHALL be `manga` or `webtoon`
+
+#### Scenario: Choose bookmark type
+- GIVEN the user adds a bookmark
+- WHEN the user selects Manga or Webtoon
+- THEN the bookmark SHALL be stored in the selected OS table with that type
 
 ### Requirement: Config Directory
 The system SHALL ensure the config directory exists before any read/write operations.
@@ -54,6 +60,28 @@ The system SHALL store the database directory in a YAML preferences file.
 - AND it SHALL contain a `database_directory` value
 - AND the default database directory SHALL be `~/.config/kansho`
 - AND the database file name SHALL be `kansho.db`
+- AND optional roots SHALL be stored for Linux manga, Linux webtoons, Windows manga, and Windows webtoons
+- AND all four roots SHALL be empty by default
+
+#### Scenario: Apply a root to existing bookmarks
+- GIVEN the user changes a root and checks its apply option
+- WHEN the user saves preferences
+- THEN Kansho SHALL create a database snapshot in a `backup` subdirectory before changing paths
+- AND SHALL update locations only for matching OS and bookmark type rows to `<root>/<title>`
+- AND SHALL NOT move files
+
+#### Scenario: Save a root without applying it
+- GIVEN the user changes a root and leaves its apply option unchecked
+- WHEN the user saves preferences
+- THEN Kansho SHALL create a database snapshot in a `backup` subdirectory
+- AND existing bookmark locations SHALL remain unchanged
+
+#### Scenario: Add bookmark with a configured root
+- GIVEN a root exists for the current OS and selected bookmark type
+- WHEN the user adds a bookmark without selecting the custom-directory override
+- THEN its location SHALL be `<root>/<title>`
+- WHEN the user selects the custom-directory override
+- THEN the selected directory SHALL be used instead
 
 #### Scenario: Apply a new database directory
 - GIVEN the user selects a new database directory in File → Preferences
@@ -69,6 +97,7 @@ The system SHALL migrate an existing `bookmarks.json` file into the database onc
 - AND the database does not yet contain the `bookmarks_migrated_at` marker
 - WHEN the database is opened
 - THEN every bookmark from the JSON file SHALL be inserted into the `bookmarks` table
+- AND the legacy table rows SHALL be copied into the current OS table without deleting the legacy table
 - AND the migration marker SHALL be recorded in `kansho_meta`
 - AND the JSON file SHALL be renamed to `bookmarks.json.bak`
 - WHEN a file named `bookmarks.json.bak` already exists
@@ -106,6 +135,27 @@ The system SHALL support importing bookmarks from an external JSON file.
 - AND the imported entries SHALL be merged into the existing bookmarks
 - AND duplicates SHALL be avoided
 - AND the merged bookmark list SHALL be saved to the database
+
+### Requirement: Cross-Platform Bookmark Sync
+The system SHALL synchronize Linux and Windows bookmark tables by confirmed MangaDex ID.
+
+#### Scenario: Sync missing IDs
+- GIVEN a bookmark has a MangaDex ID and that ID is absent from the other OS table
+- WHEN the user selects Database → Sync Linux/Windows Bookmarks
+- THEN Kansho SHALL insert the bookmark into the other table
+- AND SHALL use the destination OS root for its bookmark type when configured
+
+#### Scenario: Preserve matching IDs
+- GIVEN both OS tables contain the same MangaDex ID
+- WHEN the user syncs bookmarks
+- THEN Kansho SHALL leave both rows unchanged
+
+#### Scenario: Skip bookmarks without IDs
+- GIVEN a bookmark has no MangaDex ID
+- WHEN the user syncs bookmarks
+- THEN Kansho SHALL leave it unchanged
+- AND SHALL report its OS table and title
+- AND SHALL tell the user to update its MangaDex information before syncing again
 
 ### Requirement: Transaction Locks
 The system SHALL protect bookmark writes with an advisory database lock.
