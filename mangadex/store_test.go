@@ -4,6 +4,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"kansho/models"
+	"kansho/preferences"
 )
 
 func tempStore(t *testing.T) *Store {
@@ -384,8 +387,8 @@ func TestEnsureSchemaMigratesExistingDatabase(t *testing.T) {
 	if err := store.conn.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		t.Fatalf("read user_version: %v", err)
 	}
-	if version != 4 {
-		t.Fatalf("user_version = %d, want 4", version)
+	if version != 8 {
+		t.Fatalf("user_version = %d, want 8", version)
 	}
 
 	stats := ChapterStats{Title: "One Piece", Total: 2, NotDownloaded: 2}
@@ -674,5 +677,340 @@ func TestTitleInFallback(t *testing.T) {
 	}
 	if got := info.TitleIn("zz"); got != "One Piece" {
 		t.Errorf("TitleIn(zz) fallback = %q", got)
+	}
+}
+
+func TestBookmarksRoundTripAndReplace(t *testing.T) {
+	store := tempStore(t)
+
+	first := models.Manga{Manga: []models.Bookmarks{
+		{Title: "One Piece", Url: "https://example.test/one", Site: "Example", Location: "/tmp/one"},
+		{Title: "Berserk", Url: "https://example.test/berserk", Site: "Example", Location: "/tmp/berserk"},
+	}}
+	if err := store.SaveBookmarks(first); err != nil {
+		t.Fatalf("SaveBookmarks: %v", err)
+	}
+
+	loaded, err := store.LoadBookmarks()
+	if err != nil {
+		t.Fatalf("LoadBookmarks: %v", err)
+	}
+	if len(loaded.Manga) != 2 {
+		t.Fatalf("loaded %d bookmarks, want 2", len(loaded.Manga))
+	}
+
+	second := models.Manga{Manga: []models.Bookmarks{{Title: "Berserk"}}}
+	if err := store.SaveBookmarks(second); err != nil {
+		t.Fatalf("SaveBookmarks replace: %v", err)
+	}
+	loaded, err = store.LoadBookmarks()
+	if err != nil {
+		t.Fatalf("LoadBookmarks after replace: %v", err)
+	}
+	if len(loaded.Manga) != 1 || loaded.Manga[0].Title != "Berserk" {
+		t.Fatalf("bookmarks after replace = %+v", loaded.Manga)
+	}
+}
+
+func TestApplyRootToBookmarksByPlatformAndType(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "roots.db")
+	linux, err := openPathForPlatform(path, "linux")
+	if err != nil {
+		t.Fatalf("open Linux store: %v", err)
+	}
+	defer linux.Close()
+	windows, err := openPathForPlatform(path, "windows")
+	if err != nil {
+		t.Fatalf("open Windows store: %v", err)
+	}
+	defer windows.Close()
+
+	if err := linux.SaveBookmarks(models.Manga{Manga: []models.Bookmarks{
+		{Title: "Manga One", Type: "manga", Location: "/old/manga"},
+		{Title: "Webtoon One", Type: "webtoon", Location: "/old/webtoon"},
+	}}); err != nil {
+		t.Fatalf("save Linux bookmarks: %v", err)
+	}
+	if err := windows.SaveBookmarks(models.Manga{Manga: []models.Bookmarks{
+		{Title: "Windows Manga", Type: "manga", Location: `C:\old`},
+	}}); err != nil {
+		t.Fatalf("save Windows bookmarks: %v", err)
+	}
+
+	updated, err := linux.ApplyRootToBookmarks("linux", "manga", "/mnt/library/manga")
+	if err != nil || updated != 1 {
+		t.Fatalf("ApplyRootToBookmarks() = %d, %v; want 1, nil", updated, err)
+	}
+	linuxRows, err := linux.LoadBookmarks()
+	if err != nil {
+		t.Fatalf("load Linux bookmarks: %v", err)
+	}
+	if linuxRows.Manga[0].Location != filepath.Join("/mnt/library/manga", "Manga One") || linuxRows.Manga[1].Location != "/old/webtoon" {
+		t.Fatalf("Linux locations after root update = %+v", linuxRows.Manga)
+	}
+	windowsRows, err := windows.LoadBookmarks()
+	if err != nil || len(windowsRows.Manga) != 1 || windowsRows.Manga[0].Location != `C:\old` {
+		t.Fatalf("Windows rows changed after Linux root update: %+v, %v", windowsRows.Manga, err)
+	}
+}
+
+func TestSetBookmarkMangaDexIDOnlyUpdatesCurrentPlatform(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "links.db")
+	linux, err := openPathForPlatform(path, "linux")
+	if err != nil {
+		t.Fatalf("open Linux store: %v", err)
+	}
+	defer linux.Close()
+	windows, err := openPathForPlatform(path, "windows")
+	if err != nil {
+		t.Fatalf("open Windows store: %v", err)
+	}
+	defer windows.Close()
+	bookmarks := models.Manga{Manga: []models.Bookmarks{{
+		Title: "Confirmed Title", Url: "https://mangadex.org/title/confirmed-id",
+	}}}
+	if err := linux.SaveBookmarks(bookmarks); err != nil {
+		t.Fatalf("save Linux bookmark: %v", err)
+	}
+	if err := windows.SaveBookmarks(bookmarks); err != nil {
+		t.Fatalf("save Windows bookmark: %v", err)
+	}
+	linuxRows, err := linux.LoadBookmarks()
+	if err != nil || linuxRows.Manga[0].MangaDexID != "" {
+		t.Fatalf("MangaDex URL alone assigned an ID: %+v, %v", linuxRows.Manga, err)
+	}
+	if err := linux.SetBookmarkMangaDexID("Confirmed Title", "confirmed-id"); err != nil {
+		t.Fatalf("SetBookmarkMangaDexID: %v", err)
+	}
+
+	linuxRows, err = linux.LoadBookmarks()
+	if err != nil || linuxRows.Manga[0].MangaDexID != "confirmed-id" {
+		t.Fatalf("Linux bookmark link = %+v, %v", linuxRows.Manga, err)
+	}
+	windowsRows, err := windows.LoadBookmarks()
+	if err != nil || windowsRows.Manga[0].MangaDexID != "" {
+		t.Fatalf("Windows bookmark changed before sync: %+v, %v", windowsRows.Manga, err)
+	}
+}
+
+func TestSyncPlatformBookmarksByMangaDexID(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := preferences.Save(preferences.Preferences{
+		DatabaseDirectory: filepath.Join(home, "db"),
+		WindowsMangaRoot:  `D:\Manga`,
+		LinuxWebtoonRoot:  "/mnt/webtoons",
+	}); err != nil {
+		t.Fatalf("save preferences: %v", err)
+	}
+
+	path := filepath.Join(t.TempDir(), "sync.db")
+	linux, err := openPathForPlatform(path, "linux")
+	if err != nil {
+		t.Fatalf("open Linux store: %v", err)
+	}
+	defer linux.Close()
+	windows, err := openPathForPlatform(path, "windows")
+	if err != nil {
+		t.Fatalf("open Windows store: %v", err)
+	}
+	defer windows.Close()
+
+	if err := linux.SaveBookmarks(models.Manga{Manga: []models.Bookmarks{
+		{Title: "Linux Only", Type: "manga", Location: "/linux/source", MangaDexID: "id-linux"},
+		{Title: "Shared Linux", Type: "manga", Location: "/linux/shared", MangaDexID: "id-shared"},
+		{Title: "Needs ID", Type: "webtoon", Location: "/linux/no-id"},
+	}}); err != nil {
+		t.Fatalf("save Linux bookmarks: %v", err)
+	}
+	if err := windows.SaveBookmarks(models.Manga{Manga: []models.Bookmarks{
+		{Title: "Windows Only", Type: "webtoon", Location: `C:\windows\source`, MangaDexID: "id-windows"},
+		{Title: "Shared Windows", Type: "manga", Location: `C:\windows\shared`, MangaDexID: "id-shared"},
+		{Title: "Also Needs ID", Type: "manga", Location: `C:\windows\no-id`},
+	}}); err != nil {
+		t.Fatalf("save Windows bookmarks: %v", err)
+	}
+
+	result, err := linux.SyncPlatformBookmarks()
+	if err != nil {
+		t.Fatalf("SyncPlatformBookmarks: %v", err)
+	}
+	if result.InsertedToLinux != 1 || result.InsertedToWindows != 1 || len(result.Skipped) != 2 {
+		t.Fatalf("sync result = %+v", result)
+	}
+	linuxRows, err := linux.LoadBookmarks()
+	if err != nil {
+		t.Fatalf("load Linux after sync: %v", err)
+	}
+	windowsRows, err := windows.LoadBookmarks()
+	if err != nil {
+		t.Fatalf("load Windows after sync: %v", err)
+	}
+	if len(linuxRows.Manga) != 4 || len(windowsRows.Manga) != 4 {
+		t.Fatalf("row counts after sync: Linux=%d Windows=%d", len(linuxRows.Manga), len(windowsRows.Manga))
+	}
+	var linuxCopy, windowsCopy, sharedWindows *models.Bookmarks
+	for _, bookmark := range windowsRows.Manga {
+		switch bookmark.MangaDexID {
+		case "id-linux":
+			copy := bookmark
+			windowsCopy = &copy
+		case "id-shared":
+			copy := bookmark
+			sharedWindows = &copy
+		}
+	}
+	for _, bookmark := range linuxRows.Manga {
+		if bookmark.MangaDexID == "id-windows" {
+			copy := bookmark
+			linuxCopy = &copy
+		}
+	}
+	if windowsCopy == nil || windowsCopy.Location != `D:\Manga\Linux Only` {
+		t.Fatalf("Windows copy did not use configured root: %+v", windowsCopy)
+	}
+	if linuxCopy == nil || linuxCopy.Location != filepath.Join("/mnt/webtoons", "Windows Only") {
+		t.Fatalf("Linux copy did not use configured root: %+v", linuxCopy)
+	}
+	if sharedWindows == nil || sharedWindows.Title != "Shared Windows" || sharedWindows.Location != `C:\windows\shared` {
+		t.Fatalf("sync overwrote existing MangaDex ID row: %+v", sharedWindows)
+	}
+}
+
+func TestLegacyBookmarksMigrationRenamesFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	configDir := filepath.Join(home, ".config", "kansho")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		t.Fatalf("create config dir: %v", err)
+	}
+	legacy := filepath.Join(configDir, "bookmarks.json")
+	if err := os.WriteFile(legacy, []byte(`{"manga":[{"title":"Migrated","url":"u","chapters":"","location":"","site":"s","shortname":""}]}`), 0644); err != nil {
+		t.Fatalf("write legacy bookmarks: %v", err)
+	}
+
+	store, err := Open()
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer store.Close()
+
+	loaded, err := store.LoadBookmarks()
+	if err != nil {
+		t.Fatalf("LoadBookmarks: %v", err)
+	}
+	if len(loaded.Manga) != 1 || loaded.Manga[0].Title != "Migrated" {
+		t.Fatalf("migrated bookmarks = %+v", loaded.Manga)
+	}
+	if _, err := os.Stat(legacy); !os.IsNotExist(err) {
+		t.Fatalf("legacy bookmarks file still exists: %v", err)
+	}
+	if _, err := os.Stat(legacy + ".bak"); err != nil {
+		t.Fatalf("legacy bookmarks backup missing: %v", err)
+	}
+}
+
+func TestWriteLockBlocksWritesAndCanBeCleared(t *testing.T) {
+	store := tempStore(t)
+	owner, err := store.acquireWriteLock()
+	if err != nil {
+		t.Fatalf("acquireWriteLock: %v", err)
+	}
+	defer store.releaseWriteLock(owner)
+
+	err = store.SaveBookmarks(models.Manga{Manga: []models.Bookmarks{{Title: "Blocked"}}})
+	if err == nil {
+		t.Fatal("SaveBookmarks succeeded while write lock was held")
+	}
+	if _, ok := err.(*LockedError); !ok {
+		t.Fatalf("SaveBookmarks error = %T %v, want *LockedError", err, err)
+	}
+
+	count, err := store.LockCount()
+	if err != nil || count != 1 {
+		t.Fatalf("LockCount = %d, %v; want 1, nil", count, err)
+	}
+	cleared, err := store.ClearLocks()
+	if err != nil || cleared != 1 {
+		t.Fatalf("ClearLocks = %d, %v; want 1, nil", cleared, err)
+	}
+
+	if err := store.SaveBookmarks(models.Manga{Manga: []models.Bookmarks{{Title: "Allowed"}}}); err != nil {
+		t.Fatalf("SaveBookmarks after ClearLocks: %v", err)
+	}
+}
+
+func TestCompareAndMergeMissingRows(t *testing.T) {
+	source := tempStore(t)
+	targetPath := filepath.Join(t.TempDir(), "target.db")
+	target, err := OpenPath(targetPath)
+	if err != nil {
+		t.Fatalf("open target: %v", err)
+	}
+	defer target.Close()
+
+	sourceBookmarks := models.Manga{Manga: []models.Bookmarks{
+		{Title: "Shared", Url: "u1", Site: "s"},
+		{Title: "Only In Source", Url: "u2", Site: "s"},
+	}}
+	if err := source.SaveBookmarks(sourceBookmarks); err != nil {
+		t.Fatalf("source SaveBookmarks: %v", err)
+	}
+	targetBookmarks := models.Manga{Manga: []models.Bookmarks{
+		{Title: "Shared", Url: "u1", Site: "s"},
+		{Title: "Only In Target", Url: "u3", Site: "s"},
+	}}
+	if err := target.SaveBookmarks(targetBookmarks); err != nil {
+		t.Fatalf("target SaveBookmarks: %v", err)
+	}
+
+	diff, err := target.CompareWith(source.Path())
+	if err != nil {
+		t.Fatalf("CompareWith: %v", err)
+	}
+	if diff.TotalMissing != 1 {
+		t.Fatalf("TotalMissing = %d, want 1 (%+v)", diff.TotalMissing, diff)
+	}
+
+	result, err := target.MergeMissingFrom(source.Path(), nil)
+	if err != nil {
+		t.Fatalf("MergeMissingFrom: %v", err)
+	}
+	if result.TotalInserted != 1 {
+		t.Fatalf("TotalInserted = %d, want 1", result.TotalInserted)
+	}
+	if _, err := os.Stat(result.BackupPath); err != nil {
+		t.Fatalf("target backup missing: %v", err)
+	}
+
+	merged, err := target.LoadBookmarks()
+	if err != nil {
+		t.Fatalf("LoadBookmarks after merge: %v", err)
+	}
+	if len(merged.Manga) != 3 {
+		t.Fatalf("merged bookmarks = %+v, want 3 rows", merged.Manga)
+	}
+}
+
+func TestMergeLegacyBookmarksIntoActivePlatformTable(t *testing.T) {
+	source := tempStore(t)
+	if _, err := source.conn.Exec(`DROP TABLE bookmarks_linux; DROP TABLE bookmarks_windows`); err != nil {
+		t.Fatalf("remove platform bookmark tables: %v", err)
+	}
+	if _, err := source.conn.Exec(`INSERT INTO bookmarks (title, url, location, site)
+		VALUES ('Legacy Merge', 'https://example.test/legacy', '/old/location', 'Example')`); err != nil {
+		t.Fatalf("insert legacy bookmark: %v", err)
+	}
+	target := tempStore(t)
+	if _, err := target.MergeMissingFrom(source.Path(), nil); err != nil {
+		t.Fatalf("MergeMissingFrom legacy database: %v", err)
+	}
+	loaded, err := target.LoadBookmarks()
+	if err != nil {
+		t.Fatalf("LoadBookmarks after merge: %v", err)
+	}
+	if len(loaded.Manga) != 1 || loaded.Manga[0].Title != "Legacy Merge" {
+		t.Fatalf("active platform bookmarks after legacy merge = %+v", loaded.Manga)
 	}
 }

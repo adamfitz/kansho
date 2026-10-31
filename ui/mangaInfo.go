@@ -101,6 +101,9 @@ func storeFetchedInfo(info *mangadex.MangaInfo, bookmarkTitle string) error {
 		if aliasErr := store.SetTitleAlias(bookmarkTitle, info.ID); aliasErr != nil {
 			log.Printf("[UI] Failed to alias %q -> %s: %v", bookmarkTitle, info.ID, aliasErr)
 		}
+		if linkErr := store.SetBookmarkMangaDexID(bookmarkTitle, info.ID); linkErr != nil {
+			return fmt.Errorf("link bookmark to MangaDex ID: %w", linkErr)
+		}
 	}
 	return nil
 }
@@ -338,7 +341,14 @@ func buildMangaInfoContent(parentWindow fyne.Window, replace func(fyne.CanvasObj
 
 	// Find matching bookmark for this title
 	var matchedBookmark *config.Bookmarks
-	all := config.LoadBookmarks()
+	all := config.Manga{Manga: []config.Bookmarks{}}
+	if store, storeErr := mangadex.GetStore(); storeErr != nil {
+		log.Printf("[UI] cannot open Kansho database: %v", storeErr)
+	} else if loaded, loadErr := store.LoadBookmarks(); loadErr != nil {
+		log.Printf("[UI] cannot load bookmarks: %v", loadErr)
+	} else {
+		all = loaded
+	}
 	for i := range all.Manga {
 		m := all.Manga[i]
 		if strings.EqualFold(m.Title, bookmarkTitle) {

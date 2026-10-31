@@ -19,9 +19,9 @@ The system SHALL be a cross-platform desktop application built with Go, using th
 #### Scenario: Application menu structure
 - GIVEN the application is running
 - WHEN the user views the menu bar
-- THEN a File menu SHALL exist with a Logs option
+- THEN a File menu SHALL exist with Preferences and Logs options
 - AND a Bookmarks menu SHALL exist with Bookmarks, Export Bookmarks, and Import Bookmarks options
-- AND a Database menu SHALL exist with Backup, Restore, and Compact options for the local Kansho title and manga chapter-statistics database
+- AND a Database menu SHALL exist with Backup, Restore, Compact, and Clear Transaction Locks options for the local Kansho database
 - AND a Help menu SHALL exist with an About option
 
 #### Scenario: Keyboard shortcuts

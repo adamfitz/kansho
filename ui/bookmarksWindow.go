@@ -1,50 +1,28 @@
 package ui
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 
-	"kansho/parser"
+	"kansho/mangadex"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/widget"
 )
 
-type Bookmark struct {
-	Title     string `json:"title"`
-	URL       string `json:"url"`
-	Chapters  string `json:"chapters"`
-	Location  string `json:"location"`
-	Site      string `json:"site"`
-	Shortname string `json:"shortname"`
-}
-
-type BookmarksData struct {
-	Manga []Bookmark `json:"manga"`
-}
-
 func ShowBookmarksWindow(kanshoApp fyne.App) {
-	configDir, err := parser.ExpandPath("~/.config/kansho")
-	if err != nil {
-		return
-	}
-	bookmarksFilePath := fmt.Sprintf("%s/bookmarks.json", configDir)
-
 	bookmarksWindow := kanshoApp.NewWindow("Kansho Bookmarks")
 	bookmarksWindow.Resize(fyne.NewSize(800, 600))
 
-	bookmarksLabel := widget.NewLabel("Loading bookmarks file...")
+	bookmarksLabel := widget.NewLabel("Loading bookmarks from the database...")
 	bookmarksLabel.Wrapping = fyne.TextWrapWord
 
 	searchEntry := widget.NewEntry()
 	searchEntry.SetPlaceHolder("Search bookmarks...")
 
 	var allLines []string
-	var bookmarksData BookmarksData
 
 	addLineNumbers := func(lines []string) string {
 		var numbered []string
@@ -163,43 +141,32 @@ func ShowBookmarksWindow(kanshoApp fyne.App) {
 	bookmarksWindow.Show()
 
 	go func() {
-		file, err := os.Open(bookmarksFilePath)
+		store, err := mangadex.GetStore()
 		if err != nil {
 			fyne.Do(func() {
-				bookmarksLabel.SetText(fmt.Sprintf("Failed to open bookmarks file: %v", err))
+				bookmarksLabel.SetText(fmt.Sprintf("Failed to open Kansho database: %v", err))
 			})
 			return
 		}
-		defer file.Close()
 
-		scanner := bufio.NewScanner(file)
-		buf := make([]byte, 0, 64*1024)
-		scanner.Buffer(buf, 1024*1024)
-
-		var lines []string
-
-		for scanner.Scan() {
-			lines = append(lines, scanner.Text())
-		}
-
-		if err := scanner.Err(); err != nil {
+		bookmarks, err := store.LoadBookmarks()
+		if err != nil {
 			fyne.Do(func() {
-				bookmarksLabel.SetText(fmt.Sprintf("Error reading bookmarks file: %v", err))
+				bookmarksLabel.SetText(fmt.Sprintf("Failed to load bookmarks: %v", err))
 			})
 			return
 		}
 
-		allLines = lines
-
-		// Also parse the JSON for potential future use
-		file.Seek(0, 0)
-		decoder := json.NewDecoder(file)
-		if err := decoder.Decode(&bookmarksData); err != nil {
-			// Non-fatal, just log it
-			fmt.Printf("Warning: Could not parse JSON: %v\n", err)
+		fileData, err := json.MarshalIndent(bookmarks, "", "  ")
+		if err != nil {
+			fyne.Do(func() {
+				bookmarksLabel.SetText(fmt.Sprintf("Failed to display bookmarks: %v", err))
+			})
+			return
 		}
 
-		finalContent := addLineNumbers(lines)
+		allLines = strings.Split(string(fileData), "\n")
+		finalContent := addLineNumbers(allLines)
 
 		fyne.Do(func() {
 			bookmarksLabel.SetText(finalContent)

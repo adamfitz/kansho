@@ -23,7 +23,7 @@ The system SHALL use a centralized state object to coordinate UI components.
 #### Scenario: Centralized state
 - GIVEN the application initializes
 - WHEN `NewKanshoAppState` is created
-- THEN it SHALL load bookmarks from disk
+- THEN it SHALL load bookmarks from the local SQLite database
 - AND initialize with no manga selected (SelectedMangaID = -1)
 - AND provide observer-style callbacks for manga selection, addition, and deletion
 
@@ -37,7 +37,7 @@ The system SHALL use a centralized state object to coordinate UI components.
 - GIVEN a manga is selected in the list
 - WHEN the user clicks "Delete Manga"
 - THEN the manga SHALL be removed from the in-memory bookmarks
-- AND the updated bookmarks SHALL be persisted to disk immediately
+- AND the updated bookmarks SHALL be persisted to the database immediately
 - AND if the deleted manga was selected, the selection SHALL be cleared
 - AND all registered OnMangaDeleted callbacks SHALL be invoked
 
@@ -64,7 +64,7 @@ The system SHALL provide a form for adding new manga or editing existing ones.
 - GIVEN all required fields are filled for the selected site
 - WHEN the user clicks "Add Manga"
 - THEN the manga SHALL be added to the bookmarks data
-- AND persisted to disk immediately
+- AND persisted to the database immediately
 - AND the manga list view SHALL refresh to show the new entry
 
 ### Requirement: Chapter List View
@@ -255,17 +255,90 @@ The system SHALL display an overall download progress summary instead of a dedic
 - WHEN the user clicks the download queue button
 - THEN an informational dialog SHALL be shown stating that there are no downloads in queue
 
+### Requirement: Preferences
+The system SHALL provide a Preferences dialog for the database directory and optional platform-specific bookmark roots.
+
+#### Scenario: Open preferences
+- GIVEN the application menu is visible
+- WHEN the user selects File → Preferences
+- THEN a dialog SHALL show the current database directory
+- AND a directory picker SHALL let the user choose a different directory
+- AND the dialog SHALL show a "Move Files" checkbox
+- AND the dialog SHALL show the path of `kansho.conf`
+- AND the dialog SHALL allow optional Linux and Windows roots for manga and webtoons
+- AND each root SHALL have an option to apply it to matching OS/type bookmark rows
+- AND changing any root SHALL create a database backup in `<database-dir>/backup/` first
+
+#### Scenario: Sync platform bookmarks
+- GIVEN the database menu is visible
+- WHEN the user selects "Sync Linux/Windows Bookmarks"
+- THEN Kansho SHALL replace the main content with a bookmark comparison view
+- AND a Back to Library control SHALL restore the previous main content
+- AND the right side SHALL show Windows and Linux bookmark details in separate columns
+- WHEN the user selects Sync by MangaDex ID in that window
+- THEN Kansho SHALL sync rows without overwriting existing matching IDs
+- AND SHALL report each skipped row that has no MangaDex ID
+
+#### Scenario: Change the database directory
+- GIVEN the user chooses a directory that does not contain a database
+- WHEN the user saves the preferences
+- THEN Kansho SHALL copy the current database to the new directory when one exists
+- AND Kansho SHALL save the new directory to `kansho.conf`
+- AND Kansho SHALL reopen the database at the new location
+- AND Kansho SHALL reload the main interface
+
+#### Scenario: Move files checked
+- GIVEN the user checks "Move Files"
+- WHEN the database has been copied to the new directory and the new database opens successfully
+- THEN the old database SHALL be removed without another confirmation dialog
+
+#### Scenario: Move files unchecked
+- GIVEN the user leaves "Move Files" unchecked
+- WHEN the database has been copied to the new directory and the new database opens successfully
+- THEN a confirmation dialog SHALL ask whether to delete the old database
+- AND the old database SHALL be deleted only if the user confirms
+
+#### Scenario: Cancel preferences
+- GIVEN the user clicks Cancel
+- THEN no files SHALL be copied or deleted
+- AND the database location SHALL remain unchanged
+
+#### Scenario: Target directory already contains a database
+- GIVEN the selected directory already contains a `kansho.db`
+- WHEN the user saves the preferences
+- THEN Kansho SHALL compare the current database with the target database
+- AND SHALL show the missing rows for each database table
+- AND the user SHALL be able to merge missing rows from the current database into the target database
+- AND before merging, Kansho SHALL back up the target database
+- AND the merge SHALL show progress and a final per-table result
+- AND the user SHALL alternatively be able to use the target database without merging
+- AND Kansho SHALL warn that the current database will be deleted before using the target database
+
+### Requirement: Database Maintenance Menu
+The system SHALL provide database maintenance actions in the Database menu.
+
+#### Scenario: Clear transaction locks
+- GIVEN the user selects Database → Clear Transaction Locks
+- WHEN the confirmation dialog opens
+- THEN it SHALL warn that clearing a lock that is in use can allow two writers
+- AND it SHALL show how many stored transaction locks exist
+- AND the locks SHALL be cleared only if the user confirms
+
 ### Requirement: Keyboard Shortcuts and Menus
 The system SHALL provide menus and keyboard shortcuts for common operations.
 
 #### Scenario: Menu items
 - GIVEN the application menu is visible
 - WHEN the user opens the File menu
-- THEN "Logs" SHALL open the log display window
+- THEN "Preferences" SHALL open the preferences dialog
+- AND "Logs" SHALL open the log display window
 - WHEN the user opens the Bookmarks menu
 - THEN "Bookmarks" SHALL open the bookmarks window
 - AND "Export Bookmarks" SHALL open a save dialog
 - AND "Import Bookmarks" SHALL open a file picker
+- WHEN the user opens the Database menu
+- THEN "Backup", "Restore", and "Compact" SHALL act on the local database
+- AND "Clear Transaction Locks" SHALL open the lock-clearing confirmation dialog
 - WHEN the user opens the Help menu
 - THEN "About" SHALL show an about dialog with version information
 

@@ -24,3 +24,21 @@ type Site struct {
 type SitesConfig struct {
 	Sites []Site `yaml:"sites"` // Array of all configured manga sites
 }
+
+// Manga is the bookmark collection container. It is kept JSON-compatible so
+// bookmark files can still be imported and exported in the original format.
+type Manga struct {
+	Manga []Bookmarks `json:"manga"`
+}
+
+// Bookmarks is a single bookmarked manga entry.
+type Bookmarks struct {
+	Title      string `json:"title"`
+	Url        string `json:"url"`
+	Chapters   string `json:"chapters"`
+	Location   string `json:"location"`
+	Site       string `json:"site"`
+	Shortname  string `json:"shortname"`
+	Type       string `json:"type,omitempty"`
+	MangaDexID string `json:"mangadex_id,omitempty"`
+}

@@ -55,6 +55,11 @@ func main() {
 	// FILE MENU WITH QUIT OPTION
 	// -------------------------------------------------------------------------
 	fileMenu := fyne.NewMenu("File",
+		fyne.NewMenuItem("Preferences", func() {
+			log.Println("[UI] Kansho Preferences opened (GUI)")
+			ui.ShowPreferencesDialog(kanshoApp, myWindow)
+		}),
+		fyne.NewMenuItemSeparator(),
 		fyne.NewMenuItem("Logs", func() {
 			log.Println("[UI] Kansho Logs opened (GUI)")
 			ui.ShowLogWindow(kanshoApp)
@@ -84,6 +89,11 @@ func main() {
 	)
 
 	databaseMenu := fyne.NewMenu("Database",
+		fyne.NewMenuItem("Sync Linux/Windows Bookmarks", func() {
+			log.Println("[UI] Linux/Windows bookmark sync triggered (GUI)")
+			ui.ShowSyncBookmarksView(myWindow)
+		}),
+		fyne.NewMenuItemSeparator(),
 		fyne.NewMenuItem("Export Covers", func() {
 			log.Println("[UI] MangaDex cover export triggered (GUI)")
 			ui.ShowExportCoversDialog(kanshoApp, myWindow)
@@ -102,6 +112,11 @@ func main() {
 		fyne.NewMenuItem("Compact", func() {
 			log.Println("[UI] Kansho database compact triggered (GUI)")
 			ui.ShowDatabaseCompactDialog(kanshoApp, myWindow)
+		}),
+		fyne.NewMenuItemSeparator(),
+		fyne.NewMenuItem("Clear Transaction Locks", func() {
+			log.Println("[UI] Kansho clear transaction locks triggered (GUI)")
+			ui.ShowClearTransactionLocksDialog(kanshoApp, myWindow)
 		}),
 	)
 

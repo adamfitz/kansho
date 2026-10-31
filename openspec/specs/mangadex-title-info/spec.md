@@ -22,7 +22,8 @@ MangaDex title information and generic per-manga chapter-count snapshots SHALL b
 - WHEN the database does not exist yet
 - THEN the database SHALL be created on first use with `manga_title`, `manga_title_lookup`, and `manga_chapter_stats` tables
 - AND `manga_chapter_stats` SHALL key records by a stable manga source identity and store title, site, URL, total chapters, downloaded chapters, not-downloaded chapters, and the update timestamp
-- AND the database SHALL be a separate artifact from `bookmarks.json` (bookmarks remain JSON; title info and aggregate chapter counts live in the database)
+- AND the database SHALL also contain separate Linux and Windows bookmark tables
+- AND the former `bookmarks` table SHALL remain available for compatibility during migration
 
 #### Scenario: Detail fields stored
 - GIVEN a MangaDex title is fetched
@@ -59,12 +60,14 @@ Every completed lookup outcome SHALL be written to the local database so the tit
 - WHEN the title information is shown
 - THEN the fetched title SHALL be stored in the database
 - AND the bookmarked manga title SHALL be mapped to the fetched MangaDex title ID
+- AND the current OS bookmark row SHALL store that confirmed MangaDex ID for cross-platform sync
 
 #### Scenario: Search result selection is saved
 - GIVEN the user selects a title from the search results
 - WHEN the title information is shown
 - THEN the fetched title SHALL be stored in the database
 - AND the bookmarked manga title SHALL be mapped to the selected MangaDex title ID
+- AND the current OS bookmark row SHALL store that confirmed MangaDex ID for cross-platform sync
 
 #### Scenario: Local lookup afterwards
 - GIVEN a bookmarked title has already been resolved to a MangaDex title once

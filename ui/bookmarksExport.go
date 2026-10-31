@@ -4,44 +4,27 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/storage"
 
 	"kansho/config"
-	"kansho/parser"
+	"kansho/mangadex"
 )
 
-// ShowExportBookmarksDialog handles the export of bookmarks.json
+// ShowExportBookmarksDialog exports the bookmarks stored in the database to a
+// user-selected JSON file.
 func ShowExportBookmarksDialog(kanshoApp fyne.App, window fyne.Window) {
-	// Get the bookmarks file path
-	configDir, err := parser.ExpandPath("~/.config/kansho")
+	store, err := mangadex.GetStore()
 	if err != nil {
-		dialog.ShowError(fmt.Errorf("failed to get config directory: %v", err), window)
-		return
-	}
-	bookmarksFilePath := filepath.Join(configDir, "bookmarks.json")
-
-	// Check if bookmarks.json exists
-	_, err = os.Stat(bookmarksFilePath)
-	if os.IsNotExist(err) {
-		dialog.ShowError(fmt.Errorf("bookmarks.json file does not exist"), window)
+		dialog.ShowError(fmt.Errorf("cannot open Kansho database: %v", err), window)
 		return
 	}
 
-	// Read and check if the file is empty
-	fileContent, err := os.ReadFile(bookmarksFilePath)
+	bookmarksData, err := store.LoadBookmarks()
 	if err != nil {
-		dialog.ShowError(fmt.Errorf("failed to read bookmarks file: %v", err), window)
-		return
-	}
-
-	// Parse the JSON to check if it's empty
-	var bookmarksData config.Manga
-	if err := json.Unmarshal(fileContent, &bookmarksData); err != nil {
-		dialog.ShowError(fmt.Errorf("bookmarks file is corrupted: %v", err), window)
+		dialog.ShowError(fmt.Errorf("failed to load bookmarks: %v", err), window)
 		return
 	}
 
@@ -49,11 +32,11 @@ func ShowExportBookmarksDialog(kanshoApp fyne.App, window fyne.Window) {
 	if len(bookmarksData.Manga) == 0 {
 		// Ask user if they want to export an empty file
 		confirmDialog := dialog.NewConfirm(
-			"Empty Bookmarks File",
-			"The bookmarks.json file is empty. Do you still want to export it?",
+			"Empty Bookmarks",
+			"The bookmark database is empty. Do you still want to export it?",
 			func(confirmed bool) {
 				if confirmed {
-					showSaveDialog(window, bookmarksFilePath)
+					showBookmarkSaveDialog(window, bookmarksData)
 				}
 			},
 			window,
@@ -62,12 +45,12 @@ func ShowExportBookmarksDialog(kanshoApp fyne.App, window fyne.Window) {
 		return
 	}
 
-	// File exists and is not empty, proceed to save dialog
-	showSaveDialog(window, bookmarksFilePath)
+	// Bookmarks exist, proceed to save dialog
+	showBookmarkSaveDialog(window, bookmarksData)
 }
 
-// showSaveDialog displays the save file dialog for exporting bookmarks
-func showSaveDialog(window fyne.Window, sourceFilePath string) {
+// showBookmarkSaveDialog displays the save file dialog for exporting bookmarks.
+func showBookmarkSaveDialog(window fyne.Window, bookmarksData config.Manga) {
 	saveDialog := dialog.NewFileSave(func(writer fyne.URIWriteCloser, err error) {
 		if err != nil {
 			dialog.ShowError(fmt.Errorf("error opening save dialog: %v", err), window)
@@ -80,16 +63,14 @@ func showSaveDialog(window fyne.Window, sourceFilePath string) {
 		}
 		defer writer.Close()
 
-		// Read the source file
-		sourceContent, err := os.ReadFile(sourceFilePath)
+		sourceContent, err := json.MarshalIndent(bookmarksData, "", "  ")
 		if err != nil {
-			dialog.ShowError(fmt.Errorf("failed to read bookmarks file: %v", err), window)
+			dialog.ShowError(fmt.Errorf("failed to encode bookmarks: %v", err), window)
 			return
 		}
 
 		// Write to the selected destination
-		_, err = writer.Write(sourceContent)
-		if err != nil {
+		if _, err = writer.Write(sourceContent); err != nil {
 			dialog.ShowError(fmt.Errorf("failed to write bookmarks file: %v", err), window)
 			return
 		}
