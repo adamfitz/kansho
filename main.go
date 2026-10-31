@@ -89,6 +89,11 @@ func main() {
 	)
 
 	databaseMenu := fyne.NewMenu("Database",
+		fyne.NewMenuItem("Bookmark Type", func() {
+			log.Println("[UI] Bookmark type editor opened (GUI)")
+			ui.ShowBookmarkTypeView(myWindow)
+		}),
+		fyne.NewMenuItemSeparator(),
 		fyne.NewMenuItem("Sync Linux/Windows Bookmarks", func() {
 			log.Println("[UI] Linux/Windows bookmark sync triggered (GUI)")
 			ui.ShowSyncBookmarksView(myWindow)

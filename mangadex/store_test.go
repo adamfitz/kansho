@@ -721,6 +721,67 @@ func TestBookmarksRoundTripAndReplace(t *testing.T) {
 	}
 }
 
+func TestApplyBookmarkTypeUpdatesArePlatformScopedAndPreserveLocations(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	if err := preferences.Save(preferences.Preferences{DatabaseDirectory: filepath.Join(home, "db")}); err != nil {
+		t.Fatalf("save isolated preferences: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "bookmark-types.db")
+	linux, err := openPathForPlatform(path, "linux")
+	if err != nil {
+		t.Fatalf("open Linux store: %v", err)
+	}
+	defer linux.Close()
+	windows, err := openPathForPlatform(path, "windows")
+	if err != nil {
+		t.Fatalf("open Windows store: %v", err)
+	}
+	defer windows.Close()
+
+	if _, err := linux.conn.Exec(`INSERT INTO bookmarks_linux (title, url, type, location) VALUES
+		('Alpha', 'https://example.test/alpha', 'manga', '/linux/alpha'),
+		('Beta', 'https://example.test/beta', 'webtoon', '/linux/beta')`); err != nil {
+		t.Fatalf("seed Linux bookmarks: %v", err)
+	}
+	if _, err := windows.conn.Exec(`INSERT INTO bookmarks_windows (title, url, type, location)
+		VALUES ('Alpha', 'https://other.test/alpha', 'webtoon', ? )`, `C:\windows\alpha`); err != nil {
+		t.Fatalf("seed Windows bookmark: %v", err)
+	}
+
+	entries, err := linux.LoadBookmarkTypeEntries()
+	if err != nil || len(entries) != 2 {
+		t.Fatalf("LoadBookmarkTypeEntries() = %+v, %v; want two Linux entries", entries, err)
+	}
+	progressCalls := 0
+	updated, err := linux.ApplyBookmarkTypeUpdates([]BookmarkTypeUpdate{
+		{ID: entries[0].ID, Type: "webtoon"},
+		{ID: entries[1].ID, Type: ""},
+	}, func(completed, total int) {
+		progressCalls++
+		if completed != progressCalls || total != 2 {
+			t.Errorf("progress = %d / %d, want %d / 2", completed, total, progressCalls)
+		}
+	})
+	if err != nil || updated != 2 || progressCalls != 2 {
+		t.Fatalf("ApplyBookmarkTypeUpdates() = %d updates, %d progress calls, %v", updated, progressCalls, err)
+	}
+
+	linuxRows, err := linux.LoadBookmarks()
+	if err != nil {
+		t.Fatalf("load Linux bookmarks: %v", err)
+	}
+	if linuxRows.Manga[0].Type != "webtoon" || linuxRows.Manga[0].Location != "/linux/alpha" ||
+		linuxRows.Manga[1].Type != "" || linuxRows.Manga[1].Location != "/linux/beta" {
+		t.Fatalf("Linux bookmarks after type update = %+v", linuxRows.Manga)
+	}
+	windowsRows, err := windows.LoadBookmarks()
+	if err != nil || len(windowsRows.Manga) != 1 || windowsRows.Manga[0].Type != "webtoon" || windowsRows.Manga[0].Location != `C:\windows\alpha` {
+		t.Fatalf("Windows bookmark changed after Linux type update: %+v, %v", windowsRows.Manga, err)
+	}
+}
+
 func TestApplyRootToBookmarksByPlatformAndType(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
