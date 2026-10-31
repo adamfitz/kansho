@@ -2,7 +2,6 @@ package ui
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -47,7 +46,6 @@ func ShowPreferencesDialog(_ fyne.App, window fyne.Window) {
 	})
 
 	dirRow := container.NewBorder(nil, nil, nil, browseButton, dirEntry)
-	moveCheck := widget.NewCheck("Move Files (remove files from old location)", nil)
 	rootControls := []rootPreferenceControl{
 		newRootPreferenceControl(prefs, "linux", "manga", window),
 		newRootPreferenceControl(prefs, "linux", "webtoon", window),
@@ -63,7 +61,6 @@ func ShowPreferencesDialog(_ fyne.App, window fyne.Window) {
 	content := container.NewVScroll(container.NewVBox(
 		widget.NewLabel("Database directory:"),
 		dirRow,
-		moveCheck,
 		widget.NewLabel("Default bookmark roots:"),
 		widget.NewLabel("Applying a root changes saved paths only; it does not move files."),
 		container.NewVBox(rootRows...),
@@ -80,7 +77,7 @@ func ShowPreferencesDialog(_ fyne.App, window fyne.Window) {
 		for _, control := range rootControls {
 			updatedPrefs.SetRootDirectory(control.platform, control.kind, control.entry.Text)
 		}
-		applyPreferences(window, currentDir, dirEntry.Text, moveCheck.Checked, prefs, updatedPrefs, rootControls)
+		applyPreferences(window, currentDir, dirEntry.Text, prefs, updatedPrefs, rootControls)
 	})
 	prefsDialog.SetButtons([]fyne.CanvasObject{cancelButton, saveButton})
 	prefsDialog.Resize(fyne.NewSize(860, 680))
@@ -120,7 +117,7 @@ func newRootPreferenceControl(prefs preferences.Preferences, platform, kind stri
 	return rootPreferenceControl{platform: platform, kind: kind, entry: entry, apply: apply, content: content}
 }
 
-func applyPreferences(window fyne.Window, oldDir, rawNewDir string, move bool,
+func applyPreferences(window fyne.Window, oldDir, rawNewDir string,
 	oldPrefs, newPrefs preferences.Preferences, rootControls []rootPreferenceControl,
 ) {
 	newDir, err := preferences.ExpandPath(rawNewDir)
@@ -210,11 +207,16 @@ func applyPreferences(window fyne.Window, oldDir, rawNewDir string, move bool,
 
 	switch {
 	case oldExists && newExists:
-		showDatabaseConflictDialog(window, oldDir, newDir, oldDB, newDB)
+		if err := switchToDatabase(window, oldDir, newDir); err != nil {
+			dialog.ShowError(err, window)
+			return
+		}
+		dialog.ShowInformation("Preferences",
+			fmt.Sprintf("Using the existing database at %s. The current database was left untouched.", newDB), window)
 	case oldExists:
-		copyDatabaseAndSwitch(window, oldDir, newDir, oldDB, newDB, move)
+		copyDatabaseAndSwitch(window, oldDir, newDir, oldDB, newDB)
 	default:
-		if err := switchToDatabase(window, oldDir, newDir, newExists); err != nil {
+		if err := switchToDatabase(window, oldDir, newDir); err != nil {
 			dialog.ShowError(err, window)
 			return
 		}
@@ -238,184 +240,45 @@ func nextRootSettingsBackupPath(databasePath string) string {
 	return candidate
 }
 
-func copyDatabaseAndSwitch(window fyne.Window, oldDir, newDir, oldDB, newDB string, move bool) {
+func copyDatabaseAndSwitch(window fyne.Window, oldDir, newDir, oldDB, newDB string) {
 	store, err := mangadex.GetStore()
 	if err != nil {
 		dialog.ShowError(fmt.Errorf("cannot open the current database: %v", err), window)
 		return
 	}
-	if err := store.Backup(newDB); err != nil {
+	if err := backupDatabaseWithoutOverwrite(store, newDB); err != nil {
 		dialog.ShowError(fmt.Errorf("cannot copy database to the new location: %v", err), window)
 		return
 	}
 
-	if err := switchToDatabase(window, oldDir, newDir, move); err != nil {
+	if err := switchToDatabase(window, oldDir, newDir); err != nil {
 		dialog.ShowError(err, window)
 		return
 	}
-
-	if move {
-		dialog.ShowInformation("Preferences",
-			fmt.Sprintf("Database moved to %s. The old database was removed.", newDir), window)
-		return
-	}
-
-	dialog.ShowConfirm(
-		"Remove Old Database?",
-		fmt.Sprintf("The database was copied to %s.\n\nDelete the old database at %s?\n\nChoosing No keeps both copies.", newDir, oldDB),
-		func(remove bool) {
-			if !remove {
-				return
-			}
-			if err := deleteDatabaseFiles(oldDB); err != nil {
-				dialog.ShowError(fmt.Errorf("could not remove old database: %v", err), window)
-				return
-			}
-			dialog.ShowInformation("Preferences", "The old database was removed.", window)
-		},
-		window,
-	)
 }
 
-func showDatabaseConflictDialog(window fyne.Window, oldDir, newDir, oldDB, newDB string) {
-	targetStore, err := mangadex.OpenPath(newDB)
+func backupDatabaseWithoutOverwrite(store *mangadex.Store, destination string) error {
+	destinationDir := filepath.Dir(destination)
+	if err := os.MkdirAll(destinationDir, 0755); err != nil {
+		return fmt.Errorf("create database directory: %w", err)
+	}
+	tempDir, err := os.MkdirTemp(destinationDir, ".kansho-copy-")
 	if err != nil {
-		dialog.ShowError(fmt.Errorf("cannot open the target database: %v", err), window)
-		return
+		return fmt.Errorf("create temporary database directory: %w", err)
 	}
+	defer os.RemoveAll(tempDir)
 
-	diff, err := targetStore.CompareWith(oldDB)
-	if err != nil {
-		_ = targetStore.Close()
-		dialog.ShowError(fmt.Errorf("cannot compare databases: %v", err), window)
-		return
+	tempDB := filepath.Join(tempDir, preferences.DatabaseFileName)
+	if err := store.Backup(tempDB); err != nil {
+		return err
 	}
-
-	var summary strings.Builder
-	fmt.Fprintf(&summary, "The target directory already contains a Kansho database:\n%s\n\n", newDB)
-	fmt.Fprintf(&summary, "Current database:\n%s\n\n", oldDB)
-	if diff.TotalMissing == 0 {
-		summary.WriteString("No records are missing from the target database.\n\n")
-	} else {
-		fmt.Fprintf(&summary, "%d record(s) exist only in the current database:\n\n", diff.TotalMissing)
+	if err := os.Link(tempDB, destination); err != nil {
+		return fmt.Errorf("install database copy without overwriting an existing file: %w", err)
 	}
-	for _, table := range diff.Tables {
-		fmt.Fprintf(&summary, "%s: current %d row(s), target %d row(s), missing %d\n",
-			table.Name, table.SourceCount, table.TargetCount, table.MissingCount)
-		for _, row := range table.Missing {
-			fmt.Fprintf(&summary, "    - %s\n", row)
-		}
-	}
-
-	label := widget.NewLabel(summary.String())
-	label.Wrapping = fyne.TextWrapWord
-	scroll := container.NewScroll(label)
-	scroll.SetMinSize(fyne.NewSize(820, 420))
-
-	conflictDialog := dialog.NewCustom("Database Found in Target Directory", "Cancel", scroll, window)
-	cancelButton := widget.NewButton("Cancel", func() {
-		_ = targetStore.Close()
-		conflictDialog.Hide()
-	})
-	useTargetButton := widget.NewButton("Use Target Database", func() {
-		dialog.ShowConfirm(
-			"Use Target Database",
-			fmt.Sprintf("Use the database at %s and delete the current database at %s?\n\nThe target database becomes Kansho's only database.", newDB, oldDB),
-			func(confirmed bool) {
-				if !confirmed {
-					return
-				}
-				conflictDialog.Hide()
-				if err := backupTargetDatabase(targetStore, newDB); err != nil {
-					_ = targetStore.Close()
-					dialog.ShowError(err, window)
-					return
-				}
-				_ = targetStore.Close()
-				if err := switchToDatabase(window, oldDir, newDir, true); err != nil {
-					dialog.ShowError(err, window)
-					return
-				}
-				dialog.ShowInformation("Preferences",
-					fmt.Sprintf("Kansho now uses the target database at %s. The old database was removed.", newDB), window)
-			},
-			window,
-		)
-	})
-	mergeButton := widget.NewButton("Merge Databases", func() {
-		conflictDialog.Hide()
-		mergeDatabases(window, targetStore, oldDir, newDir, oldDB, newDB)
-	})
-	conflictDialog.SetButtons([]fyne.CanvasObject{cancelButton, useTargetButton, mergeButton})
-	conflictDialog.Resize(fyne.NewSize(900, 620))
-	conflictDialog.Show()
-}
-
-func mergeDatabases(window fyne.Window, targetStore *mangadex.Store, oldDir, newDir, oldDB, newDB string) {
-	progressBar := widget.NewProgressBar()
-	progressBar.Min = 0
-	progressBar.Max = 1
-	progressLabel := widget.NewLabel("Backing up the target database...")
-	progressContent := container.NewVBox(progressLabel, progressBar)
-	progressDialog := dialog.NewCustomWithoutButtons("Merging Databases", progressContent, window)
-	progressDialog.Resize(fyne.NewSize(600, 180))
-	progressDialog.Show()
-
-	go func() {
-		result, err := targetStore.MergeMissingFrom(oldDB, func(done, total int, table string) {
-			fyne.Do(func() {
-				progressBar.SetValue(float64(done) / float64(total))
-				progressLabel.SetText(fmt.Sprintf("Merged %s (%d of %d tables)...", table, done, total))
-			})
-		})
-		_ = targetStore.Close()
-
-		fyne.Do(func() {
-			progressDialog.Hide()
-			if err != nil {
-				dialog.ShowError(fmt.Errorf("database merge failed: %v", err), window)
-				return
-			}
-
-			if err := switchToDatabase(window, oldDir, newDir, true); err != nil {
-				dialog.ShowError(err, window)
-				return
-			}
-
-			var summary strings.Builder
-			fmt.Fprintf(&summary, "Database merged into %s.\n\n", newDB)
-			fmt.Fprintf(&summary, "Target backup: %s\n\n", result.BackupPath)
-			fmt.Fprintf(&summary, "Records added: %d\n", result.TotalInserted)
-			for _, table := range result.Tables {
-				fmt.Fprintf(&summary, "    %s: %d\n", table.Name, table.Inserted)
-			}
-			summary.WriteString("\nThe old database was removed.")
-			dialog.ShowInformation("Merge Complete", summary.String(), window)
-		})
-	}()
-}
-
-func backupTargetDatabase(store *mangadex.Store, targetPath string) error {
-	backup := nextMigrationBackupPath(filepath.Dir(targetPath))
-	if err := store.Backup(backup); err != nil {
-		return fmt.Errorf("cannot back up the target database: %v", err)
-	}
-	log.Printf("[UI] target database backed up to %s", backup)
 	return nil
 }
 
-func nextMigrationBackupPath(dir string) string {
-	base := filepath.Join(dir, "kansho.pre-migration-"+time.Now().UTC().Format("20060102-150405")+".db")
-	candidate := base
-	for i := 1; ; i++ {
-		if !fileExists(candidate) {
-			return candidate
-		}
-		candidate = strings.TrimSuffix(base, ".db") + fmt.Sprintf("-%d.db", i)
-	}
-}
-
-func switchToDatabase(window fyne.Window, oldDir, newDir string, removeOld bool) error {
+func switchToDatabase(window fyne.Window, oldDir, newDir string) error {
 	prefs, err := preferences.Load()
 	if err != nil {
 		return fmt.Errorf("cannot load preferences: %v", err)
@@ -433,22 +296,6 @@ func switchToDatabase(window fyne.Window, oldDir, newDir string, removeOld bool)
 	}
 
 	reloadMainWindow(window)
-
-	if removeOld {
-		oldDB := filepath.Join(oldDir, preferences.DatabaseFileName)
-		if err := deleteDatabaseFiles(oldDB); err != nil {
-			return fmt.Errorf("new database is active, but the old database could not be removed: %v", err)
-		}
-	}
-	return nil
-}
-
-func deleteDatabaseFiles(path string) error {
-	for _, candidate := range []string{path, path + "-wal", path + "-shm", path + "-journal"} {
-		if err := os.Remove(candidate); err != nil && !os.IsNotExist(err) {
-			return err
-		}
-	}
 	return nil
 }
 

@@ -96,9 +96,8 @@ func DefaultDBPath() (string, error) {
 	return prefs.DatabasePath()
 }
 
-// migrateLegacyDatabase moves an existing mangadex.db to kansho.db on first
-// startup after the rename so existing local title data and chapter counts are
-// not lost. It only acts when the legacy file exists and the new one does not.
+// migrateLegacyDatabase copies an existing mangadex.db to kansho.db on first
+// startup after the rename. The legacy file is retained as a recovery copy.
 func migrateLegacyDatabase(newPath string) error {
 	legacyPath := filepath.Join(filepath.Dir(newPath), legacyDBFileName)
 	if _, err := os.Stat(legacyPath); err != nil {
@@ -138,11 +137,6 @@ func migrateLegacyDatabase(newPath string) error {
 		return fmt.Errorf("migrated database failed validation: %w", err)
 	}
 
-	for _, p := range []string{legacyPath, legacyPath + "-wal", legacyPath + "-shm"} {
-		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("remove legacy database %s: %w", p, err)
-		}
-	}
 	return nil
 }
 
