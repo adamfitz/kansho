@@ -9,6 +9,7 @@ import (
 func TestLoadCreatesDefaultFile(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 
 	prefs, err := Load()
 	if err != nil {
@@ -30,6 +31,7 @@ func TestLoadCreatesDefaultFile(t *testing.T) {
 func TestSaveAndLoadDatabaseDirectory(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 
 	want := filepath.Join(home, "cloud", "kansho")
 	if err := Save(Preferences{DatabaseDirectory: want}); err != nil {
@@ -56,6 +58,7 @@ func TestSaveAndLoadDatabaseDirectory(t *testing.T) {
 func TestSaveAndLoadPlatformRoots(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	want := Preferences{
 		DatabaseDirectory:  filepath.Join(home, "db"),
 		WindowsMangaRoot:   `W:\Manga`,

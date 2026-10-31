@@ -163,6 +163,9 @@ func Open() (*Store, error) {
 		_ = store.Close()
 		return nil, fmt.Errorf("migrate bookmarks to %s table: %w", store.platform, err)
 	}
+	if _, err := store.SyncPlatformBookmarks(); err != nil {
+		log.Printf("[mangadex] synchronize platform bookmarks on open: %v", err)
+	}
 	return store, nil
 }
 

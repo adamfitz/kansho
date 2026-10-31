@@ -1,7 +1,7 @@
 # manga-bookmarks Specification
 
 ## Purpose
-Manage the user's manga library through persistent bookmark storage in the local SQLite database, supporting CRUD operations and import/export functionality.
+Manage the user's shared title library through persistent SQLite storage, with one title catalog represented in both OS tables and a separate directory location for each operating system.
 
 ## Requirements
 
@@ -13,6 +13,7 @@ The system SHALL persist manga bookmarks in the local SQLite database.
 - WHEN the database is opened
 - THEN Linux SHALL load bookmarks from `bookmarks_linux` and Windows SHALL load bookmarks from `bookmarks_windows`
 - AND SHALL expose them through the shared `models.Manga` structure
+- AND SHALL synchronize shared title metadata between the OS tables while preserving each table's location
 - WHEN the database has no bookmark rows
 - THEN the system SHALL return an empty bookmarks structure (`{"manga": []}`)
 
@@ -21,6 +22,7 @@ The system SHALL persist manga bookmarks in the local SQLite database.
 - WHEN `SaveBookmarks` is called
 - THEN the complete in-memory bookmark list SHALL replace the contents of the current OS bookmark table inside one immediate write transaction
 - AND the previous bookmark rows SHALL be removed in the same transaction
+- AND title metadata SHALL be upserted into the other OS table without replacing its location
 - AND the write SHALL acquire Kansho's advisory write lock before changing the database
 
 #### Scenario: Bookmark ordering
@@ -39,8 +41,10 @@ Each bookmark SHALL track essential manga metadata.
 
 #### Scenario: Choose bookmark type
 - GIVEN the user adds a bookmark
-- WHEN the user selects Manga or Webtoon
+- WHEN the user explicitly selects Manga or Webtoon in the required radio group
 - THEN the bookmark SHALL be stored in the selected OS table with that type
+- AND the selection SHALL be stored in both OS tables
+- AND no type SHALL be selected by default
 
 ### Requirement: Config Directory
 The system SHALL ensure the config directory exists before any read/write operations.
@@ -65,15 +69,16 @@ The system SHALL store the database directory in a YAML preferences file.
 
 #### Scenario: Apply a root to existing bookmarks
 - GIVEN the user changes a root and checks its apply option
-- WHEN the user saves preferences
+- WHEN the user clicks Apply Selected Roots
 - THEN Kansho SHALL create a database snapshot in a `backup` subdirectory before changing paths
 - AND SHALL update locations only for matching OS and bookmark type rows to `<root>/<title>`
+- AND SHALL reload the library from the updated database
 - AND SHALL NOT move files
 
 #### Scenario: Save a root without applying it
 - GIVEN the user changes a root and leaves its apply option unchecked
-- WHEN the user saves preferences
-- THEN Kansho SHALL create a database snapshot in a `backup` subdirectory
+- WHEN the user saves preferences without applying the root
+- THEN Kansho SHALL save the root for future bookmarks
 - AND existing bookmark locations SHALL remain unchanged
 
 #### Scenario: Add bookmark with a configured root
@@ -137,25 +142,28 @@ The system SHALL support importing bookmarks from an external JSON file.
 - AND the merged bookmark list SHALL be saved to the database
 
 ### Requirement: Cross-Platform Bookmark Sync
-The system SHALL synchronize Linux and Windows bookmark tables by confirmed MangaDex ID.
+The system SHALL keep title metadata synchronized between Linux and Windows bookmark tables while preserving distinct platform locations.
 
-#### Scenario: Sync missing IDs
-- GIVEN a bookmark has a MangaDex ID and that ID is absent from the other OS table
-- WHEN the user selects Database → Sync Linux/Windows Bookmarks
-- THEN Kansho SHALL insert the bookmark into the other table
-- AND SHALL use the destination OS root for its bookmark type when configured
+#### Scenario: Match shared titles
+- GIVEN a bookmark exists in one OS table
+- WHEN Kansho saves bookmarks, opens the database, or the user selects Database → Sync Linux/Windows Bookmarks
+- THEN Kansho SHALL create or update its counterpart in the other OS table
+- AND SHALL match by MangaDex ID when present, otherwise by source URL or site and title
+- AND SHALL copy title, URL, chapters, site, shortname, type, and MangaDex ID
+- AND SHALL preserve the existing location in each OS table
+- AND SHALL use the destination OS root for a new counterpart when configured
+- AND SHALL NOT copy a source OS location into the destination OS table
 
-#### Scenario: Preserve matching IDs
-- GIVEN both OS tables contain the same MangaDex ID
+#### Scenario: Update shared title metadata
+- GIVEN both OS tables contain the same title identity with different metadata
+- WHEN Kansho syncs bookmarks
+- THEN Kansho SHALL update the older title metadata from the more recently updated row
+- AND SHALL leave both platform locations unchanged
+
+#### Scenario: Sync a title without MangaDex ID
+- GIVEN a bookmark has a source URL or a site and title but no MangaDex ID
 - WHEN the user syncs bookmarks
-- THEN Kansho SHALL leave both rows unchanged
-
-#### Scenario: Skip bookmarks without IDs
-- GIVEN a bookmark has no MangaDex ID
-- WHEN the user syncs bookmarks
-- THEN Kansho SHALL leave it unchanged
-- AND SHALL report its OS table and title
-- AND SHALL tell the user to update its MangaDex information before syncing again
+- THEN Kansho SHALL synchronize it using the available title identity
 
 ### Requirement: Transaction Locks
 The system SHALL protect bookmark writes with an advisory database lock.

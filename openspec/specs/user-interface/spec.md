@@ -266,7 +266,8 @@ The system SHALL provide a Preferences dialog for the database directory and opt
 - AND the dialog SHALL show the path of `kansho.conf`
 - AND the dialog SHALL allow optional Linux and Windows roots for manga and webtoons
 - AND each root SHALL have an option to apply it to matching OS/type bookmark rows
-- AND changing any root SHALL create a database backup in `<database-dir>/backup/` first
+- AND an Apply Selected Roots button SHALL immediately rebase checked rows and reload the library
+- AND applying roots SHALL create a database backup in `<database-dir>/backup/` first
 
 #### Scenario: Sync platform bookmarks
 - GIVEN the database menu is visible
@@ -274,9 +275,10 @@ The system SHALL provide a Preferences dialog for the database directory and opt
 - THEN Kansho SHALL replace the main content with a bookmark comparison view
 - AND a Back to Library control SHALL restore the previous main content
 - AND the right side SHALL show Windows and Linux bookmark details in separate columns
-- WHEN the user selects Sync by MangaDex ID in that window
-- THEN Kansho SHALL sync rows without overwriting existing matching IDs
-- AND SHALL report each skipped row that has no MangaDex ID
+- WHEN the user selects Sync Title Data in that window
+- THEN Kansho SHALL synchronize title metadata in both OS tables while preserving each platform's location
+- AND SHALL match titles by MangaDex ID, source URL, or site/title
+- AND SHALL report inserted and updated rows for each platform
 
 #### Scenario: Change the database directory
 - GIVEN the user chooses a directory that does not contain a database

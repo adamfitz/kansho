@@ -722,6 +722,12 @@ func TestBookmarksRoundTripAndReplace(t *testing.T) {
 }
 
 func TestApplyRootToBookmarksByPlatformAndType(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	if err := preferences.Save(preferences.Preferences{DatabaseDirectory: filepath.Join(home, "db")}); err != nil {
+		t.Fatalf("save isolated preferences: %v", err)
+	}
 	path := filepath.Join(t.TempDir(), "roots.db")
 	linux, err := openPathForPlatform(path, "linux")
 	if err != nil {
@@ -740,11 +746,6 @@ func TestApplyRootToBookmarksByPlatformAndType(t *testing.T) {
 	}}); err != nil {
 		t.Fatalf("save Linux bookmarks: %v", err)
 	}
-	if err := windows.SaveBookmarks(models.Manga{Manga: []models.Bookmarks{
-		{Title: "Windows Manga", Type: "manga", Location: `C:\old`},
-	}}); err != nil {
-		t.Fatalf("save Windows bookmarks: %v", err)
-	}
 
 	updated, err := linux.ApplyRootToBookmarks("linux", "manga", "/mnt/library/manga")
 	if err != nil || updated != 1 {
@@ -754,11 +755,11 @@ func TestApplyRootToBookmarksByPlatformAndType(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load Linux bookmarks: %v", err)
 	}
-	if linuxRows.Manga[0].Location != filepath.Join("/mnt/library/manga", "Manga One") || linuxRows.Manga[1].Location != "/old/webtoon" {
+	if len(linuxRows.Manga) != 2 || linuxRows.Manga[0].Location != "/mnt/library/manga/Manga One" || linuxRows.Manga[1].Location != "/old/webtoon" {
 		t.Fatalf("Linux locations after root update = %+v", linuxRows.Manga)
 	}
 	windowsRows, err := windows.LoadBookmarks()
-	if err != nil || len(windowsRows.Manga) != 1 || windowsRows.Manga[0].Location != `C:\old` {
+	if err != nil || len(windowsRows.Manga) != 2 || windowsRows.Manga[0].Location != "" {
 		t.Fatalf("Windows rows changed after Linux root update: %+v, %v", windowsRows.Manga, err)
 	}
 }
@@ -802,13 +803,16 @@ func TestSetBookmarkMangaDexIDOnlyUpdatesCurrentPlatform(t *testing.T) {
 	}
 }
 
-func TestSyncPlatformBookmarksByMangaDexID(t *testing.T) {
+func TestSyncPlatformBookmarksSharesTitlesAndPreservesLocations(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	if err := preferences.Save(preferences.Preferences{
-		DatabaseDirectory: filepath.Join(home, "db"),
-		WindowsMangaRoot:  `D:\Manga`,
-		LinuxWebtoonRoot:  "/mnt/webtoons",
+		DatabaseDirectory:  filepath.Join(home, "db"),
+		WindowsMangaRoot:   `D:\Manga`,
+		WindowsWebtoonRoot: `D:\Webtoons`,
+		LinuxMangaRoot:     "/mnt/manga",
+		LinuxWebtoonRoot:   "/mnt/webtoons",
 	}); err != nil {
 		t.Fatalf("save preferences: %v", err)
 	}
@@ -828,15 +832,25 @@ func TestSyncPlatformBookmarksByMangaDexID(t *testing.T) {
 	if err := linux.SaveBookmarks(models.Manga{Manga: []models.Bookmarks{
 		{Title: "Linux Only", Type: "manga", Location: "/linux/source", MangaDexID: "id-linux"},
 		{Title: "Shared Linux", Type: "manga", Location: "/linux/shared", MangaDexID: "id-shared"},
-		{Title: "Needs ID", Type: "webtoon", Location: "/linux/no-id"},
+		{Title: "Unlinked Linux", Url: "https://example.test/linux", Site: "Example", Type: "webtoon", Location: "/linux/no-id"},
 	}}); err != nil {
 		t.Fatalf("save Linux bookmarks: %v", err)
 	}
-	if err := windows.SaveBookmarks(models.Manga{Manga: []models.Bookmarks{
-		{Title: "Windows Only", Type: "webtoon", Location: `C:\windows\source`, MangaDexID: "id-windows"},
-		{Title: "Shared Windows", Type: "manga", Location: `C:\windows\shared`, MangaDexID: "id-shared"},
-		{Title: "Also Needs ID", Type: "manga", Location: `C:\windows\no-id`},
-	}}); err != nil {
+	windowsBookmarks, err := windows.LoadBookmarks()
+	if err != nil {
+		t.Fatalf("load Windows bookmarks before adding: %v", err)
+	}
+	windowsBookmarks.Manga = append(windowsBookmarks.Manga,
+		models.Bookmarks{Title: "Windows Only", Type: "webtoon", Location: `C:\windows\source`, MangaDexID: "id-windows"},
+		models.Bookmarks{Title: "Unlinked Windows", Url: "https://example.test/windows", Site: "Example", Type: "manga", Location: `C:\windows\no-id`},
+	)
+	for i := range windowsBookmarks.Manga {
+		if windowsBookmarks.Manga[i].MangaDexID == "id-shared" {
+			windowsBookmarks.Manga[i].Title = "Shared Windows"
+			windowsBookmarks.Manga[i].Location = `C:\windows\shared`
+		}
+	}
+	if err := windows.SaveBookmarks(windowsBookmarks); err != nil {
 		t.Fatalf("save Windows bookmarks: %v", err)
 	}
 
@@ -844,7 +858,7 @@ func TestSyncPlatformBookmarksByMangaDexID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SyncPlatformBookmarks: %v", err)
 	}
-	if result.InsertedToLinux != 1 || result.InsertedToWindows != 1 || len(result.Skipped) != 2 {
+	if result.InsertedToLinux != 0 || result.InsertedToWindows != 0 || len(result.Skipped) != 0 {
 		t.Fatalf("sync result = %+v", result)
 	}
 	linuxRows, err := linux.LoadBookmarks()
@@ -855,40 +869,45 @@ func TestSyncPlatformBookmarksByMangaDexID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load Windows after sync: %v", err)
 	}
-	if len(linuxRows.Manga) != 4 || len(windowsRows.Manga) != 4 {
+	if len(linuxRows.Manga) != 5 || len(windowsRows.Manga) != 5 {
 		t.Fatalf("row counts after sync: Linux=%d Windows=%d", len(linuxRows.Manga), len(windowsRows.Manga))
 	}
-	var linuxCopy, windowsCopy, sharedWindows *models.Bookmarks
-	for _, bookmark := range windowsRows.Manga {
-		switch bookmark.MangaDexID {
-		case "id-linux":
-			copy := bookmark
-			windowsCopy = &copy
-		case "id-shared":
-			copy := bookmark
-			sharedWindows = &copy
-		}
-	}
+	linuxByID := make(map[string]models.Bookmarks)
+	windowsByID := make(map[string]models.Bookmarks)
 	for _, bookmark := range linuxRows.Manga {
-		if bookmark.MangaDexID == "id-windows" {
-			copy := bookmark
-			linuxCopy = &copy
+		linuxByID[bookmark.MangaDexID] = bookmark
+	}
+	for _, bookmark := range windowsRows.Manga {
+		windowsByID[bookmark.MangaDexID] = bookmark
+	}
+	if linuxByID["id-linux"].Title != windowsByID["id-linux"].Title || windowsByID["id-linux"].Location != `D:\Manga\Linux Only` {
+		t.Fatalf("Linux title was not shared with a Windows-specific root: Linux=%+v Windows=%+v", linuxByID["id-linux"], windowsByID["id-linux"])
+	}
+	if linuxByID["id-windows"].Title != windowsByID["id-windows"].Title || linuxByID["id-windows"].Location != "/mnt/webtoons/Windows Only" {
+		t.Fatalf("Windows title was not shared with a Linux-specific root: Linux=%+v Windows=%+v", linuxByID["id-windows"], windowsByID["id-windows"])
+	}
+	if linuxByID["id-shared"].Title != "Shared Windows" || windowsByID["id-shared"].Title != "Shared Windows" ||
+		linuxByID["id-shared"].Location != "/linux/shared" || windowsByID["id-shared"].Location != `C:\windows\shared` {
+		t.Fatalf("sync should share title metadata but preserve per-OS locations: Linux=%+v Windows=%+v", linuxByID["id-shared"], windowsByID["id-shared"])
+	}
+	for _, title := range []string{"Unlinked Linux", "Unlinked Windows"} {
+		var linuxFound, windowsFound bool
+		for _, bookmark := range linuxRows.Manga {
+			linuxFound = linuxFound || bookmark.Title == title
 		}
-	}
-	if windowsCopy == nil || windowsCopy.Location != `D:\Manga\Linux Only` {
-		t.Fatalf("Windows copy did not use configured root: %+v", windowsCopy)
-	}
-	if linuxCopy == nil || linuxCopy.Location != filepath.Join("/mnt/webtoons", "Windows Only") {
-		t.Fatalf("Linux copy did not use configured root: %+v", linuxCopy)
-	}
-	if sharedWindows == nil || sharedWindows.Title != "Shared Windows" || sharedWindows.Location != `C:\windows\shared` {
-		t.Fatalf("sync overwrote existing MangaDex ID row: %+v", sharedWindows)
+		for _, bookmark := range windowsRows.Manga {
+			windowsFound = windowsFound || bookmark.Title == title
+		}
+		if !linuxFound || !windowsFound {
+			t.Fatalf("unlinked title %q missing from both tables: Linux=%+v Windows=%+v", title, linuxRows.Manga, windowsRows.Manga)
+		}
 	}
 }
 
 func TestLegacyBookmarksMigrationRenamesFile(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 
 	configDir := filepath.Join(home, ".config", "kansho")
 	if err := os.MkdirAll(configDir, 0755); err != nil {
@@ -911,6 +930,12 @@ func TestLegacyBookmarksMigrationRenamesFile(t *testing.T) {
 	}
 	if len(loaded.Manga) != 1 || loaded.Manga[0].Title != "Migrated" {
 		t.Fatalf("migrated bookmarks = %+v", loaded.Manga)
+	}
+	for _, platform := range []string{"linux", "windows"} {
+		platformBookmarks, err := store.LoadPlatformBookmarks(platform)
+		if err != nil || len(platformBookmarks.Manga) != 1 || platformBookmarks.Manga[0].Title != "Migrated" {
+			t.Fatalf("%s bookmarks after open sync = %+v, %v", platform, platformBookmarks.Manga, err)
+		}
 	}
 	if _, err := os.Stat(legacy); !os.IsNotExist(err) {
 		t.Fatalf("legacy bookmarks file still exists: %v", err)
@@ -978,16 +1003,16 @@ func TestCompareAndMergeMissingRows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CompareWith: %v", err)
 	}
-	if diff.TotalMissing != 1 {
-		t.Fatalf("TotalMissing = %d, want 1 (%+v)", diff.TotalMissing, diff)
+	if diff.TotalMissing != 2 {
+		t.Fatalf("TotalMissing = %d, want 2 platform rows (%+v)", diff.TotalMissing, diff)
 	}
 
 	result, err := target.MergeMissingFrom(source.Path(), nil)
 	if err != nil {
 		t.Fatalf("MergeMissingFrom: %v", err)
 	}
-	if result.TotalInserted != 1 {
-		t.Fatalf("TotalInserted = %d, want 1", result.TotalInserted)
+	if result.TotalInserted != 2 {
+		t.Fatalf("TotalInserted = %d, want 2 platform rows", result.TotalInserted)
 	}
 	if _, err := os.Stat(result.BackupPath); err != nil {
 		t.Fatalf("target backup missing: %v", err)

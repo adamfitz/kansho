@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path"
+	"sort"
 	"strings"
 	"time"
 
@@ -69,8 +70,45 @@ func (s *Store) LoadPlatformBookmarks(platform string) (models.Manga, error) {
 // Kansho's UI edits bookmarks in memory and saves the complete list, so a full
 // replacement keeps the existing behaviour while still being atomic.
 func (s *Store) SaveBookmarks(data models.Manga) error {
+	prefs, err := preferences.Load()
+	if err != nil {
+		return fmt.Errorf("load root preferences: %w", err)
+	}
 	return s.withWriteTx(func(tx *sql.Tx) error {
 		table := s.platformBookmarksTable()
+		previous, err := readPlatformBookmarkRows(tx, table)
+		if err != nil {
+			return err
+		}
+		currentKeys := make(map[string]bool, len(data.Manga))
+		for _, bookmark := range data.Manga {
+			if key := bookmarkIdentity(bookmark); key != "" {
+				currentKeys[key] = true
+			}
+		}
+		removedKeys := make(map[string]bool)
+		for _, row := range previous {
+			if key := bookmarkIdentity(row.bookmark); key != "" && !currentKeys[key] {
+				removedKeys[key] = true
+			}
+		}
+
+		otherTable := "bookmarks_linux"
+		if table == "bookmarks_linux" {
+			otherTable = "bookmarks_windows"
+		}
+		otherRows, err := readPlatformBookmarkRows(tx, otherTable)
+		if err != nil {
+			return err
+		}
+		for _, row := range otherRows {
+			if removedKeys[bookmarkIdentity(row.bookmark)] {
+				if _, err := tx.Exec(`DELETE FROM `+otherTable+` WHERE id = ?`, row.id); err != nil {
+					return fmt.Errorf("remove deleted bookmark from other platform: %w", err)
+				}
+			}
+		}
+
 		if _, err := tx.Exec(`DELETE FROM ` + table); err != nil {
 			return fmt.Errorf("clear bookmarks: %w", err)
 		}
@@ -97,7 +135,7 @@ func (s *Store) SaveBookmarks(data models.Manga) error {
 				return fmt.Errorf("insert bookmark %q: %w", bookmark.Title, err)
 			}
 		}
-		return nil
+		return syncPlatformBookmarksTx(tx, prefs, s.platform, &BookmarkSyncResult{Skipped: []BookmarkSyncSkip{}})
 	})
 }
 
@@ -183,58 +221,46 @@ type BookmarkSyncSkip struct {
 type BookmarkSyncResult struct {
 	InsertedToLinux   int
 	InsertedToWindows int
+	UpdatedToLinux    int
+	UpdatedToWindows  int
 	Skipped           []BookmarkSyncSkip
 }
 
-// SyncPlatformBookmarks copies missing MangaDex IDs in both directions.
+type platformBookmarkRow struct {
+	id        int64
+	bookmark  models.Bookmarks
+	updatedAt string
+}
+
+// SyncPlatformBookmarks keeps title metadata aligned across both OS tables
+// while retaining each table's own directory location.
 func (s *Store) SyncPlatformBookmarks() (*BookmarkSyncResult, error) {
 	prefs, err := preferences.Load()
 	if err != nil {
 		return nil, fmt.Errorf("load root preferences: %w", err)
 	}
-	linuxTable, _ := bookmarksTable("linux")
-	windowsTable, _ := bookmarksTable("windows")
 	result := &BookmarkSyncResult{Skipped: []BookmarkSyncSkip{}}
-	err = s.withWriteTx(func(tx *sql.Tx) error {
-		linuxBookmarks, err := readPlatformBookmarks(tx, linuxTable)
-		if err != nil {
-			return err
-		}
-		windowsBookmarks, err := readPlatformBookmarks(tx, windowsTable)
-		if err != nil {
-			return err
-		}
-		linuxIDs := bookmarkIDSet(linuxBookmarks)
-		windowsIDs := bookmarkIDSet(windowsBookmarks)
-
-		if err := copyMissingPlatformBookmarks(tx, windowsTable, "linux", linuxBookmarks, windowsIDs, prefs, result); err != nil {
-			return err
-		}
-		if err := copyMissingPlatformBookmarks(tx, linuxTable, "windows", windowsBookmarks, linuxIDs, prefs, result); err != nil {
-			return err
-		}
-		return nil
-	})
+	err = s.withWriteTx(func(tx *sql.Tx) error { return syncPlatformBookmarksTx(tx, prefs, s.platform, result) })
 	if err != nil {
 		return nil, err
 	}
 	return result, nil
 }
 
-func readPlatformBookmarks(tx *sql.Tx, table string) ([]models.Bookmarks, error) {
-	rows, err := tx.Query(`SELECT title, url, chapters, location, site, shortname, type, mangadex_id FROM ` + table + ` ORDER BY id`)
+func readPlatformBookmarkRows(tx *sql.Tx, table string) ([]platformBookmarkRow, error) {
+	rows, err := tx.Query(`SELECT id, title, url, chapters, location, site, shortname, type, mangadex_id, updated_at FROM ` + table + ` ORDER BY id`)
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", table, err)
 	}
 	defer rows.Close()
-	var bookmarks []models.Bookmarks
+	var bookmarks []platformBookmarkRow
 	for rows.Next() {
-		var bookmark models.Bookmarks
-		if err := rows.Scan(&bookmark.Title, &bookmark.Url, &bookmark.Chapters, &bookmark.Location,
-			&bookmark.Site, &bookmark.Shortname, &bookmark.Type, &bookmark.MangaDexID); err != nil {
+		var row platformBookmarkRow
+		if err := rows.Scan(&row.id, &row.bookmark.Title, &row.bookmark.Url, &row.bookmark.Chapters, &row.bookmark.Location,
+			&row.bookmark.Site, &row.bookmark.Shortname, &row.bookmark.Type, &row.bookmark.MangaDexID, &row.updatedAt); err != nil {
 			return nil, fmt.Errorf("read row from %s: %w", table, err)
 		}
-		bookmarks = append(bookmarks, bookmark)
+		bookmarks = append(bookmarks, row)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("read rows from %s: %w", table, err)
@@ -242,58 +268,149 @@ func readPlatformBookmarks(tx *sql.Tx, table string) ([]models.Bookmarks, error)
 	return bookmarks, nil
 }
 
-func bookmarkIDSet(bookmarks []models.Bookmarks) map[string]bool {
-	ids := make(map[string]bool, len(bookmarks))
-	for _, bookmark := range bookmarks {
-		if id := strings.TrimSpace(bookmark.MangaDexID); id != "" {
-			ids[id] = true
-		}
+func bookmarkIdentity(bookmark models.Bookmarks) string {
+	if id := strings.ToLower(strings.TrimSpace(bookmark.MangaDexID)); id != "" {
+		return "id:" + id
 	}
-	return ids
+	site := strings.ToLower(strings.Join(strings.Fields(bookmark.Site), " "))
+	if url := strings.ToLower(strings.TrimSpace(bookmark.Url)); url != "" {
+		return "url:" + site + "\x00" + strings.TrimRight(url, "/")
+	}
+	shortname := strings.ToLower(strings.TrimSpace(bookmark.Shortname))
+	title := strings.ToLower(strings.Join(strings.Fields(bookmark.Title), " "))
+	if shortname != "" {
+		return "short:" + site + "\x00" + shortname
+	}
+	if title != "" {
+		return "title:" + site + "\x00" + title
+	}
+	return ""
 }
 
-func copyMissingPlatformBookmarks(tx *sql.Tx, targetTable, sourcePlatform string,
-	bookmarks []models.Bookmarks, targetIDs map[string]bool, prefs preferences.Preferences, result *BookmarkSyncResult,
-) error {
-	targetPlatform := "linux"
-	if sourcePlatform == "linux" {
-		targetPlatform = "windows"
+func syncPlatformBookmarksTx(tx *sql.Tx, prefs preferences.Preferences, preferredPlatform string, result *BookmarkSyncResult) error {
+	linuxRows, err := readPlatformBookmarkRows(tx, "bookmarks_linux")
+	if err != nil {
+		return err
 	}
-	for _, bookmark := range bookmarks {
-		id := strings.TrimSpace(bookmark.MangaDexID)
-		if id == "" {
-			result.Skipped = append(result.Skipped, BookmarkSyncSkip{Platform: sourcePlatform, Title: bookmark.Title})
+	windowsRows, err := readPlatformBookmarkRows(tx, "bookmarks_windows")
+	if err != nil {
+		return err
+	}
+	linuxByKey := latestBookmarksByIdentity(linuxRows)
+	windowsByKey := latestBookmarksByIdentity(windowsRows)
+	keys := make(map[string]bool, len(linuxByKey)+len(windowsByKey))
+	for key := range linuxByKey {
+		keys[key] = true
+	}
+	for key := range windowsByKey {
+		keys[key] = true
+	}
+	orderedKeys := make([]string, 0, len(keys))
+	for key := range keys {
+		orderedKeys = append(orderedKeys, key)
+	}
+	sort.Strings(orderedKeys)
+
+	for _, key := range orderedKeys {
+		linuxRow, hasLinux := linuxByKey[key]
+		windowsRow, hasWindows := windowsByKey[key]
+		if !hasLinux && !hasWindows {
 			continue
 		}
-		if targetIDs[id] {
+		if key == "" {
 			continue
 		}
-		bookmark.Type = bookmarkType(bookmark.Type)
-		if root := strings.TrimSpace(prefs.RootDirectory(targetPlatform, bookmark.Type)); root != "" {
-			if targetPlatform == "linux" {
-				var err error
-				root, err = preferences.ExpandPath(root)
+		canonical := linuxRow
+		if !hasLinux || (hasWindows && (windowsRow.updatedAt > linuxRow.updatedAt ||
+			(windowsRow.updatedAt == linuxRow.updatedAt && preferredPlatform == "windows"))) {
+			canonical = windowsRow
+		}
+		canonical.bookmark.Type = bookmarkType(canonical.bookmark.Type)
+
+		for _, target := range []struct {
+			platform string
+			table    string
+			row      platformBookmarkRow
+			exists   bool
+		}{
+			{platform: "linux", table: "bookmarks_linux", row: linuxRow, exists: hasLinux},
+			{platform: "windows", table: "bookmarks_windows", row: windowsRow, exists: hasWindows},
+		} {
+			if !target.exists {
+				location, err := bookmarkRootLocation(prefs, target.platform, canonical.bookmark.Type, canonical.bookmark.Title)
 				if err != nil {
-					return fmt.Errorf("expand %s root %q: %w", targetPlatform, root, err)
+					return err
 				}
+				bookmark := canonical.bookmark
+				if _, err := tx.Exec(`INSERT INTO `+target.table+`
+					(title, url, chapters, location, site, shortname, type, mangadex_id, updated_at)
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+					bookmark.Title, bookmark.Url, bookmark.Chapters, location, bookmark.Site,
+					bookmark.Shortname, bookmark.Type, strings.TrimSpace(bookmark.MangaDexID)); err != nil {
+					return fmt.Errorf("add %q to %s bookmarks: %w", bookmark.Title, target.platform, err)
+				}
+				if target.platform == "linux" {
+					result.InsertedToLinux++
+				} else {
+					result.InsertedToWindows++
+				}
+				continue
 			}
-			bookmark.Location = joinBookmarkRoot(root, bookmark.Title, targetPlatform)
-		}
-		if _, err := tx.Exec(`INSERT INTO `+targetTable+`
-			(title, url, chapters, location, site, shortname, type, mangadex_id, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
-			bookmark.Title, bookmark.Url, bookmark.Chapters, bookmark.Location, bookmark.Site,
-			bookmark.Shortname, bookmark.Type, id); err != nil {
-			return fmt.Errorf("copy %q from %s to %s: %w", bookmark.Title, sourcePlatform, targetPlatform, err)
-		}
-		targetIDs[id] = true
-		if targetPlatform == "linux" {
-			result.InsertedToLinux++
-		} else {
-			result.InsertedToWindows++
+			if sameBookmarkMetadata(target.row.bookmark, canonical.bookmark) {
+				continue
+			}
+			bookmark := canonical.bookmark
+			if _, err := tx.Exec(`UPDATE `+target.table+` SET
+				title = ?, url = ?, chapters = ?, site = ?, shortname = ?, type = ?, mangadex_id = ?, updated_at = CURRENT_TIMESTAMP
+				WHERE id = ?`, bookmark.Title, bookmark.Url, bookmark.Chapters, bookmark.Site,
+				bookmark.Shortname, bookmark.Type, strings.TrimSpace(bookmark.MangaDexID), target.row.id); err != nil {
+				return fmt.Errorf("update %q in %s bookmarks: %w", bookmark.Title, target.platform, err)
+			}
+			if target.platform == "linux" {
+				result.UpdatedToLinux++
+			} else {
+				result.UpdatedToWindows++
+			}
 		}
 	}
 	return nil
+}
+
+func latestBookmarksByIdentity(rows []platformBookmarkRow) map[string]platformBookmarkRow {
+	latest := make(map[string]platformBookmarkRow, len(rows))
+	for _, row := range rows {
+		key := bookmarkIdentity(row.bookmark)
+		if key == "" {
+			continue
+		}
+		current, exists := latest[key]
+		if !exists || row.updatedAt > current.updatedAt {
+			latest[key] = row
+		}
+	}
+	return latest
+}
+
+func sameBookmarkMetadata(left, right models.Bookmarks) bool {
+	return left.Title == right.Title && left.Url == right.Url && left.Chapters == right.Chapters &&
+		left.Site == right.Site && left.Shortname == right.Shortname &&
+		bookmarkType(left.Type) == bookmarkType(right.Type) &&
+		strings.TrimSpace(left.MangaDexID) == strings.TrimSpace(right.MangaDexID)
+}
+
+func bookmarkRootLocation(prefs preferences.Preferences, platform, kind, title string) (string, error) {
+	root := strings.TrimSpace(prefs.RootDirectory(platform, kind))
+	if root == "" {
+		return "", nil
+	}
+	if platform == "linux" {
+		var err error
+		root, err = preferences.ExpandPath(root)
+		if err != nil {
+			return "", fmt.Errorf("expand %s root %q: %w", platform, root, err)
+		}
+	}
+	return joinBookmarkRoot(root, title, platform), nil
 }
 
 // SetBookmarkMangaDexID links the current platform's exact bookmark title to a user-confirmed ID.

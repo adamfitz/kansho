@@ -36,17 +36,17 @@ type EditMangaView struct {
 	Card fyne.CanvasObject
 
 	// UI components that need to be accessed after creation
-	SiteSelect           *widget.Select   // Dropdown for site selection
-	TypeSelect           *widget.Select   // Manga or webtoon bookmark type
-	Title                *widget.Entry    // Text input for manga name
-	UrlEntry             *widget.Entry    // Text input for manga URL
-	DirectoryLabel       *widget.Label    // Label showing selected directory
-	DirectoryButton      *widget.Button   // Button to open directory picker
-	AddButton            *widget.Button   // Button to add new manga
-	SaveButton           *widget.Button   // Button to save changes to existing manga
-	CancelButton         *widget.Button   // Button to cancel editing
-	CustomDirectoryCheck *widget.Check    // Selects a custom root instead of the configured default
-	SelectedDirectoryURI fyne.ListableURI // Stores the selected directory URI
+	SiteSelect           *widget.Select     // Dropdown for site selection
+	TypeSelect           *widget.RadioGroup // Required Manga or Webtoon bookmark type
+	Title                *widget.Entry      // Text input for manga name
+	UrlEntry             *widget.Entry      // Text input for manga URL
+	DirectoryLabel       *widget.Label      // Label showing selected directory
+	DirectoryButton      *widget.Button     // Button to open directory picker
+	AddButton            *widget.Button     // Button to add new manga
+	SaveButton           *widget.Button     // Button to save changes to existing manga
+	CancelButton         *widget.Button     // Button to cancel editing
+	CustomDirectoryCheck *widget.Check      // Selects a custom root instead of the configured default
+	SelectedDirectoryURI fyne.ListableURI   // Stores the selected directory URI
 
 	// state is a reference to the shared application state
 	State *KanshoAppState
@@ -92,10 +92,11 @@ func NewEditMangaView(State *KanshoAppState) *EditMangaView {
 		view.onSiteSelected(selected)
 	})
 	view.SiteSelect.PlaceHolder = "Site name"
-	view.TypeSelect = widget.NewSelect([]string{"Manga", "Webtoon"}, func(string) {
+	view.TypeSelect = widget.NewRadioGroup([]string{"Manga", "Webtoon"}, func(string) {
 		view.refreshDirectoryChoice(false)
 	})
-	view.TypeSelect.SetSelected("Manga")
+	view.TypeSelect.Required = true
+	view.TypeSelect.Horizontal = true
 
 	// Create the title/name input field
 	view.Title = widget.NewEntry()
@@ -204,6 +205,11 @@ func (v *EditMangaView) refreshDirectoryChoice(resetCustom bool) {
 	if v.TypeSelect == nil || v.CustomDirectoryCheck == nil || v.DirectoryButton == nil {
 		return
 	}
+	if v.TypeSelect.Selected == "" {
+		v.DirectoryLabel.SetText("Select Manga or Webtoon first")
+		v.DirectoryButton.Disable()
+		return
+	}
 	kind := "manga"
 	if v.TypeSelect.Selected == "Webtoon" {
 		kind = "webtoon"
@@ -230,6 +236,17 @@ func (v *EditMangaView) refreshDirectoryChoice(resetCustom bool) {
 	v.DirectoryButton.Enable()
 	if v.SelectedDirectoryURI == nil {
 		v.DirectoryLabel.SetText("No directory selected")
+	}
+}
+
+func selectedBookmarkType(selection string) (string, error) {
+	switch selection {
+	case "Manga":
+		return "manga", nil
+	case "Webtoon":
+		return "webtoon", nil
+	default:
+		return "", fmt.Errorf("select Manga or Webtoon for this title")
 	}
 }
 
@@ -315,7 +332,8 @@ func (v *EditMangaView) clearForm() {
 	v.DirectoryLabel.SetText("No directory selected")
 	v.SelectedDirectoryURI = nil
 	v.SiteSelect.ClearSelected()
-	v.TypeSelect.SetSelected("Manga")
+	v.CustomDirectoryCheck.SetChecked(false)
+	v.TypeSelect.SetSelected("")
 	v.refreshDirectoryChoice(true)
 
 	// Reset to add mode
@@ -377,6 +395,11 @@ func (v *EditMangaView) onSiteSelected(selected string) {
 
 // onAddButtonClicked is called when the user clicks the Add Manga button.
 func (v *EditMangaView) onAddButtonClicked() {
+	bookmarkType, err := selectedBookmarkType(v.TypeSelect.Selected)
+	if err != nil {
+		dialog.ShowError(err, v.State.Window)
+		return
+	}
 	selectedSite := v.SiteSelect.Selected
 
 	title := ""
@@ -403,7 +426,7 @@ func (v *EditMangaView) onAddButtonClicked() {
 	}
 
 	// Validate the input
-	err := validation.ValidateAddManga(selectedSite, title, "", url, location, &v.SitesConfig)
+	err = validation.ValidateAddManga(selectedSite, title, "", url, location, &v.SitesConfig)
 	if err != nil {
 		if v.State != nil && v.State.Window != nil {
 			dialog.ShowError(err, v.State.Window)
@@ -430,7 +453,7 @@ func (v *EditMangaView) onAddButtonClicked() {
 		Url:       url,
 		Site:      selectedSite,
 		Location:  location,
-		Type:      strings.ToLower(v.TypeSelect.Selected),
+		Type:      bookmarkType,
 	}
 
 	// Add to app state
@@ -454,6 +477,11 @@ func (v *EditMangaView) onSaveButtonClicked() {
 		dialog.ShowError(fmt.Errorf("no manga loaded for editing"), v.State.Window)
 		return
 	}
+	bookmarkType, err := selectedBookmarkType(v.TypeSelect.Selected)
+	if err != nil {
+		dialog.ShowError(err, v.State.Window)
+		return
+	}
 
 	selectedSite := v.SiteSelect.Selected
 	title := v.Title.Text
@@ -468,7 +496,7 @@ func (v *EditMangaView) onSaveButtonClicked() {
 	}
 
 	// Validate the input
-	err := validation.ValidateAddManga(selectedSite, title, "", url, newLocation, &v.SitesConfig)
+	err = validation.ValidateAddManga(selectedSite, title, "", url, newLocation, &v.SitesConfig)
 	if err != nil {
 		dialog.ShowError(err, v.State.Window)
 		return
@@ -518,7 +546,7 @@ func (v *EditMangaView) onSaveButtonClicked() {
 	v.State.MangaData.Manga[v.editingMangaID].Site = selectedSite
 	v.State.MangaData.Manga[v.editingMangaID].Url = url
 	v.State.MangaData.Manga[v.editingMangaID].Location = newLocation
-	v.State.MangaData.Manga[v.editingMangaID].Type = strings.ToLower(v.TypeSelect.Selected)
+	v.State.MangaData.Manga[v.editingMangaID].Type = bookmarkType
 	v.State.MangaData.Manga[v.editingMangaID].Shortname = "" // Remove shortname
 
 	// Save to the database

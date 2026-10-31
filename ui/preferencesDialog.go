@@ -56,6 +56,38 @@ func ShowPreferencesDialog(_ fyne.App, window fyne.Window) {
 	for _, control := range rootControls {
 		rootRows = append(rootRows, control.content)
 	}
+	applyRootsButton := widget.NewButton("Apply Selected Roots", func() {
+		updatedPrefs := prefs
+		for _, control := range rootControls {
+			updatedPrefs.SetRootDirectory(control.platform, control.kind, control.entry.Text)
+		}
+		updates, err := selectedBookmarkRootUpdates(updatedPrefs, rootControls)
+		if err != nil {
+			dialog.ShowError(err, window)
+			return
+		}
+		if len(updates) == 0 {
+			dialog.ShowInformation("Preferences", "Select at least one root to apply.", window)
+			return
+		}
+		if err := preferences.Save(updatedPrefs); err != nil {
+			dialog.ShowError(fmt.Errorf("cannot save root preferences: %v", err), window)
+			return
+		}
+		updatedBookmarks, backupPath, err := applyRootUpdatesToStore(updates)
+		if err != nil {
+			_ = preferences.Save(prefs)
+			dialog.ShowError(err, window)
+			return
+		}
+		prefs = updatedPrefs
+		for _, control := range rootControls {
+			control.apply.SetChecked(false)
+		}
+		reloadMainWindow(window)
+		dialog.ShowInformation("Preferences",
+			fmt.Sprintf("Updated %d bookmark location(s). Database backup: %s", updatedBookmarks, backupPath), window)
+	})
 
 	configPath, _ := preferences.FilePath()
 	content := container.NewVScroll(container.NewVBox(
@@ -64,6 +96,7 @@ func ShowPreferencesDialog(_ fyne.App, window fyne.Window) {
 		widget.NewLabel("Default bookmark roots:"),
 		widget.NewLabel("Applying a root changes saved paths only; it does not move files."),
 		container.NewVBox(rootRows...),
+		applyRootsButton,
 		widget.NewLabel("Preferences file: "+configPath),
 		widget.NewLabel("Bookmarks are stored in the database; there is no separate bookmarks file."),
 	))
@@ -141,41 +174,16 @@ func applyPreferences(window fyne.Window, oldDir, rawNewDir string,
 	backupPath := ""
 	updatedBookmarks := 0
 	var rootUpdates []mangadex.BookmarkRootUpdate
-	if rootChanged || applyRoot {
-		for _, control := range rootControls {
-			if !control.apply.Checked {
-				continue
-			}
-			root := strings.TrimSpace(newPrefs.RootDirectory(control.platform, control.kind))
-			if root == "" {
-				dialog.ShowError(fmt.Errorf("set a %s %s root before applying it", control.platform, control.kind), window)
-				return
-			}
-			if control.platform == "linux" {
-				root, err = preferences.ExpandPath(root)
-				if err != nil {
-					dialog.ShowError(fmt.Errorf("invalid Linux root directory: %v", err), window)
-					return
-				}
-			}
-			rootUpdates = append(rootUpdates, mangadex.BookmarkRootUpdate{Platform: control.platform, Type: control.kind, Root: root})
-		}
-		store, err := mangadex.GetStore()
+	if applyRoot {
+		rootUpdates, err = selectedBookmarkRootUpdates(newPrefs, rootControls)
 		if err != nil {
-			dialog.ShowError(fmt.Errorf("cannot open the current database: %v", err), window)
+			dialog.ShowError(err, window)
 			return
 		}
-		backupPath = nextRootSettingsBackupPath(store.Path())
-		if err := store.Backup(backupPath); err != nil {
-			dialog.ShowError(fmt.Errorf("cannot back up the database before changing roots: %v", err), window)
+		updatedBookmarks, backupPath, err = applyRootUpdatesToStore(rootUpdates)
+		if err != nil {
+			dialog.ShowError(err, window)
 			return
-		}
-		if len(rootUpdates) > 0 {
-			updatedBookmarks, err = store.ApplyBookmarkRootUpdates(rootUpdates)
-			if err != nil {
-				dialog.ShowError(fmt.Errorf("cannot update bookmark paths: %v", err), window)
-				return
-			}
 		}
 	}
 	oldDB := filepath.Join(oldDir, preferences.DatabaseFileName)
@@ -228,6 +236,44 @@ func applyPreferences(window fyne.Window, oldDir, rawNewDir string,
 				fmt.Sprintf("Kansho will use a new database at %s.", newDB), window)
 		}
 	}
+}
+
+func selectedBookmarkRootUpdates(prefs preferences.Preferences, controls []rootPreferenceControl) ([]mangadex.BookmarkRootUpdate, error) {
+	var updates []mangadex.BookmarkRootUpdate
+	for _, control := range controls {
+		if !control.apply.Checked {
+			continue
+		}
+		root := strings.TrimSpace(prefs.RootDirectory(control.platform, control.kind))
+		if root == "" {
+			return nil, fmt.Errorf("set a %s %s root before applying it", control.platform, control.kind)
+		}
+		if control.platform == "linux" {
+			var err error
+			root, err = preferences.ExpandPath(root)
+			if err != nil {
+				return nil, fmt.Errorf("invalid Linux root directory: %v", err)
+			}
+		}
+		updates = append(updates, mangadex.BookmarkRootUpdate{Platform: control.platform, Type: control.kind, Root: root})
+	}
+	return updates, nil
+}
+
+func applyRootUpdatesToStore(updates []mangadex.BookmarkRootUpdate) (int, string, error) {
+	store, err := mangadex.GetStore()
+	if err != nil {
+		return 0, "", fmt.Errorf("cannot open the current database: %w", err)
+	}
+	backupPath := nextRootSettingsBackupPath(store.Path())
+	if err := store.Backup(backupPath); err != nil {
+		return 0, "", fmt.Errorf("cannot back up the database before changing roots: %w", err)
+	}
+	updated, err := store.ApplyBookmarkRootUpdates(updates)
+	if err != nil {
+		return 0, "", fmt.Errorf("cannot update bookmark paths: %w", err)
+	}
+	return updated, backupPath, nil
 }
 
 func nextRootSettingsBackupPath(databasePath string) string {
