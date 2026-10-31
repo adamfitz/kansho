@@ -163,6 +163,9 @@ func Open() (*Store, error) {
 		_ = store.Close()
 		return nil, fmt.Errorf("migrate bookmarks to %s table: %w", store.platform, err)
 	}
+	if _, err := store.SyncPlatformBookmarks(); err != nil {
+		log.Printf("[mangadex] synchronize platform bookmarks on open: %v", err)
+	}
 	return store, nil
 }
 
@@ -790,7 +793,7 @@ func ValidateSchema(dbPath string) error {
 // pass schema validation and an integrity check first. The current database is
 // backed up to a timestamped file inside the config directory before the swap
 // so a bad restore is never destructive.
-func (s *Store) Restore(src string) error {
+func (s *Store) Restore(src string) (restoreErr error) {
 	if err := ValidateSchema(src); err != nil {
 		return fmt.Errorf("restore rejected: %w", err)
 	}
@@ -805,9 +808,29 @@ func (s *Store) Restore(src string) error {
 	if err := s.conn.Close(); err != nil {
 		return fmt.Errorf("close current database: %w", err)
 	}
+	s.conn = nil
+	reopenOnReturn := true
 	defer func() {
-		s.conn, _ = sql.Open("sqlite", s.path+sqliteDSN)
-		_ = s.conn.Ping()
+		if !reopenOnReturn {
+			return
+		}
+		conn, err := sql.Open("sqlite", s.path+sqliteDSN)
+		if err == nil {
+			err = conn.Ping()
+		}
+		if err != nil {
+			if conn != nil {
+				_ = conn.Close()
+			}
+			reopenErr := fmt.Errorf("reopen database after failed restore: %w", err)
+			if restoreErr == nil {
+				restoreErr = reopenErr
+			} else {
+				restoreErr = fmt.Errorf("%v; %w", restoreErr, reopenErr)
+			}
+			return
+		}
+		s.conn = conn
 	}()
 
 	srcContent, err := os.ReadFile(src)
@@ -826,13 +849,16 @@ func (s *Store) Restore(src string) error {
 	}
 
 	// Re-open and validate the restored database.
-	s.conn, err = sql.Open("sqlite", s.path+sqliteDSN)
+	conn, err := sql.Open("sqlite", s.path+sqliteDSN)
 	if err != nil {
 		return fmt.Errorf("reopen restored database: %w", err)
 	}
-	if err := s.conn.Ping(); err != nil {
+	if err := conn.Ping(); err != nil {
+		_ = conn.Close()
 		return fmt.Errorf("ping restored database: %w", err)
 	}
+	s.conn = conn
+	reopenOnReturn = false
 	result, err := s.IntegrityCheck()
 	if err != nil {
 		return fmt.Errorf("validate restored database: %w", err)

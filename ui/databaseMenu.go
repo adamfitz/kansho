@@ -166,19 +166,19 @@ func ShowSyncBookmarksView(parent fyne.Window) {
 		parent.SetContent(originalContent)
 		parent.RequestFocus()
 	})
-	syncButton := widget.NewButton("Sync by MangaDex ID", func() {
+	syncButton := widget.NewButton("Sync Title Data", func() {
 		result, err := store.SyncPlatformBookmarks()
 		if err != nil {
 			status.SetText(fmt.Sprintf("Bookmark sync failed: %v", err))
 			return
 		}
 		var summary strings.Builder
-		fmt.Fprintf(&summary, "Added to Linux: %d    Added to Windows: %d",
-			result.InsertedToLinux, result.InsertedToWindows)
+		fmt.Fprintf(&summary, "Linux: %d added, %d updated    Windows: %d added, %d updated",
+			result.InsertedToLinux, result.UpdatedToLinux, result.InsertedToWindows, result.UpdatedToWindows)
 		if len(result.Skipped) == 0 {
 			summary.WriteString("\nNo bookmarks skipped.")
 		} else {
-			fmt.Fprintf(&summary, "\nSkipped %d bookmark(s) without MangaDex IDs. Add MangaDex information, then sync again:", len(result.Skipped))
+			fmt.Fprintf(&summary, "\nSkipped %d bookmark(s) without enough title or URL information to match:", len(result.Skipped))
 			for _, skipped := range result.Skipped {
 				fmt.Fprintf(&summary, "\n%s: %s", skipped.Platform, skipped.Title)
 			}
@@ -189,7 +189,7 @@ func ShowSyncBookmarksView(parent fyne.Window) {
 		}
 	})
 	content := container.NewBorder(container.NewBorder(nil, nil, nil, backButton,
-		widget.NewLabel("Select an entry. Rows with IDs group by MangaDex ID; rows without IDs remain separate.")),
+		widget.NewLabel("Title information is shared across platforms; saved locations remain platform-specific.")),
 		container.NewVBox(container.NewHBox(refreshButton, syncButton), statusScroll),
 		nil, nil, comparison)
 	if err := loadGroups(""); err != nil {
@@ -204,9 +204,20 @@ func buildPlatformBookmarkGroups(linux, windows []models.Bookmarks) []platformBo
 	appendBookmarks := func(platform string, bookmarks []models.Bookmarks) {
 		for index, bookmark := range bookmarks {
 			id := strings.TrimSpace(bookmark.MangaDexID)
-			key := "id:" + id
-			if id == "" {
-				key = fmt.Sprintf("%s:no-id:%d", platform, index)
+			key := ""
+			if id != "" {
+				key = "id:" + strings.ToLower(id)
+			} else {
+				site := strings.ToLower(strings.Join(strings.Fields(bookmark.Site), " "))
+				if url := strings.ToLower(strings.TrimRight(strings.TrimSpace(bookmark.Url), "/")); url != "" {
+					key = "url:" + site + "\x00" + url
+				} else if shortname := strings.ToLower(strings.TrimSpace(bookmark.Shortname)); shortname != "" {
+					key = "short:" + site + "\x00" + shortname
+				} else if title := strings.ToLower(strings.Join(strings.Fields(bookmark.Title), " ")); title != "" {
+					key = "title:" + site + "\x00" + title
+				} else {
+					key = fmt.Sprintf("%s:no-identity:%d", platform, index)
+				}
 			}
 			groupIndex, exists := indices[key]
 			if !exists {
@@ -231,11 +242,7 @@ func buildPlatformBookmarkGroups(linux, windows []models.Bookmarks) []platformBo
 
 func platformBookmarkGroupLabel(group platformBookmarkGroup) string {
 	if group.id == "" {
-		platform := "Linux"
-		if len(group.windows) > 0 {
-			platform = "Windows"
-		}
-		return fmt.Sprintf("%s: %s (no MangaDex ID)", platform, group.title)
+		return fmt.Sprintf("%s (no MangaDex ID)", group.title)
 	}
 	return fmt.Sprintf("%s  [Windows %d | Linux %d]", group.title, len(group.windows), len(group.linux))
 }

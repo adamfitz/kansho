@@ -3,12 +3,14 @@ package preferences
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
 func TestLoadCreatesDefaultFile(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 
 	prefs, err := Load()
 	if err != nil {
@@ -22,6 +24,9 @@ func TestLoadCreatesDefaultFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FilePath: %v", err)
 	}
+	if relative, err := filepath.Rel(home, path); err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		t.Fatalf("preferences path escaped isolated home: %q (relative %q, err %v)", path, relative, err)
+	}
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("preferences file not created: %v", err)
 	}
@@ -30,6 +35,7 @@ func TestLoadCreatesDefaultFile(t *testing.T) {
 func TestSaveAndLoadDatabaseDirectory(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 
 	want := filepath.Join(home, "cloud", "kansho")
 	if err := Save(Preferences{DatabaseDirectory: want}); err != nil {
@@ -56,6 +62,7 @@ func TestSaveAndLoadDatabaseDirectory(t *testing.T) {
 func TestSaveAndLoadPlatformRoots(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	want := Preferences{
 		DatabaseDirectory:  filepath.Join(home, "db"),
 		WindowsMangaRoot:   `W:\Manga`,
