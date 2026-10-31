@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -198,14 +199,25 @@ func ExpandPath(path string) (string, error) {
 		return "", fmt.Errorf("path is empty")
 	}
 	if path == "~" {
-		return os.UserHomeDir()
+		return userHomeDirectory()
 	}
 	if strings.HasPrefix(path, "~/") {
-		home, err := os.UserHomeDir()
+		home, err := userHomeDirectory()
 		if err != nil {
 			return "", err
 		}
 		return filepath.Join(home, path[2:]), nil
 	}
 	return path, nil
+}
+
+func userHomeDirectory() (string, error) {
+	variable := "HOME"
+	if runtime.GOOS == "windows" {
+		variable = "USERPROFILE"
+	}
+	if home := strings.TrimSpace(os.Getenv(variable)); home != "" {
+		return home, nil
+	}
+	return os.UserHomeDir()
 }

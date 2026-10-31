@@ -3,6 +3,7 @@ package preferences
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -22,6 +23,9 @@ func TestLoadCreatesDefaultFile(t *testing.T) {
 	path, err := FilePath()
 	if err != nil {
 		t.Fatalf("FilePath: %v", err)
+	}
+	if relative, err := filepath.Rel(home, path); err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		t.Fatalf("preferences path escaped isolated home: %q (relative %q, err %v)", path, relative, err)
 	}
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("preferences file not created: %v", err)
