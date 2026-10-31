@@ -66,6 +66,85 @@ func (s *Store) LoadPlatformBookmarks(platform string) (models.Manga, error) {
 	return manga, nil
 }
 
+type BookmarkTypeEntry struct {
+	ID    int64
+	Title string
+	Type  string
+}
+
+type BookmarkTypeUpdate struct {
+	ID   int64
+	Type string
+}
+
+func (s *Store) LoadBookmarkTypeEntries() ([]BookmarkTypeEntry, error) {
+	table := s.platformBookmarksTable()
+	rows, err := s.conn.Query(`SELECT id, title, type FROM ` + table + ` ORDER BY lower(title), id`)
+	if err != nil {
+		return nil, fmt.Errorf("load bookmark types: %w", err)
+	}
+	defer rows.Close()
+
+	entries := make([]BookmarkTypeEntry, 0)
+	for rows.Next() {
+		var entry BookmarkTypeEntry
+		if err := rows.Scan(&entry.ID, &entry.Title, &entry.Type); err != nil {
+			return nil, fmt.Errorf("read bookmark type: %w", err)
+		}
+		entries = append(entries, entry)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read bookmark types: %w", err)
+	}
+	return entries, nil
+}
+
+func (s *Store) ApplyBookmarkTypeUpdates(updates []BookmarkTypeUpdate, progress func(completed, total int)) (int, error) {
+	for _, update := range updates {
+		if update.ID <= 0 {
+			return 0, fmt.Errorf("invalid bookmark ID %d", update.ID)
+		}
+		if update.Type != "" && update.Type != "manga" && update.Type != "webtoon" {
+			return 0, fmt.Errorf("unknown bookmark type %q", update.Type)
+		}
+	}
+	if len(updates) == 0 {
+		return 0, nil
+	}
+
+	updated := 0
+	err := s.withWriteTx(func(tx *sql.Tx) error {
+		stmt, err := tx.Prepare(`UPDATE ` + s.platformBookmarksTable() + ` SET type = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
+		if err != nil {
+			return fmt.Errorf("prepare bookmark type update: %w", err)
+		}
+		defer stmt.Close()
+
+		for _, update := range updates {
+			result, err := stmt.Exec(update.Type, update.ID)
+			if err != nil {
+				return fmt.Errorf("update bookmark type %d: %w", update.ID, err)
+			}
+			affected, err := result.RowsAffected()
+			if err != nil {
+				return fmt.Errorf("count bookmark type update %d: %w", update.ID, err)
+			}
+			if affected != 1 {
+				return fmt.Errorf("bookmark %d no longer exists", update.ID)
+			}
+			updated++
+			if progress != nil {
+				progress(updated, len(updates))
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return updated, nil
+}
+
 // SaveBookmarks replaces the stored bookmark set with data in one transaction.
 // Kansho's UI edits bookmarks in memory and saves the complete list, so a full
 // replacement keeps the existing behaviour while still being atomic.
