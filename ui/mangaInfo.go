@@ -254,7 +254,6 @@ func buildMangaInfoContent(parentWindow fyne.Window, replace func(fyne.CanvasObj
 
 	// The scrollable field area; swapped in place when the language changes.
 	fieldScroll := container.NewVScroll(container.NewVBox())
-	fieldScroll.SetMinSize(fyne.NewSize(680, 460))
 
 	rebuildFields := func(lang string) {
 		box := container.NewVBox(
