@@ -366,6 +366,72 @@ func bookmarkIdentity(bookmark models.Bookmarks) string {
 	return ""
 }
 
+func bookmarkIdentityAliases(bookmark models.Bookmarks) []string {
+	identity := bookmarkIdentity(bookmark)
+	if identity == "" {
+		return nil
+	}
+	aliases := []string{identity}
+	if strings.HasPrefix(identity, "id:") {
+		site := strings.ToLower(strings.Join(strings.Fields(bookmark.Site), " "))
+		url := strings.ToLower(strings.TrimSpace(bookmark.Url))
+		if url != "" {
+			aliases = append(aliases, "url:"+site+"\x00"+strings.TrimRight(url, "/"))
+		}
+	}
+	return aliases
+}
+
+type bookmarkIdentitySet struct {
+	parents map[string]string
+}
+
+func newBookmarkIdentitySet(platformRows ...[]platformBookmarkRow) *bookmarkIdentitySet {
+	identities := &bookmarkIdentitySet{parents: make(map[string]string)}
+	for _, rows := range platformRows {
+		for _, row := range rows {
+			aliases := bookmarkIdentityAliases(row.bookmark)
+			for i := 1; i < len(aliases); i++ {
+				identities.union(aliases[0], aliases[i])
+			}
+		}
+	}
+	return identities
+}
+
+func (identities *bookmarkIdentitySet) key(bookmark models.Bookmarks) string {
+	aliases := bookmarkIdentityAliases(bookmark)
+	if len(aliases) == 0 {
+		return ""
+	}
+	return identities.find(aliases[0])
+}
+
+func (identities *bookmarkIdentitySet) union(left, right string) {
+	leftRoot := identities.find(left)
+	rightRoot := identities.find(right)
+	if leftRoot == rightRoot {
+		return
+	}
+	if leftRoot < rightRoot {
+		identities.parents[rightRoot] = leftRoot
+	} else {
+		identities.parents[leftRoot] = rightRoot
+	}
+}
+
+func (identities *bookmarkIdentitySet) find(key string) string {
+	parent, exists := identities.parents[key]
+	if !exists {
+		identities.parents[key] = key
+		return key
+	}
+	if parent != key {
+		identities.parents[key] = identities.find(parent)
+	}
+	return identities.parents[key]
+}
+
 func syncPlatformBookmarksTx(tx *sql.Tx, prefs preferences.Preferences, preferredPlatform string, result *BookmarkSyncResult) error {
 	linuxRows, err := readPlatformBookmarkRows(tx, "bookmarks_linux")
 	if err != nil {
@@ -375,8 +441,15 @@ func syncPlatformBookmarksTx(tx *sql.Tx, prefs preferences.Preferences, preferre
 	if err != nil {
 		return err
 	}
-	linuxByKey := latestBookmarksByIdentity(linuxRows)
-	windowsByKey := latestBookmarksByIdentity(windowsRows)
+	identities := newBookmarkIdentitySet(linuxRows, windowsRows)
+	linuxByKey, err := deduplicatePlatformBookmarks(tx, "bookmarks_linux", linuxRows, identities)
+	if err != nil {
+		return err
+	}
+	windowsByKey, err := deduplicatePlatformBookmarks(tx, "bookmarks_windows", windowsRows, identities)
+	if err != nil {
+		return err
+	}
 	keys := make(map[string]bool, len(linuxByKey)+len(windowsByKey))
 	for key := range linuxByKey {
 		keys[key] = true
@@ -400,9 +473,15 @@ func syncPlatformBookmarksTx(tx *sql.Tx, prefs preferences.Preferences, preferre
 			continue
 		}
 		canonical := linuxRow
-		if !hasLinux || (hasWindows && (windowsRow.updatedAt > linuxRow.updatedAt ||
-			(windowsRow.updatedAt == linuxRow.updatedAt && preferredPlatform == "windows"))) {
+		if !hasLinux || (hasWindows && bookmarkRowPreferred(windowsRow, linuxRow, "windows", "linux", preferredPlatform)) {
 			canonical = windowsRow
+		}
+		if strings.TrimSpace(canonical.bookmark.MangaDexID) == "" {
+			if strings.TrimSpace(linuxRow.bookmark.MangaDexID) != "" {
+				canonical.bookmark.MangaDexID = linuxRow.bookmark.MangaDexID
+			} else if strings.TrimSpace(windowsRow.bookmark.MangaDexID) != "" {
+				canonical.bookmark.MangaDexID = windowsRow.bookmark.MangaDexID
+			}
 		}
 		canonical.bookmark.Type = bookmarkType(canonical.bookmark.Type)
 
@@ -472,19 +551,58 @@ func syncPlatformBookmarksTx(tx *sql.Tx, prefs preferences.Preferences, preferre
 	return nil
 }
 
-func latestBookmarksByIdentity(rows []platformBookmarkRow) map[string]platformBookmarkRow {
-	latest := make(map[string]platformBookmarkRow, len(rows))
+func deduplicatePlatformBookmarks(tx *sql.Tx, table string, rows []platformBookmarkRow,
+	identities *bookmarkIdentitySet,
+) (map[string]platformBookmarkRow, error) {
+	byIdentity := make(map[string]platformBookmarkRow, len(rows))
+	duplicates := make([]int64, 0)
+	mergedIDs := make(map[int64]string)
 	for _, row := range rows {
-		key := bookmarkIdentity(row.bookmark)
+		key := identities.key(row.bookmark)
 		if key == "" {
 			continue
 		}
-		current, exists := latest[key]
-		if !exists || row.updatedAt > current.updatedAt {
-			latest[key] = row
+		current, exists := byIdentity[key]
+		if !exists {
+			byIdentity[key] = row
+			continue
+		}
+		if bookmarkRowPreferred(row, current, "", "", "") {
+			if strings.TrimSpace(row.bookmark.MangaDexID) == "" {
+				row.bookmark.MangaDexID = current.bookmark.MangaDexID
+				if strings.TrimSpace(row.bookmark.MangaDexID) != "" {
+					mergedIDs[row.id] = row.bookmark.MangaDexID
+				}
+			}
+			duplicates = append(duplicates, current.id)
+			byIdentity[key] = row
+		} else {
+			if strings.TrimSpace(current.bookmark.MangaDexID) == "" && strings.TrimSpace(row.bookmark.MangaDexID) != "" {
+				current.bookmark.MangaDexID = row.bookmark.MangaDexID
+				mergedIDs[current.id] = current.bookmark.MangaDexID
+				byIdentity[key] = current
+			}
+			duplicates = append(duplicates, row.id)
 		}
 	}
-	return latest
+	for id, mangaDexID := range mergedIDs {
+		if _, err := tx.Exec(`UPDATE `+table+` SET mangadex_id = ? WHERE id = ?`, mangaDexID, id); err != nil {
+			return nil, fmt.Errorf("preserve MangaDex ID on bookmark %d in %s: %w", id, table, err)
+		}
+	}
+	for _, id := range duplicates {
+		if _, err := tx.Exec(`DELETE FROM `+table+` WHERE id = ?`, id); err != nil {
+			return nil, fmt.Errorf("remove duplicate bookmark %d from %s: %w", id, table, err)
+		}
+	}
+	return byIdentity, nil
+}
+
+func bookmarkRowPreferred(candidate, current platformBookmarkRow, candidatePlatform, currentPlatform, preferredPlatform string) bool {
+	if candidate.updatedAt != current.updatedAt {
+		return candidate.updatedAt > current.updatedAt
+	}
+	return candidatePlatform == preferredPlatform && currentPlatform != preferredPlatform
 }
 
 func sameBookmarkMetadata(left, right models.Bookmarks) bool {
