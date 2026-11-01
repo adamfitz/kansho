@@ -2,15 +2,17 @@ package ui
 
 import (
 	"fmt"
+	"image/color"
 	"os/exec"
 	"runtime"
 	"sort"
 	"strings"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
-	//"fyne.io/fyne/v2/theme"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
 	"kansho/mangadex"
@@ -123,12 +125,15 @@ func NewMangaListView(state *KanshoAppState) *MangaListView {
 			label := widget.NewLabel("template")
 			label.Truncation = fyne.TextTruncateEllipsis
 			infoButton := newIconButton(mangaInfoIconResource)
-			return container.NewBorder(nil, nil, nil, infoButton, label)
+			gutter := canvas.NewRectangle(color.Transparent)
+			gutter.SetMinSize(fyne.NewSize(theme.ScrollBarSize(), 1))
+			return container.NewBorder(nil, nil, nil, container.NewHBox(infoButton, gutter), label)
 		},
 		func(id widget.ListItemID, item fyne.CanvasObject) {
 			row := item.(*fyne.Container)
 			label := row.Objects[0].(*widget.Label)
-			infoButton := row.Objects[1].(*iconButton)
+			controls := row.Objects[1].(*fyne.Container)
+			infoButton := controls.Objects[0].(*iconButton)
 			label.SetText(view.state.MangaData.Manga[id].Title)
 			infoButton.OnTapped = func() {
 				view.onInfoButtonClicked(int(id))
@@ -145,6 +150,8 @@ func NewMangaListView(state *KanshoAppState) *MangaListView {
 		view.state.SelectManga(int(id))
 	}
 
+	listTheme := mangaListScrollTheme{Theme: theme.Current()}
+	listWithPersistentScrollbar := container.NewThemeOverride(view.List, listTheme)
 	cardContent := container.NewBorder(
 		container.NewVBox(
 			container.NewBorder(
@@ -171,7 +178,7 @@ func NewMangaListView(state *KanshoAppState) *MangaListView {
 		),
 		nil,
 		nil,
-		view.List,
+		listWithPersistentScrollbar,
 	)
 
 	view.Card = NewCard(cardContent)
@@ -185,6 +192,17 @@ func NewMangaListView(state *KanshoAppState) *MangaListView {
 	})
 
 	return view
+}
+
+type mangaListScrollTheme struct {
+	fyne.Theme
+}
+
+func (t mangaListScrollTheme) Size(name fyne.ThemeSizeName) float32 {
+	if name == theme.SizeNameScrollBarSmall {
+		return t.Theme.Size(theme.SizeNameScrollBar)
+	}
+	return t.Theme.Size(name)
 }
 
 func (v *MangaListView) SetEditMangaView(editView *EditMangaView) {
