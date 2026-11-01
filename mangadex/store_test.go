@@ -965,6 +965,58 @@ func TestSyncPlatformBookmarksSharesTitlesAndPreservesLocations(t *testing.T) {
 	}
 }
 
+func TestSyncPlatformBookmarksReconcilesIDAndURLDuplicates(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	if err := preferences.Save(preferences.Preferences{DatabaseDirectory: filepath.Join(home, "db")}); err != nil {
+		t.Fatalf("save isolated preferences: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "identity-sync.db")
+	linux, err := openPathForPlatform(path, "linux")
+	if err != nil {
+		t.Fatalf("open Linux store: %v", err)
+	}
+	defer linux.Close()
+	windows, err := openPathForPlatform(path, "windows")
+	if err != nil {
+		t.Fatalf("open Windows store: %v", err)
+	}
+	defer windows.Close()
+
+	if _, err := linux.conn.Exec(`INSERT INTO bookmarks_linux (title, url, location, site, type, mangadex_id, updated_at) VALUES
+		('Absolute Dominion', 'https://example.test/absolute-dominion', '/linux/older', 'Example', 'webtoon', 'absolute-id', '2026-01-01 00:00:00'),
+		('Absolute Dominion', 'https://example.test/absolute-dominion', '/linux/newer', 'Example', 'webtoon', 'absolute-id', '2026-01-02 00:00:00')`); err != nil {
+		t.Fatalf("seed duplicate Linux bookmarks: %v", err)
+	}
+	if _, err := windows.conn.Exec(`INSERT INTO bookmarks_windows (title, url, location, site, type, mangadex_id, updated_at)
+		VALUES ('Absolute Dominion', 'https://example.test/absolute-dominion', ?, 'Example', 'webtoon', '', '2026-01-03 00:00:00')`, `C:\windows\absolute`); err != nil {
+		t.Fatalf("seed unlinked Windows bookmark: %v", err)
+	}
+
+	result, err := linux.SyncPlatformBookmarks()
+	if err != nil {
+		t.Fatalf("SyncPlatformBookmarks: %v", err)
+	}
+	if result.InsertedToLinux != 0 || result.InsertedToWindows != 0 {
+		t.Fatalf("sync inserted duplicate rows: %+v", result)
+	}
+	linuxRows, err := linux.LoadBookmarks()
+	if err != nil {
+		t.Fatalf("load Linux bookmarks: %v", err)
+	}
+	windowsRows, err := windows.LoadBookmarks()
+	if err != nil {
+		t.Fatalf("load Windows bookmarks: %v", err)
+	}
+	if len(linuxRows.Manga) != 1 || linuxRows.Manga[0].MangaDexID != "absolute-id" || linuxRows.Manga[0].Location != "/linux/newer" {
+		t.Fatalf("Linux rows after sync = %+v, want the newer linked row only", linuxRows.Manga)
+	}
+	if len(windowsRows.Manga) != 1 || windowsRows.Manga[0].MangaDexID != "absolute-id" || windowsRows.Manga[0].Location != `C:\windows\absolute` {
+		t.Fatalf("Windows rows after sync = %+v, want one linked row with local location", windowsRows.Manga)
+	}
+}
+
 func TestSyncPlatformBookmarksRebasesConfiguredRootsWhenTypeChanges(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
