@@ -442,12 +442,12 @@ func (v *EditMangaView) onAddButtonClicked() {
 
 	title := ""
 	if v.Title != nil {
-		title = v.Title.Text
+		title = strings.TrimSpace(v.Title.Text)
 	}
 
 	url := ""
 	if v.UrlEntry != nil {
-		url = v.UrlEntry.Text
+		url = strings.TrimSpace(v.UrlEntry.Text)
 	}
 
 	location := ""
@@ -522,8 +522,8 @@ func (v *EditMangaView) onSaveButtonClicked() {
 	}
 
 	selectedSite := v.SiteSelect.Selected
-	title := v.Title.Text
-	url := v.UrlEntry.Text
+	title := strings.TrimSpace(v.Title.Text)
+	url := strings.TrimSpace(v.UrlEntry.Text)
 
 	// Get the new location
 	newLocation := ""

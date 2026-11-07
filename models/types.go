@@ -1,5 +1,7 @@
 package models
 
+import "strings"
+
 // RequiredFields defines which input fields are required when adding manga from a specific site.
 // This allows the UI to dynamically show/hide input fields based on what each site needs.
 // For example, some sites might require a shortname while others don't.
@@ -41,4 +43,18 @@ type Bookmarks struct {
 	Shortname  string `json:"shortname"`
 	Type       string `json:"type,omitempty"`
 	MangaDexID string `json:"mangadex_id,omitempty"`
+}
+
+// NormalizeBookmark strips accidental leading and trailing whitespace from the
+// fields that feed alphabetical ordering, search, and URL handling.
+func NormalizeBookmark(bookmark *Bookmarks) {
+	bookmark.Title = strings.TrimSpace(bookmark.Title)
+	bookmark.Url = strings.TrimSpace(bookmark.Url)
+}
+
+// NormalizeBookmarks normalizes every bookmark in the collection.
+func NormalizeBookmarks(data *Manga) {
+	for i := range data.Manga {
+		NormalizeBookmark(&data.Manga[i])
+	}
 }

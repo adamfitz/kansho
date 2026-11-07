@@ -12,6 +12,7 @@ import (
 
 	"kansho/config"
 	"kansho/mangadex"
+	"kansho/models"
 )
 
 // ShowImportBookmarksDialog handles the import of bookmarks.json
@@ -41,6 +42,7 @@ func ShowImportBookmarksDialog(kanshoApp fyne.App, window fyne.Window) {
 			dialog.ShowError(fmt.Errorf("invalid JSON file: %v", err), window)
 			return
 		}
+		models.NormalizeBookmarks(&importedData)
 
 		store, err := mangadex.GetStore()
 		if err != nil {
