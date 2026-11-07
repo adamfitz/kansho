@@ -22,6 +22,8 @@ import (
 	"kansho/validation"
 )
 
+const localSiteDisplay = "Local"
+
 // EditMangaView represents the "Edit Manga" card component.
 // This view allows users to add new manga to their library or edit existing ones by:
 // 1. Selecting a manga site from a dropdown
@@ -83,6 +85,7 @@ func NewEditMangaView(State *KanshoAppState) *EditMangaView {
 	for i, site := range view.SitesConfig.Sites {
 		siteNames[i] = site.DisplayName
 	}
+	siteNames = append(siteNames, localSiteDisplay)
 
 	// Show the sites alphabetically in the dropdown
 	sort.Strings(siteNames)
@@ -91,7 +94,7 @@ func NewEditMangaView(State *KanshoAppState) *EditMangaView {
 	view.SiteSelect = widget.NewSelect(siteNames, func(selected string) {
 		view.onSiteSelected(selected)
 	})
-	view.SiteSelect.PlaceHolder = "Site name"
+	view.SiteSelect.PlaceHolder = "Site name or Local"
 	view.TypeSelect = widget.NewRadioGroup([]string{"Manga", "Webtoon"}, func(string) {
 		view.refreshDirectoryChoice(false)
 	})
@@ -107,7 +110,7 @@ func NewEditMangaView(State *KanshoAppState) *EditMangaView {
 
 	// Create the URL input field
 	view.UrlEntry = widget.NewEntry()
-	view.UrlEntry.SetPlaceHolder("Paste manga URL")
+	view.UrlEntry.SetPlaceHolder("Paste manga URL or MangaDex URL (optional for Local)")
 
 	// Create the directory selection label and button
 	view.DirectoryLabel = widget.NewLabel("No directory selected")
@@ -149,7 +152,7 @@ func NewEditMangaView(State *KanshoAppState) *EditMangaView {
 	siteRow := container.NewBorder(
 		nil,
 		nil,
-		widget.NewLabel("Select Site:"),
+		widget.NewLabel("Select Site (optional):"),
 		nil,
 		view.SiteSelect,
 	)
@@ -258,6 +261,20 @@ func selectedBookmarkType(selection string) (string, error) {
 	}
 }
 
+func siteSelectionValue(selected string) string {
+	if selected == "" || selected == localSiteDisplay {
+		return models.LocalSiteName
+	}
+	return selected
+}
+
+func siteSelectionDisplay(site string) string {
+	if models.IsLocalSite(site) {
+		return localSiteDisplay
+	}
+	return site
+}
+
 func (v *EditMangaView) defaultBookmarkLocation(title string) (string, error) {
 	prefs, err := preferences.Load()
 	if err != nil {
@@ -319,7 +336,7 @@ func (v *EditMangaView) LoadMangaForEditing(mangaID int) {
 
 	// Load the manga data into the form
 	v.Title.SetText(manga.Title)
-	v.SiteSelect.SetSelected(manga.Site)
+	v.SiteSelect.SetSelected(siteSelectionDisplay(manga.Site))
 	v.UrlEntry.SetText(manga.Url)
 	v.DirectoryLabel.SetText(manga.Location)
 
@@ -438,7 +455,7 @@ func (v *EditMangaView) onAddButtonClicked() {
 		dialog.ShowError(err, v.State.Window)
 		return
 	}
-	selectedSite := v.SiteSelect.Selected
+	selectedSite := siteSelectionValue(v.SiteSelect.Selected)
 
 	title := ""
 	if v.Title != nil {
@@ -500,7 +517,7 @@ func (v *EditMangaView) onAddButtonClicked() {
 	// Show success dialog
 	successMsg := fmt.Sprintf(
 		"Manga added successfully!\n\nTitle: %s\nSite: %s\nURL: %s\nDirectory: %s",
-		title, selectedSite, url, location,
+		title, siteSelectionDisplay(selectedSite), url, location,
 	)
 
 	dialog.ShowInformation("Success", successMsg, v.State.Window)
@@ -521,7 +538,7 @@ func (v *EditMangaView) onSaveButtonClicked() {
 		return
 	}
 
-	selectedSite := v.SiteSelect.Selected
+	selectedSite := siteSelectionValue(v.SiteSelect.Selected)
 	title := strings.TrimSpace(v.Title.Text)
 	url := strings.TrimSpace(v.UrlEntry.Text)
 
@@ -609,7 +626,7 @@ func (v *EditMangaView) onSaveButtonClicked() {
 	// Show success dialog
 	successMsg := fmt.Sprintf(
 		"Manga updated successfully!\n\nTitle: %s\nSite: %s\nURL: %s\nDirectory: %s",
-		title, selectedSite, url, newLocation,
+		title, siteSelectionDisplay(selectedSite), url, newLocation,
 	)
 
 	dialog.ShowInformation("Success", successMsg, v.State.Window)

@@ -3,6 +3,8 @@ package ui
 import (
 	"strings"
 	"testing"
+
+	"kansho/models"
 )
 
 func TestParseTitleImportCSVAndTrimFields(t *testing.T) {
@@ -43,6 +45,7 @@ titles:
     location: " /mnt/webtoons/Webtoon Title "
     mangadex_id: "def-456"
     bookmark_type: Webtoon
+    site: " Local "
   - name: "Plain Title"
     path: "/mnt/manga/Plain Title"
     type: manga
@@ -59,10 +62,10 @@ titles:
 	if len(entries) != 2 {
 		t.Fatalf("parsed %d entries, want 2", len(entries))
 	}
-	if entries[0].Title != "Webtoon Title" || entries[0].MangaDexID != "def-456" || entries[0].Type != "webtoon" {
+	if entries[0].Title != "Webtoon Title" || entries[0].MangaDexID != "def-456" || entries[0].Type != "webtoon" || entries[0].Site != models.LocalSiteName {
 		t.Errorf("first entry = %+v", entries[0])
 	}
-	if entries[1].Title != "Plain Title" || entries[1].Location != "/mnt/manga/Plain Title" || entries[1].Type != "manga" {
+	if entries[1].Title != "Plain Title" || entries[1].Location != "/mnt/manga/Plain Title" || entries[1].Type != "manga" || entries[1].Site != models.LocalSiteName {
 		t.Errorf("second entry = %+v", entries[1])
 	}
 }

@@ -43,6 +43,11 @@ func ShowImportBookmarksDialog(kanshoApp fyne.App, window fyne.Window) {
 			return
 		}
 		models.NormalizeBookmarks(&importedData)
+		for i := range importedData.Manga {
+			if models.IsLocalSite(importedData.Manga[i].Site) {
+				importedData.Manga[i].Site = models.LocalSiteName
+			}
+		}
 
 		store, err := mangadex.GetStore()
 		if err != nil {

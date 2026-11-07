@@ -5,6 +5,7 @@ import (
 	"runtime"
 	"testing"
 
+	"kansho/models"
 	"kansho/preferences"
 )
 
@@ -41,5 +42,26 @@ func TestBookmarkRootLocationUsesPlatformAndType(t *testing.T) {
 	want := filepath.Join(root, "Title")
 	if got != want {
 		t.Fatalf("bookmarkRootLocation() = %q, want %q", got, want)
+	}
+}
+
+func TestSiteSelectionMapsLocalLabelToLocalSite(t *testing.T) {
+	if got := siteSelectionValue(localSiteDisplay); got != models.LocalSiteName {
+		t.Fatalf("siteSelectionValue(%q) = %q, want %q", localSiteDisplay, got, models.LocalSiteName)
+	}
+	if got := siteSelectionValue(""); got != models.LocalSiteName {
+		t.Fatalf("siteSelectionValue(empty) = %q, want %q", got, models.LocalSiteName)
+	}
+	if got := siteSelectionValue("mangadex"); got != "mangadex" {
+		t.Fatalf("siteSelectionValue(mangadex) = %q", got)
+	}
+	if got := siteSelectionDisplay(""); got != localSiteDisplay {
+		t.Fatalf("siteSelectionDisplay(empty) = %q, want %q", got, localSiteDisplay)
+	}
+	if got := siteSelectionDisplay(models.LocalSiteName); got != localSiteDisplay {
+		t.Fatalf("siteSelectionDisplay(local) = %q, want %q", got, localSiteDisplay)
+	}
+	if got := siteSelectionDisplay("mangadex"); got != "mangadex" {
+		t.Fatalf("siteSelectionDisplay(mangadex) = %q", got)
 	}
 }

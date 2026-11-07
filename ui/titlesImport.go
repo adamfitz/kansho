@@ -301,6 +301,9 @@ func prepareTitleImportEntries(entries []titleImportEntry) ([]titleImportEntry, 
 		entry.Location = strings.TrimSpace(entry.Location)
 		entry.MangaDex = strings.TrimSpace(entry.MangaDex)
 		entry.Site = strings.TrimSpace(entry.Site)
+		if models.IsLocalSite(entry.Site) {
+			entry.Site = models.LocalSiteName
+		}
 		entry.URL = strings.TrimSpace(entry.URL)
 		entry.Type = strings.ToLower(strings.TrimSpace(entry.Type))
 

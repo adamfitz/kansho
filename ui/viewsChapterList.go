@@ -18,6 +18,7 @@ import (
 	"kansho/downloader"
 	"kansho/mangadex"
 	"kansho/metadata"
+	"kansho/models"
 	"kansho/parser"
 	"kansho/refreshpool"
 	"kansho/sites"
@@ -657,9 +658,23 @@ func (v *ChapterListView) onRefreshClicked() {
 		return
 	}
 
+	if models.IsLocalSite(manga.Site) {
+		dialog.ShowInformation(
+			"Local title",
+			fmt.Sprintf("%q is a local-only title. Kansho reads its chapters from disk and does not refresh them from a website.\n\nUse the (i) MangaDex button to update metadata.", manga.Title),
+			v.state.Window,
+		)
+		return
+	}
+
 	site := sites.GetSitePlugin(manga.Site)
 	if site == nil || manga.Url == "" {
 		log.Printf("[UI] No site plugin or URL for %s - nothing to refresh", manga.Title)
+		dialog.ShowInformation(
+			"No scraping source",
+			fmt.Sprintf("%q has no usable site/URL source. Add a supported site and URL to refresh chapters.", manga.Title),
+			v.state.Window,
+		)
 		return
 	}
 

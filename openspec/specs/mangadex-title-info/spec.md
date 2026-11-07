@@ -40,11 +40,19 @@ The user SHALL be shown local database content when available, and a lookup dial
 - THEN the information pane SHALL open directly from local database content in the chapter list card
 - AND no MangaDex network request SHALL be required to open the pane
 
-#### Scenario: MangaDex URL known on the bookmark
-- GIVEN the selected manga bookmark is itself a MangaDex title (its URL contains a `/title/<id>` segment)
+#### Scenario: MangaDex ID or URL known on the bookmark
+- GIVEN the selected manga bookmark stores a MangaDex ID, or its URL contains a `/title/<id>` segment
 - WHEN the info button is clicked and no local record exists
 - THEN Kansho SHALL fetch that ID directly from MangaDex
 - AND SHALL NOT show the title lookup dialog
+- AND this SHALL work for Local titles whose site is `local`
+
+#### Scenario: Local title metadata
+- GIVEN a Local title stores a MangaDex ID or MangaDex URL
+- WHEN Kansho resolves metadata for its volumes or chapters
+- THEN it SHALL use the stored MangaDex ID or URL before falling back to a title lookup
+- AND it SHALL NOT require a scraping site
+- AND a successful MangaDex fetch SHALL be stored in the local database
 
 #### Scenario: No local information
 - GIVEN a bookmarked manga has no local MangaDex information and its URL is not a MangaDex title URL

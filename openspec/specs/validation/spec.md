@@ -1,7 +1,7 @@
 # validation Specification
 
 ## Purpose
-Validate user input when adding manga to the bookmarks, ensuring all required fields for the selected site are provided before submission.
+Validate user input when adding manga to the bookmarks, ensuring all required fields for the selected site are provided before submission. An empty site or `local` represents a Local title with no scraping source.
 
 ## Requirements
 
@@ -34,12 +34,17 @@ The system SHALL validate that all required fields for a given manga source site
 - THEN an error SHALL be returned with message "shortname is required"
 
 ### Requirement: Site Selection Validation
-The system SHALL require a site to be selected before validating fields.
+The system SHALL allow an empty site or `local` for Local titles and require title and location for them.
 
-#### Scenario: No site selected
-- GIVEN no site is selected (empty site name)
-- WHEN `ValidateAddManga` is called
-- THEN an error SHALL be returned with message "please select a site"
+#### Scenario: Local title
+- GIVEN no site is selected (empty site name) or the site is `local`
+- WHEN `ValidateAddManga` is called with a title and location
+- THEN validation SHALL pass even when the URL is empty
+
+#### Scenario: Local title missing required identity
+- GIVEN no site is selected (empty site name) or the site is `local`
+- WHEN `ValidateAddManga` is called without a title or without a location
+- THEN an error SHALL be returned with message "title is required" or "location is required"
 
 ### Requirement: Unknown Site Handling
 The system SHALL reject unknown site names.

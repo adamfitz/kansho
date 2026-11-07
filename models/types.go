@@ -2,6 +2,17 @@ package models
 
 import "strings"
 
+// LocalSiteName marks a bookmark whose chapters are managed from disk instead
+// of being scraped from a source website. An empty site is treated the same way
+// for older bookmarks.
+const LocalSiteName = "local"
+
+// IsLocalSite reports whether the bookmark site represents a local-only title.
+func IsLocalSite(site string) bool {
+	site = strings.ToLower(strings.TrimSpace(site))
+	return site == "" || site == LocalSiteName
+}
+
 // RequiredFields defines which input fields are required when adding manga from a specific site.
 // This allows the UI to dynamically show/hide input fields based on what each site needs.
 // For example, some sites might require a shortname while others don't.

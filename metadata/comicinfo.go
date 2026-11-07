@@ -3,6 +3,7 @@ package metadata
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/xml"
 	"fmt"
@@ -752,7 +753,26 @@ func GetMangaInfoForBookmark(manga config.Bookmarks) (*mangadex.MangaInfo, error
 	if err != nil {
 		return nil, err
 	}
+
+	ids := make([]string, 0, 2)
+	addID := func(id string) {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			return
+		}
+		for _, existing := range ids {
+			if existing == id {
+				return
+			}
+		}
+		ids = append(ids, id)
+	}
+	addID(manga.MangaDexID)
 	if id, parseErr := mangadex.ExtractID(manga.Url); parseErr == nil {
+		addID(id)
+	}
+
+	for _, id := range ids {
 		local, localErr := store.LookupByID(id)
 		if localErr != nil {
 			return nil, localErr
@@ -760,7 +780,14 @@ func GetMangaInfoForBookmark(manga config.Bookmarks) (*mangadex.MangaInfo, error
 		if local != nil {
 			return local, nil
 		}
+		fetched, fetchErr := mangadex.NewClient().GetManga(context.Background(), id)
+		if fetchErr != nil || fetched == nil {
+			continue
+		}
+		_ = store.Upsert(fetched)
+		return fetched, nil
 	}
+
 	local, err := store.LookupByTitle(manga.Title)
 	if err != nil {
 		return nil, err
