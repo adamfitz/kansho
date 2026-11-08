@@ -26,6 +26,12 @@ The system SHALL persist manga bookmarks in the local SQLite database.
 - AND title metadata SHALL be upserted into the other OS table while preserving its location unless its type changes and it uses the old type's configured root
 - AND the write SHALL acquire Kansho's advisory write lock before changing the database
 
+#### Scenario: Trim bookmark whitespace
+- GIVEN a bookmark title or URL has leading or trailing whitespace
+- WHEN the bookmark is added, imported, saved, or loaded
+- THEN the title and URL SHALL be trimmed
+- AND the stored and displayed title SHALL match the trimmed value
+
 #### Scenario: Bookmark ordering
 - GIVEN bookmarks are saved
 - WHEN they are loaded again
@@ -155,6 +161,114 @@ The system SHALL support importing bookmarks from an external JSON file.
 - AND the imported entries SHALL be merged into the existing bookmarks
 - AND duplicates SHALL be avoided
 - AND the merged bookmark list SHALL be saved to the database
+
+### Requirement: Bulk Import Existing Titles
+The system SHALL import existing on-disk titles from a CSV or YAML file into the current OS bookmark table.
+
+#### Scenario: Select an import file
+- GIVEN the user selects Database → Import Existing Titles
+- WHEN the file open dialog is shown
+- THEN the dialog SHALL accept `.csv`, `.yaml`, and `.yml` files
+- AND the selected file SHALL be parsed according to its extension
+
+#### Scenario: Validate the complete import
+- GIVEN the user selects a CSV or YAML file
+- WHEN the file is parsed
+- THEN every row SHALL require a non-empty title, location, and type
+- AND type SHALL be `manga` or `webtoon`
+- AND an optional MangaDex link or ID SHALL resolve to a MangaDex title ID
+- AND any validation problem SHALL list the row and title
+- AND the import SHALL NOT write any bookmark when problems exist
+
+#### Scenario: Normalize imported values
+- GIVEN an import row is valid
+- WHEN it is prepared for storage
+- THEN title, location, MangaDex value, site, and URL SHALL have leading and trailing whitespace removed
+- AND type SHALL be lowercased
+- AND the current operating system SHALL select `bookmarks_linux` or `bookmarks_windows`; the file SHALL NOT contain an OS column
+
+#### Scenario: Skip duplicate titles
+- GIVEN the current bookmark table already contains a title
+- WHEN an import row has the same title, ignoring case and surrounding whitespace
+- THEN that row SHALL be skipped and counted as a duplicate
+- AND duplicate titles inside the import file SHALL be reported as validation problems
+
+#### Scenario: Save imported titles
+- GIVEN the import file has no validation problems
+- WHEN the user confirms the import
+- THEN the new bookmarks SHALL be appended and saved through the normal bookmark write path
+- AND the normal cross-platform sync SHALL create counterparts in the other OS table
+- AND no files SHALL be moved or downloaded
+- AND the summary SHALL report imported, duplicate, resolved, no-MangaDex, failed, and skipped counts
+
+#### Scenario: Resolve MangaDex metadata
+- GIVEN an imported bookmark has a MangaDex link or ID
+- WHEN the bookmark is saved
+- THEN Kansho SHALL look up each title sequentially after the save
+- AND the MangaDex ID SHALL already be linked to the bookmark before lookup
+- AND when MangaDex offers multiple English titles, the prompt SHALL name the title being imported
+- AND skipping the prompt SHALL leave the bookmark imported with its MangaDex ID but without newly stored metadata
+
+### Import File Format
+
+Imported locations are stored as provided; Kansho does not create, move, or verify the directories during import.
+
+Leave `site` empty or set it to `local` for Local titles. Kansho stores both as `local`, and the Add/Edit form shows `Local`. Scraping actions require a real site and URL. A Local title MAY still use a MangaDex link or ID so MangaDex metadata can be fetched and applied to its volumes and chapters.
+
+The first CSV row is the header. Header names are case-insensitive; spaces, hyphens, and underscores are treated the same. Empty data rows are ignored.
+
+| Field | Required | Accepted header aliases |
+|-------|----------|-------------------------|
+| Title | Yes | `title`, `name`, `manga`, `manga_title`, `title_name` |
+| Location | Yes | `location`, `path`, `directory`, `folder`, `disk_location`, `location_on_disk` |
+| Type | Yes | `type`, `bookmark_type`, `kind` |
+| MangaDex | No | `mangadex`, `mangadex_id`, `mangadex_url`, `mangadex_link`, `mangadex_link_or_id`, `id` |
+| Site | No | `site`, `source`, `source_site` |
+| URL | No | `url`, `source_url`, `web_url` |
+
+CSV example:
+
+```csv
+Title,Location,MangaDex Link or ID,Bookmark Type,Site,URL
+One Piece,/home/user/manga/One Piece,https://mangadex.org/title/abc-123,manga,mangadex,https://example.test/one-piece
+"Title, With Comma",/home/user/manga/Title With Comma,,manga,,
+```
+
+Quote a CSV field when it contains a comma, quote, or newline.
+
+A YAML file MAY use a `titles:` list or a top-level list. The `type` field is required; all other fields are optional except `title` and `location`.
+
+```yaml
+titles:
+  - title: One Piece
+    location: /home/user/manga/One Piece
+    mangadex: https://mangadex.org/title/abc-123
+    type: manga
+    site: mangadex
+    url: https://example.test/one-piece
+  - title: Solo Leveling
+    location: /home/user/webtoons/Solo Leveling
+    type: webtoon
+```
+
+Top-level list form:
+
+```yaml
+- title: Solo Leveling
+  location: /home/user/webtoons/Solo Leveling
+  type: webtoon
+```
+
+YAML aliases:
+
+| Field | Accepted keys |
+|-------|---------------|
+| Title | `title`, `name` |
+| Location | `location`, `path` |
+| Type | `type`, `bookmark_type` |
+| MangaDex | `mangadex`, `mangadex_id`, `mangadex_url`, `mangadex_link` |
+| Site | `site` |
+| URL | `url` |
 
 ### Requirement: Cross-Platform Bookmark Sync
 The system SHALL keep title metadata synchronized between Linux and Windows bookmark tables while preserving distinct platform locations.

@@ -67,6 +67,17 @@ The system SHALL provide a form for adding new manga or editing existing ones.
 - AND persisted to the database immediately
 - AND the manga list view SHALL refresh to show the new entry
 
+#### Scenario: Add or edit a Local title
+- GIVEN the user selects "Local" or leaves the site empty
+- WHEN the user provides a title, bookmark type, and location
+- THEN the bookmark SHALL be saved with site `local`
+- AND the URL SHALL be optional, and MAY be a MangaDex title URL
+- AND the same bookmark SHALL load with "Local" selected when edited
+- AND the title SHALL remain editable and saveable without a site
+- AND chapter refresh SHALL report that Local titles are read from disk and are not scraped
+- AND website opening SHALL report that the Local title has no website URL when its URL is empty
+- AND the MangaDex info (i) button SHALL remain available to fetch and update metadata
+
 ### Requirement: Chapter List View
 The system SHALL display the chapters of the currently selected manga with per-chapter download state and controls.
 

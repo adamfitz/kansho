@@ -2,10 +2,14 @@ package validation
 
 import (
 	"errors"
+	"strings"
+
 	"kansho/models"
 )
 
 // ValidateAddManga checks that all required fields for the selected site are present.
+// An empty site or the Local site name means a local-only title, which needs a
+// title and location but no source URL or site plugin.
 // It only works with raw values, no Fyne types, so there’s no import cycle.
 func ValidateAddManga(
 	siteName string,
@@ -15,8 +19,14 @@ func ValidateAddManga(
 	location string,
 	config *models.SitesConfig,
 ) error {
-	if siteName == "" {
-		return errors.New("please select a site")
+	if models.IsLocalSite(siteName) {
+		if strings.TrimSpace(title) == "" {
+			return errors.New("title is required")
+		}
+		if strings.TrimSpace(location) == "" {
+			return errors.New("location is required")
+		}
+		return nil
 	}
 
 	// Find the site rules

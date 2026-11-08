@@ -58,6 +58,7 @@ func (s *Store) LoadPlatformBookmarks(platform string) (models.Manga, error) {
 		); err != nil {
 			return models.Manga{}, fmt.Errorf("read bookmark row: %w", err)
 		}
+		models.NormalizeBookmark(&bookmark)
 		manga.Manga = append(manga.Manga, bookmark)
 	}
 	if err := rows.Err(); err != nil {
@@ -149,6 +150,7 @@ func (s *Store) ApplyBookmarkTypeUpdates(updates []BookmarkTypeUpdate, progress 
 // Kansho's UI edits bookmarks in memory and saves the complete list, so a full
 // replacement keeps the existing behaviour while still being atomic.
 func (s *Store) SaveBookmarks(data models.Manga) error {
+	models.NormalizeBookmarks(&data)
 	prefs, err := preferences.Load()
 	if err != nil {
 		return fmt.Errorf("load root preferences: %w", err)

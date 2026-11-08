@@ -40,6 +40,23 @@ func ShowMangaTitleInfo(manga config.Bookmarks, window fyne.Window, display Disp
 		return
 	}
 
+	// If the bookmark already carries a MangaDex ID, use it directly (no
+	// search dialog needed). This also covers bulk imports that store the ID
+	// before the metadata lookup runs.
+	if id := strings.TrimSpace(manga.MangaDexID); id != "" {
+		local, localErr := store.LookupByID(id)
+		if localErr != nil {
+			dialog.ShowError(fmt.Errorf("lookup %s: %v", id, localErr), window)
+			return
+		}
+		if local != nil {
+			displayWithEnglishTitle(local, manga.Title, window, display)
+			return
+		}
+		fetchAndShow(window, id, manga.Title, display)
+		return
+	}
+
 	// If the bookmark is itself a MangaDex title we already know the ID: use it
 	// directly (no search dialog needed).
 	if id, parseErr := mangadex.ExtractID(manga.Url); parseErr == nil {
@@ -108,7 +125,7 @@ func storeFetchedInfo(info *mangadex.MangaInfo, bookmarkTitle string) error {
 	return nil
 }
 
-func chooseEnglishTitle(info *mangadex.MangaInfo, window fyne.Window, chosen func()) {
+func chooseEnglishTitle(info *mangadex.MangaInfo, window fyne.Window, contextTitle string, chosen func()) {
 	candidates := info.EnglishTitleCandidates()
 	if len(candidates) == 0 {
 		dialog.ShowError(fmt.Errorf("MangaDex has no English title for %q", info.EnglishTitle()), window)
@@ -124,10 +141,14 @@ func chooseEnglishTitle(info *mangadex.MangaInfo, window fyne.Window, chosen fun
 		return
 	}
 
+	prompt := "Choose the English title to use for ComicInfo metadata."
+	if strings.TrimSpace(contextTitle) != "" {
+		prompt = fmt.Sprintf("Importing %q. Choose the English title to use for ComicInfo metadata.", contextTitle)
+	}
 	titleSelect := widget.NewSelect(candidates, nil)
 	titleSelect.SetSelected(candidates[0])
 	content := container.NewVBox(
-		widget.NewLabel("Choose the English title to use for ComicInfo metadata."),
+		widget.NewLabel(prompt),
 		titleSelect,
 	)
 	dlg := dialog.NewCustomConfirm("Choose English Manga Title", "Use Title", "Cancel", content, func(confirm bool) {
@@ -153,7 +174,7 @@ func retainEnglishTitleChoice(current, fresh *mangadex.MangaInfo) {
 }
 
 func displayWithEnglishTitle(info *mangadex.MangaInfo, bookmarkTitle string, window fyne.Window, display DisplayMangaInfoFunc) {
-	chooseEnglishTitle(info, window, func() {
+	chooseEnglishTitle(info, window, "", func() {
 		if err := storeFetchedInfo(info, bookmarkTitle); err != nil {
 			dialog.ShowError(fmt.Errorf("could not store MangaDex info for %s: %v", info.ID, err), window)
 			return
@@ -297,7 +318,7 @@ func buildMangaInfoContent(parentWindow fyne.Window, replace func(fyne.CanvasObj
 					return
 				}
 				retainEnglishTitleChoice(info, fresh)
-				chooseEnglishTitle(fresh, parentWindow, func() {
+				chooseEnglishTitle(fresh, parentWindow, "", func() {
 					if storeErr := storeFetchedInfo(fresh, bookmarkTitle); storeErr != nil {
 						notifyLabel.SetText(fmt.Sprintf("%s — fetched but not stored (%v).", display, storeErr))
 					}
@@ -328,7 +349,7 @@ func buildMangaInfoContent(parentWindow fyne.Window, replace func(fyne.CanvasObj
 					return
 				}
 				retainEnglishTitleChoice(info, fresh)
-				chooseEnglishTitle(fresh, parentWindow, func() {
+				chooseEnglishTitle(fresh, parentWindow, "", func() {
 					if storeErr := storeFetchedInfo(fresh, bookmarkTitle); storeErr != nil {
 						log.Printf("[UI] Refresh of %s not stored: %v", id, storeErr)
 					}

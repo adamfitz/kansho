@@ -93,6 +93,10 @@ func main() {
 			log.Println("[UI] Bookmark type editor opened (GUI)")
 			ui.ShowBookmarkTypeView(myWindow)
 		}),
+		fyne.NewMenuItem("Import Existing Titles", func() {
+			log.Println("[UI] Existing title import triggered (GUI)")
+			ui.ShowImportExistingTitlesDialog(kanshoApp, myWindow)
+		}),
 		fyne.NewMenuItemSeparator(),
 		fyne.NewMenuItem("Sync Linux/Windows Bookmarks", func() {
 			log.Println("[UI] Linux/Windows bookmark sync triggered (GUI)")

@@ -110,6 +110,8 @@ func (s *KanshoAppState) SelectManga(id int) {
 //
 // TODO: Implement actual persistence (save to file/database)
 func (s *KanshoAppState) AddManga(manga config.Bookmarks) {
+	models.NormalizeBookmark(&manga)
+
 	// Add the manga to our in-memory data
 	s.MangaData.Manga = append(s.MangaData.Manga, manga)
 

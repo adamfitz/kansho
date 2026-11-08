@@ -394,6 +394,10 @@ func (v *MangaListView) onSiteButtonClicked() {
 	}
 
 	mangaURL := v.state.MangaData.Manga[v.selectedIndex].Url
+	if strings.TrimSpace(mangaURL) == "" {
+		dialog.ShowInformation("Open Site", "This Local title has no website URL.", v.state.Window)
+		return
+	}
 	var err error
 	switch runtime.GOOS {
 	case "linux":

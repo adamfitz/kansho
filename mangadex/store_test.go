@@ -1238,3 +1238,51 @@ func TestMergeLegacyBookmarksIntoActivePlatformTable(t *testing.T) {
 		t.Fatalf("active platform bookmarks after legacy merge = %+v", loaded.Manga)
 	}
 }
+
+func TestSaveBookmarksTrimsTitleAndURL(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	if err := preferences.Save(preferences.Preferences{DatabaseDirectory: filepath.Join(home, "db")}); err != nil {
+		t.Fatalf("save isolated preferences: %v", err)
+	}
+	store := tempStore(t)
+
+	if err := store.SaveBookmarks(models.Manga{Manga: []models.Bookmarks{{
+		Title: "  Spaced Title  ",
+		Url:   "  https://example.test/title  ",
+		Type:  "manga",
+	}}}); err != nil {
+		t.Fatalf("SaveBookmarks: %v", err)
+	}
+
+	var title, url string
+	if err := store.conn.QueryRow(`SELECT title, url FROM bookmarks_linux LIMIT 1`).Scan(&title, &url); err != nil {
+		t.Fatalf("read stored bookmark: %v", err)
+	}
+	if title != "Spaced Title" {
+		t.Errorf("stored title = %q, want %q", title, "Spaced Title")
+	}
+	if url != "https://example.test/title" {
+		t.Errorf("stored url = %q, want %q", url, "https://example.test/title")
+	}
+}
+
+func TestLoadBookmarksTrimsExistingWhitespace(t *testing.T) {
+	store := tempStore(t)
+	if _, err := store.conn.Exec(`INSERT INTO bookmarks_linux (title, url, type) VALUES (?, ?, ?)`,
+		"  Legacy Title  ", "  https://example.test/legacy  ", "manga"); err != nil {
+		t.Fatalf("insert legacy bookmark: %v", err)
+	}
+
+	loaded, err := store.LoadBookmarks()
+	if err != nil {
+		t.Fatalf("LoadBookmarks: %v", err)
+	}
+	if len(loaded.Manga) != 1 {
+		t.Fatalf("loaded %d bookmarks, want 1", len(loaded.Manga))
+	}
+	if loaded.Manga[0].Title != "Legacy Title" || loaded.Manga[0].Url != "https://example.test/legacy" {
+		t.Fatalf("loaded bookmark = %+v, want trimmed title and URL", loaded.Manga[0])
+	}
+}
