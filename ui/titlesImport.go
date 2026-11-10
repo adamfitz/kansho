@@ -43,6 +43,14 @@ type titleImportResolution struct {
 	Problems   []string
 }
 
+type titleImportBatch struct {
+	Added     int
+	Updated   int
+	Unchanged int
+	Conflicts []mangadex.BookmarkImportConflict
+	Changed   []titleImportEntry
+}
+
 // ShowImportExistingTitlesDialog imports existing on-disk titles from a CSV or
 // YAML file into the current platform's bookmark table.
 func ShowImportExistingTitlesDialog(_ fyne.App, window fyne.Window) {
@@ -356,55 +364,34 @@ func startTitleImport(window fyne.Window, entries []titleImportEntry) {
 		return
 	}
 
-	added, skippedDuplicates, err := addImportedTitles(store, entries)
+	batch, err := addImportedTitles(store, entries)
 	if err != nil {
 		dialog.ShowError(fmt.Errorf("import failed: %v", err), window)
 		return
 	}
 
-	withMangaDex := make([]titleImportEntry, 0, len(added))
-	for _, entry := range added {
+	withMangaDex := make([]titleImportEntry, 0, len(batch.Changed))
+	for _, entry := range batch.Changed {
 		if entry.MangaDexID != "" {
 			withMangaDex = append(withMangaDex, entry)
 		}
 	}
-	withoutMangaDex := len(added) - len(withMangaDex)
+	withoutMangaDex := len(batch.Changed) - len(withMangaDex)
 	if len(withMangaDex) == 0 {
-		showTitleImportSummary(window, len(added), skippedDuplicates,
-			titleImportResolution{NoMangaDex: withoutMangaDex})
+		showTitleImportSummary(window, batch, titleImportResolution{NoMangaDex: withoutMangaDex})
 		return
 	}
 
 	runImportedMangaDexLookups(window, withMangaDex, func(result titleImportResolution) {
 		result.NoMangaDex = withoutMangaDex
-		showTitleImportSummary(window, len(added), skippedDuplicates, result)
+		showTitleImportSummary(window, batch, result)
 	})
 }
 
-func addImportedTitles(store *mangadex.Store, entries []titleImportEntry) ([]titleImportEntry, int, error) {
-	current, err := store.LoadBookmarks()
-	if err != nil {
-		return nil, 0, fmt.Errorf("load current bookmarks: %w", err)
-	}
-
-	keys := make(map[string]bool, len(current.Manga)+len(entries))
-	for i := range current.Manga {
-		models.NormalizeBookmark(&current.Manga[i])
-		if key := titleImportDuplicateKey(current.Manga[i].Title); key != "" {
-			keys[key] = true
-		}
-	}
-
-	added := make([]titleImportEntry, 0, len(entries))
-	skipped := 0
+func addImportedTitles(store *mangadex.Store, entries []titleImportEntry) (titleImportBatch, error) {
+	bookmarks := make([]models.Bookmarks, 0, len(entries))
 	for _, entry := range entries {
-		key := titleImportDuplicateKey(entry.Title)
-		if keys[key] {
-			skipped++
-			continue
-		}
-		keys[key] = true
-		current.Manga = append(current.Manga, models.Bookmarks{
+		bookmarks = append(bookmarks, models.Bookmarks{
 			Title:      entry.Title,
 			Url:        entry.URL,
 			Location:   entry.Location,
@@ -412,16 +399,28 @@ func addImportedTitles(store *mangadex.Store, entries []titleImportEntry) ([]tit
 			Type:       entry.Type,
 			MangaDexID: entry.MangaDexID,
 		})
-		added = append(added, entry)
+	}
+	result, err := store.ImportBookmarks(bookmarks)
+	if err != nil {
+		return titleImportBatch{}, fmt.Errorf("merge imported bookmarks: %w", err)
 	}
 
-	if len(added) == 0 {
-		return nil, skipped, nil
+	changed := make(map[string]bool, len(result.ChangedTitles))
+	for _, title := range result.ChangedTitles {
+		changed[titleImportDuplicateKey(title)] = true
 	}
-	if err := store.SaveBookmarks(current); err != nil {
-		return nil, skipped, fmt.Errorf("save bookmarks: %w", err)
+	batch := titleImportBatch{
+		Added:     result.Added,
+		Updated:   result.Updated,
+		Unchanged: result.Unchanged,
+		Conflicts: result.Conflicts,
 	}
-	return added, skipped, nil
+	for _, entry := range entries {
+		if changed[titleImportDuplicateKey(entry.Title)] {
+			batch.Changed = append(batch.Changed, entry)
+		}
+	}
+	return batch, nil
 }
 
 func runImportedMangaDexLookups(window fyne.Window, entries []titleImportEntry, done func(titleImportResolution)) {
@@ -526,10 +525,12 @@ func storeImportedMangaDex(info *mangadex.MangaInfo, importTitle string, window 
 	dlg.Show()
 }
 
-func showTitleImportSummary(window fyne.Window, added, skippedDuplicates int, result titleImportResolution) {
+func showTitleImportSummary(window fyne.Window, batch titleImportBatch, result titleImportResolution) {
 	lines := []string{
-		fmt.Sprintf("Titles imported: %d", added),
-		fmt.Sprintf("Duplicate titles skipped: %d", skippedDuplicates),
+		fmt.Sprintf("Titles imported: %d", batch.Added),
+		fmt.Sprintf("Existing titles updated: %d", batch.Updated),
+		fmt.Sprintf("Existing titles unchanged: %d", batch.Unchanged),
+		fmt.Sprintf("Case-only title conflicts skipped: %d", len(batch.Conflicts)),
 		fmt.Sprintf("MangaDex metadata linked: %d", result.Resolved),
 		fmt.Sprintf("No MangaDex link/ID: %d", result.NoMangaDex),
 		fmt.Sprintf("MangaDex lookups failed: %d", result.Failed),
@@ -538,6 +539,13 @@ func showTitleImportSummary(window fyne.Window, added, skippedDuplicates int, re
 	if len(result.Problems) > 0 {
 		lines = append(lines, "", "Details:")
 		lines = append(lines, result.Problems...)
+	}
+	if len(batch.Conflicts) > 0 {
+		lines = append(lines, "", "Case-only title conflicts:")
+		for _, conflict := range batch.Conflicts {
+			lines = append(lines, fmt.Sprintf("%q does not exactly match existing title %q; skipped to avoid a duplicate.",
+				conflict.ImportedTitle, conflict.ExistingTitle))
+		}
 	}
 
 	summary := widget.NewLabel(strings.Join(lines, "\n"))
