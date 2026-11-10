@@ -146,6 +146,112 @@ func (s *Store) ApplyBookmarkTypeUpdates(updates []BookmarkTypeUpdate, progress 
 	return updated, nil
 }
 
+type BookmarkImportResult struct {
+	Added         int
+	Updated       int
+	Unchanged     int
+	ChangedTitles []string
+	Conflicts     []BookmarkImportConflict
+}
+
+type BookmarkImportConflict struct {
+	ImportedTitle string
+	ExistingTitle string
+}
+
+// ImportBookmarks inserts new bookmarks and fills only blank fields on an
+// existing exact-title match in the current platform's bookmark table.
+func (s *Store) ImportBookmarks(bookmarks []models.Bookmarks) (BookmarkImportResult, error) {
+	result := BookmarkImportResult{}
+	if len(bookmarks) == 0 {
+		return result, nil
+	}
+
+	table := s.platformBookmarksTable()
+	err := s.withWriteTx(func(tx *sql.Tx) error {
+		for _, imported := range bookmarks {
+			imported.Title = strings.TrimSpace(imported.Title)
+			if imported.Title == "" {
+				return fmt.Errorf("cannot import a bookmark with an empty title")
+			}
+			imported.Url = strings.TrimSpace(imported.Url)
+			imported.Location = strings.TrimSpace(imported.Location)
+			imported.Site = strings.TrimSpace(imported.Site)
+			imported.Shortname = strings.TrimSpace(imported.Shortname)
+			imported.Type = strings.TrimSpace(imported.Type)
+			imported.MangaDexID = strings.TrimSpace(imported.MangaDexID)
+
+			var id int64
+			var existing models.Bookmarks
+			err := tx.QueryRow(`SELECT id, url, chapters, location, site, shortname, type, mangadex_id
+				FROM `+table+` WHERE title = ? COLLATE BINARY ORDER BY id LIMIT 1`, imported.Title).Scan(
+				&id, &existing.Url, &existing.Chapters, &existing.Location, &existing.Site,
+				&existing.Shortname, &existing.Type, &existing.MangaDexID)
+			if err == sql.ErrNoRows {
+				var existingTitle string
+				conflictErr := tx.QueryRow(`SELECT title FROM `+table+`
+					WHERE title = ? COLLATE NOCASE ORDER BY id LIMIT 1`, imported.Title).Scan(&existingTitle)
+				if conflictErr == nil {
+					result.Conflicts = append(result.Conflicts, BookmarkImportConflict{
+						ImportedTitle: imported.Title,
+						ExistingTitle: existingTitle,
+					})
+					continue
+				}
+				if conflictErr != sql.ErrNoRows {
+					return fmt.Errorf("check case-only title conflict for %q: %w", imported.Title, conflictErr)
+				}
+				if _, err := tx.Exec(`INSERT INTO `+table+`
+					(title, url, chapters, location, site, shortname, type, mangadex_id, updated_at)
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+					imported.Title, imported.Url, imported.Chapters, imported.Location,
+					imported.Site, imported.Shortname, bookmarkType(imported.Type), imported.MangaDexID); err != nil {
+					return fmt.Errorf("insert imported bookmark %q: %w", imported.Title, err)
+				}
+				result.Added++
+				result.ChangedTitles = append(result.ChangedTitles, imported.Title)
+				continue
+			}
+			if err != nil {
+				return fmt.Errorf("find imported bookmark %q: %w", imported.Title, err)
+			}
+
+			var setClauses []string
+			var args []interface{}
+			fillMissing := func(column, current, incoming string) {
+				if strings.TrimSpace(current) == "" && incoming != "" {
+					setClauses = append(setClauses, column+" = ?")
+					args = append(args, incoming)
+				}
+			}
+			fillMissing("url", existing.Url, imported.Url)
+			fillMissing("location", existing.Location, imported.Location)
+			fillMissing("site", existing.Site, imported.Site)
+			fillMissing("shortname", existing.Shortname, imported.Shortname)
+			fillMissing("type", existing.Type, imported.Type)
+			fillMissing("mangadex_id", existing.MangaDexID, imported.MangaDexID)
+			if len(setClauses) == 0 {
+				result.Unchanged++
+				continue
+			}
+
+			args = append(args, id)
+			query := `UPDATE ` + table + ` SET ` + strings.Join(setClauses, ", ") +
+				`, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+			if _, err := tx.Exec(query, args...); err != nil {
+				return fmt.Errorf("update imported bookmark %q: %w", imported.Title, err)
+			}
+			result.Updated++
+			result.ChangedTitles = append(result.ChangedTitles, imported.Title)
+		}
+		return nil
+	})
+	if err != nil {
+		return BookmarkImportResult{}, err
+	}
+	return result, nil
+}
+
 // SaveBookmarks replaces the stored bookmark set with data in one transaction.
 // Kansho's UI edits bookmarks in memory and saves the complete list, so a full
 // replacement keeps the existing behaviour while still being atomic.

@@ -782,6 +782,75 @@ func TestApplyBookmarkTypeUpdatesArePlatformScopedAndPreserveLocations(t *testin
 	}
 }
 
+func TestImportBookmarksAddsAndFillsOnlyMissingFields(t *testing.T) {
+	store := tempStore(t)
+	table := store.platformBookmarksTable()
+	if _, err := store.conn.Exec(`INSERT INTO ` + table + `
+		(title, url, chapters, location, site, shortname, type, mangadex_id) VALUES
+		('Existing', 'https://kept.test/existing', 'chapter 4', '', '', '', '', ''),
+		('URLMissing', '', 'chapter 7', '/kept/url-location', 'kept-site', 'kept-short', 'manga', 'kept-url-id'),
+		('Complete', 'https://kept.test/complete', 'chapter 9', '/kept/location', 'kept-site', 'kept-short', 'webtoon', 'kept-id')`); err != nil {
+		t.Fatalf("seed bookmarks: %v", err)
+	}
+	var existingID int64
+	if err := store.conn.QueryRow(`SELECT id FROM ` + table + ` WHERE title = 'Existing'`).Scan(&existingID); err != nil {
+		t.Fatalf("read existing bookmark ID: %v", err)
+	}
+
+	result, err := store.ImportBookmarks([]models.Bookmarks{
+		{Title: "Existing", Url: "https://incoming.test/overwrite", Chapters: "incoming chapters", Location: "/filled/location", Site: "incoming-site", Shortname: "incoming-short", Type: "webtoon", MangaDexID: "incoming-id"},
+		{Title: "URLMissing", Url: "https://filled.test/url", Location: "/incoming/location", Site: "incoming-site", Shortname: "incoming-short", Type: "webtoon", MangaDexID: "incoming-id"},
+		{Title: "Complete", Url: "https://incoming.test/overwrite", Location: "/incoming/location", Site: "incoming-site", Shortname: "incoming-short", Type: "manga", MangaDexID: "incoming-id"},
+		{Title: "New", Url: "https://new.test/title", Location: "/new/location", Site: "new-site", Type: "webtoon", MangaDexID: "new-id"},
+		{Title: "existing", Url: "https://case-conflict.test/overwrite", Location: "/case-conflict", Site: "case-conflict", Type: "manga", MangaDexID: "case-conflict-id"},
+	})
+	if err != nil {
+		t.Fatalf("ImportBookmarks: %v", err)
+	}
+	if result.Added != 1 || result.Updated != 2 || result.Unchanged != 1 {
+		t.Fatalf("ImportBookmarks result = %+v, want 1 added, 2 updated, 1 unchanged", result)
+	}
+
+	loaded, err := store.LoadBookmarks()
+	if err != nil {
+		t.Fatalf("LoadBookmarks: %v", err)
+	}
+	bookmarks := make(map[string]models.Bookmarks, len(loaded.Manga))
+	for _, bookmark := range loaded.Manga {
+		bookmarks[bookmark.Title] = bookmark
+	}
+	got := bookmarks["Existing"]
+	if got.Url != "https://kept.test/existing" || got.Chapters != "chapter 4" || got.Location != "/filled/location" ||
+		got.Site != "incoming-site" || got.Shortname != "incoming-short" || got.Type != "webtoon" || got.MangaDexID != "incoming-id" {
+		t.Errorf("existing bookmark after import = %+v; wanted only blank fields filled", got)
+	}
+	if got = bookmarks["URLMissing"]; got.Url != "https://filled.test/url" || got.Location != "/kept/url-location" ||
+		got.Site != "kept-site" || got.Shortname != "kept-short" || got.Type != "manga" || got.MangaDexID != "kept-url-id" {
+		t.Errorf("URL-missing bookmark after import = %+v; wanted only blank URL filled", got)
+	}
+	if got = bookmarks["Complete"]; got.Url != "https://kept.test/complete" || got.Location != "/kept/location" ||
+		got.Site != "kept-site" || got.Type != "webtoon" || got.MangaDexID != "kept-id" {
+		t.Errorf("complete bookmark changed after import: %+v", got)
+	}
+	if got = bookmarks["New"]; got.Url != "https://new.test/title" || got.Location != "/new/location" ||
+		got.Site != "new-site" || got.Type != "webtoon" || got.MangaDexID != "new-id" {
+		t.Errorf("new bookmark = %+v", got)
+	}
+	var afterID int64
+	if err := store.conn.QueryRow(`SELECT id FROM ` + table + ` WHERE title = 'Existing'`).Scan(&afterID); err != nil || afterID != existingID {
+		t.Errorf("existing row ID = %d, %v; want unchanged ID %d", afterID, err, existingID)
+	}
+	if len(result.ChangedTitles) != 3 {
+		t.Errorf("ChangedTitles = %v, want only changed rows", result.ChangedTitles)
+	}
+	if len(result.Conflicts) != 1 || result.Conflicts[0] != (BookmarkImportConflict{ImportedTitle: "existing", ExistingTitle: "Existing"}) {
+		t.Errorf("Conflicts = %+v, want case-only conflict for existing vs Existing", result.Conflicts)
+	}
+	if len(bookmarks) != 4 {
+		t.Errorf("bookmark count = %d, want 4 with the case-only conflict skipped", len(bookmarks))
+	}
+}
+
 func TestApplyRootToBookmarksByPlatformAndType(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
