@@ -67,6 +67,100 @@ func (s *Store) LoadPlatformBookmarks(platform string) (models.Manga, error) {
 	return manga, nil
 }
 
+// BookmarkStatuses resolves the MangaDex publication status for each bookmark,
+// returning one value per bookmark in the same order. A bookmark is matched by
+// its MangaDex ID first, then by its bookmarked title (alias or primary title).
+// Bookmarks with no linked local MangaDex record yield an empty status.
+func (s *Store) BookmarkStatuses(bookmarks []models.Bookmarks) ([]string, error) {
+	statuses := make([]string, len(bookmarks))
+	if len(bookmarks) == 0 {
+		return statuses, nil
+	}
+
+	byID, err := s.titleStatusesByID()
+	if err != nil {
+		return nil, err
+	}
+	byTitle, err := s.titleStatusesByTitle()
+	if err != nil {
+		return nil, err
+	}
+
+	for i, bookmark := range bookmarks {
+		if id := strings.TrimSpace(bookmark.MangaDexID); id != "" {
+			if status, ok := byID[id]; ok {
+				statuses[i] = status
+				continue
+			}
+		}
+		if status, ok := byTitle[strings.ToLower(strings.TrimSpace(bookmark.Title))]; ok {
+			statuses[i] = status
+		}
+	}
+	return statuses, nil
+}
+
+func (s *Store) titleStatusesByID() (map[string]string, error) {
+	rows, err := s.conn.Query(`SELECT mangadex_id, status FROM manga_title`)
+	if err != nil {
+		return nil, fmt.Errorf("load title statuses: %w", err)
+	}
+	defer rows.Close()
+
+	statuses := make(map[string]string)
+	for rows.Next() {
+		var id, status string
+		if err := rows.Scan(&id, &status); err != nil {
+			return nil, fmt.Errorf("read title status: %w", err)
+		}
+		statuses[id] = status
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read title statuses: %w", err)
+	}
+	return statuses, nil
+}
+
+func (s *Store) titleStatusesByTitle() (map[string]string, error) {
+	statuses := make(map[string]string)
+
+	rows, err := s.conn.Query(`SELECT primary_title, status FROM manga_title`)
+	if err != nil {
+		return nil, fmt.Errorf("load primary title statuses: %w", err)
+	}
+	for rows.Next() {
+		var title, status string
+		if err := rows.Scan(&title, &status); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("read primary title status: %w", err)
+		}
+		statuses[strings.ToLower(strings.TrimSpace(title))] = status
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, fmt.Errorf("read primary title statuses: %w", err)
+	}
+	rows.Close()
+
+	aliasRows, err := s.conn.Query(`SELECT l.lookup_title, m.status
+		FROM manga_title_lookup l JOIN manga_title m ON m.mangadex_id = l.mangadex_id`)
+	if err != nil {
+		return nil, fmt.Errorf("load title alias statuses: %w", err)
+	}
+	defer aliasRows.Close()
+	for aliasRows.Next() {
+		var title, status string
+		if err := aliasRows.Scan(&title, &status); err != nil {
+			return nil, fmt.Errorf("read title alias status: %w", err)
+		}
+		statuses[strings.ToLower(strings.TrimSpace(title))] = status
+	}
+	if err := aliasRows.Err(); err != nil {
+		return nil, fmt.Errorf("read title alias statuses: %w", err)
+	}
+	return statuses, nil
+}
+
 type BookmarkTypeEntry struct {
 	ID    int64
 	Title string
