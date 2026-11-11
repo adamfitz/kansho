@@ -65,7 +65,10 @@ func ApplyToCollector(c *colly.Collector, targetURL string) error {
 
 // ApplyCookieBypass applies cookie-based bypass (the original method)
 func ApplyCookieBypass(c *colly.Collector, data *BypassData, targetURL string) error {
-	if !data.HasCookies() {
+	// cf_clearance is exported on its own (partitioned cookies are invisible to
+	// chrome.cookies.getAll), so accept data that carries only the structured
+	// clearance with no additional cookies.
+	if !data.HasCookies() && data.CfClearanceStruct == nil {
 		return fmt.Errorf("no cookie data available")
 	}
 

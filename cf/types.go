@@ -132,7 +132,11 @@ func (b *BypassData) DetermineProtectionType() ProtectionType {
 	if b.HasTurnstile() {
 		return ProtectionTurnstile
 	}
-	if b.HasCookies() {
+	// A captured cf_clearance is valid cookie-based bypass data even when the
+	// browser returned no other cookies for the domain. Cloudflare issues
+	// cf_clearance as a partitioned (CHIPS) cookie, which chrome.cookies.getAll
+	// omits, so the extension frequently exports it with an empty allCookies.
+	if b.HasCookies() || b.CfClearance != "" || b.CfClearanceStruct != nil {
 		return ProtectionCookie
 	}
 	return ProtectionNone
