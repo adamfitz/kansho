@@ -178,6 +178,66 @@ func TestParseCapturedDataToleratesEmptyClearanceTimestamp(t *testing.T) {
 	}
 }
 
+// TestParseCapturedDataAcceptsClearanceOnlyWithoutCookies verifies that a
+// capture carrying a valid cf_clearance but an empty allCookies array (the
+// normal shape for Cloudflare's partitioned cf_clearance cookie) is accepted as
+// cookie-based bypass data instead of being rejected as "no valid bypass data".
+func TestParseCapturedDataAcceptsClearanceOnlyWithoutCookies(t *testing.T) {
+	jsonData := `{
+  "capturedAt": "2026-11-11T20:36:00Z",
+  "url": "https://manhuaus.com/manga/example/",
+  "domain": "manhuaus.com",
+  "type": "cookie",
+  "allCookies": [],
+  "cfClearance": "cf_clearance=token-value; Domain=manhuaus.com; Path=/; HttpOnly; Secure",
+  "cfClearanceUrl": "https://manhuaus.com/",
+  "headers": {"userAgent": "Mozilla/5.0", "acceptLanguage": "en-US"}
+}`
+
+	data, err := ParseCapturedData(jsonData)
+	if err != nil {
+		t.Fatalf("expected clearance-only capture to parse, got: %v", err)
+	}
+	if data.Type != ProtectionCookie {
+		t.Errorf("expected protection type %q, got %q", ProtectionCookie, data.Type)
+	}
+	if data.CfClearanceStruct == nil || data.CfClearanceStruct.Value != "token-value" {
+		t.Errorf("expected parsed cf_clearance struct with value %q, got %+v", "token-value", data.CfClearanceStruct)
+	}
+}
+
+// TestDetermineProtectionTypeClearanceOnly covers the protection-type decision
+// directly, including the structured-cookie case used when reloading from disk.
+func TestDetermineProtectionTypeClearanceOnly(t *testing.T) {
+	cases := []struct {
+		name string
+		data *BypassData
+		want ProtectionType
+	}{
+		{
+			name: "empty data is none",
+			data: &BypassData{Domain: "manhuaus.com"},
+			want: ProtectionNone,
+		},
+		{
+			name: "raw clearance string is cookie",
+			data: &BypassData{Domain: "manhuaus.com", CfClearance: "token"},
+			want: ProtectionCookie,
+		},
+		{
+			name: "structured clearance is cookie",
+			data: &BypassData{Domain: "manhuaus.com", CfClearanceStruct: &CfClearanceCookie{Name: "cf_clearance", Value: "token"}},
+			want: ProtectionCookie,
+		},
+	}
+
+	for _, tc := range cases {
+		if got := tc.data.DetermineProtectionType(); got != tc.want {
+			t.Errorf("%s: DetermineProtectionType() = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
 // TestImportFromClipboardStringRejectsMismatchedClearance feeds a complete
 // captured-data JSON whose cf_clearance belongs to another site and verifies the
 // whole pipeline rejects it before saving.
