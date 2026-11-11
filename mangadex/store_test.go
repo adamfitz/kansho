@@ -894,6 +894,44 @@ func TestApplyRootToBookmarksByPlatformAndType(t *testing.T) {
 	}
 }
 
+func TestBookmarkStatusesResolvesByIDAliasAndTitle(t *testing.T) {
+	store, err := OpenPath(filepath.Join(t.TempDir(), "statuses.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+
+	if err := store.Upsert(&MangaInfo{ID: "id-ongoing", Title: map[string]string{"en": "Ongoing Title"}, Status: "ongoing"}); err != nil {
+		t.Fatalf("upsert ongoing: %v", err)
+	}
+	if err := store.Upsert(&MangaInfo{ID: "id-completed", Title: map[string]string{"en": "Completed Title"}, Status: "completed"}); err != nil {
+		t.Fatalf("upsert completed: %v", err)
+	}
+	if err := store.SetTitleAlias("Alias Title", "id-completed"); err != nil {
+		t.Fatalf("set alias: %v", err)
+	}
+
+	bookmarks := []models.Bookmarks{
+		{Title: "By ID", MangaDexID: "id-ongoing"},
+		{Title: "Alias Title"},
+		{Title: "Completed Title"},
+		{Title: "Unknown Title"},
+	}
+	statuses, err := store.BookmarkStatuses(bookmarks)
+	if err != nil {
+		t.Fatalf("BookmarkStatuses: %v", err)
+	}
+	want := []string{"ongoing", "completed", "completed", ""}
+	if len(statuses) != len(want) {
+		t.Fatalf("got %d statuses, want %d", len(statuses), len(want))
+	}
+	for i := range want {
+		if statuses[i] != want[i] {
+			t.Fatalf("statuses[%d] = %q, want %q", i, statuses[i], want[i])
+		}
+	}
+}
+
 func TestSetBookmarkMangaDexIDOnlyUpdatesCurrentPlatform(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "links.db")
 	linux, err := openPathForPlatform(path, "linux")

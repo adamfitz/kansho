@@ -32,6 +32,18 @@ func (b *enterButton) TypedKey(ev *fyne.KeyEvent) {
 	}
 }
 
+// Filter option labels shared by the status dropdown and the type radio group.
+const (
+	filterAll       = "All"
+	statusOngoing   = "Ongoing"
+	statusCompleted = "Completed"
+	statusHiatus    = "Hiatus"
+	statusCancelled = "Cancelled"
+)
+
+var statusFilterOptions = []string{filterAll, statusOngoing, statusCompleted, statusHiatus, statusCancelled}
+var typeFilterOptions = []string{filterAll, "Manga", "Webtoon"}
+
 // MangaListView represents the manga list card component.
 type MangaListView struct {
 	Card fyne.CanvasObject
@@ -42,6 +54,13 @@ type MangaListView struct {
 	editButton     *widget.Button
 	dirButton      *widget.Button
 	siteButton     *widget.Button
+
+	statusSelect *widget.Select
+	typeRadio    *widget.RadioGroup
+	// filterIndices maps each visible list row to its index in
+	// state.MangaData.Manga, so the list can show a filtered subset while the
+	// selection buttons keep working on the full bookmark slice.
+	filterIndices []int
 
 	searchEntry       *widget.Entry
 	searchButton      *widget.Button
@@ -110,13 +129,24 @@ func NewMangaListView(state *KanshoAppState) *MangaListView {
 		}
 	})
 
+	view.statusSelect = widget.NewSelect(statusFilterOptions, func(string) {
+		view.applyFilter()
+	})
+	view.statusSelect.SetSelected(filterAll)
+
+	view.typeRadio = widget.NewRadioGroup(typeFilterOptions, func(string) {
+		view.applyFilter()
+	})
+	view.typeRadio.Horizontal = true
+	view.typeRadio.SetSelected(filterAll)
+
 	sort.Slice(view.state.MangaData.Manga, func(i, j int) bool {
 		return view.state.MangaData.Manga[i].Title < view.state.MangaData.Manga[j].Title
 	})
 
 	view.List = widget.NewList(
 		func() int {
-			return len(view.state.MangaData.Manga)
+			return len(view.filterIndices)
 		},
 		func() fyne.CanvasObject {
 			// Each row is a border layout: the title label fills the row and a
@@ -130,30 +160,44 @@ func NewMangaListView(state *KanshoAppState) *MangaListView {
 			return container.NewBorder(nil, nil, nil, container.NewHBox(infoButton, gutter), label)
 		},
 		func(id widget.ListItemID, item fyne.CanvasObject) {
+			if int(id) < 0 || int(id) >= len(view.filterIndices) {
+				return
+			}
+			mangaIndex := view.filterIndices[id]
 			row := item.(*fyne.Container)
 			label := row.Objects[0].(*widget.Label)
 			controls := row.Objects[1].(*fyne.Container)
 			infoButton := controls.Objects[0].(*iconButton)
-			label.SetText(view.state.MangaData.Manga[id].Title)
+			label.SetText(view.state.MangaData.Manga[mangaIndex].Title)
 			infoButton.OnTapped = func() {
-				view.onInfoButtonClicked(int(id))
+				view.onInfoButtonClicked(mangaIndex)
 			}
 		},
 	)
 
 	view.List.OnSelected = func(id widget.ListItemID) {
-		view.selectedIndex = int(id)
+		if int(id) < 0 || int(id) >= len(view.filterIndices) {
+			return
+		}
+		mangaIndex := view.filterIndices[id]
+		view.selectedIndex = mangaIndex
 		view.deleteButton.Enable()
 		view.editButton.Enable()
 		view.dirButton.Enable()
 		view.siteButton.Enable()
-		view.state.SelectManga(int(id))
+		view.state.SelectManga(mangaIndex)
 	}
 
 	listTheme := mangaListScrollTheme{Theme: theme.Current()}
 	listWithPersistentScrollbar := container.NewThemeOverride(view.List, listTheme)
 	cardContent := container.NewBorder(
 		container.NewVBox(
+			container.NewHBox(
+				widget.NewLabel("Status:"),
+				view.statusSelect,
+				widget.NewLabel("Type:"),
+				view.typeRadio,
+			),
 			container.NewBorder(
 				nil,
 				nil,
@@ -191,6 +235,8 @@ func NewMangaListView(state *KanshoAppState) *MangaListView {
 		view.refresh()
 	})
 
+	view.refresh()
+
 	return view
 }
 
@@ -212,7 +258,7 @@ func (v *MangaListView) SetEditMangaView(editView *EditMangaView) {
 func (v *MangaListView) SetCountChangedHandler(handler func(int)) {
 	v.onCountChanged = handler
 	if handler != nil {
-		handler(len(v.state.MangaData.Manga))
+		handler(len(v.filterIndices))
 	}
 }
 
@@ -239,20 +285,73 @@ func (v *MangaListView) refresh() {
 		return v.state.MangaData.Manga[i].Title < v.state.MangaData.Manga[j].Title
 	})
 
+	v.searchResults = []int{}
+	v.currentSearchIdx = -1
+
+	v.applyFilter()
+}
+
+// applyFilter rebuilds the visible row mapping from the current status and type
+// filters, then refreshes the list and the displayed count. The status filter is
+// resolved from the local MangaDex records, so it only queries the database when
+// a specific status is selected.
+func (v *MangaListView) applyFilter() {
+	// The filter widgets fire their change callback while they are being
+	// configured in the constructor, before the list exists.
+	if v.List == nil {
+		return
+	}
+
+	status := v.statusSelect.Selected
+	kind := v.typeRadio.Selected
+
+	var statuses []string
+	if status != "" && status != filterAll {
+		if store, err := mangadex.GetStore(); err == nil {
+			statuses, _ = store.BookmarkStatuses(v.state.MangaData.Manga)
+		}
+	}
+
+	v.filterIndices = make([]int, 0, len(v.state.MangaData.Manga))
+	for i, manga := range v.state.MangaData.Manga {
+		if !matchesTypeFilter(manga.Type, kind) {
+			continue
+		}
+		if status != "" && status != filterAll {
+			current := ""
+			if i < len(statuses) {
+				current = prettifyStatus(statuses[i])
+			}
+			if !strings.EqualFold(current, status) {
+				continue
+			}
+		}
+		v.filterIndices = append(v.filterIndices, i)
+	}
+
 	v.selectedIndex = -1
 	v.List.UnselectAll()
+	v.disableSelectionButtons()
+	v.List.Refresh()
+	if v.onCountChanged != nil {
+		v.onCountChanged(len(v.filterIndices))
+	}
+}
+
+// matchesTypeFilter reports whether a bookmark type passes the type radio
+// filter. An empty or unknown type is only shown by the "All" option.
+func matchesTypeFilter(bookmarkType, filter string) bool {
+	if filter == "" || filter == filterAll {
+		return true
+	}
+	return strings.EqualFold(strings.TrimSpace(bookmarkType), filter)
+}
+
+func (v *MangaListView) disableSelectionButtons() {
 	v.deleteButton.Disable()
 	v.editButton.Disable()
 	v.dirButton.Disable()
 	v.siteButton.Disable()
-
-	v.searchResults = []int{}
-	v.currentSearchIdx = -1
-
-	v.List.Refresh()
-	if v.onCountChanged != nil {
-		v.onCountChanged(len(v.state.MangaData.Manga))
-	}
 }
 
 func (v *MangaListView) onDeleteButtonClicked() {
@@ -330,9 +429,9 @@ func (v *MangaListView) performSearch() {
 
 	if searchTerm != v.lastSearchTerm {
 		v.searchResults = []int{}
-		for i, manga := range v.state.MangaData.Manga {
-			if strings.Contains(strings.ToLower(manga.Title), searchTermLower) {
-				v.searchResults = append(v.searchResults, i)
+		for row, mangaIndex := range v.filterIndices {
+			if strings.Contains(strings.ToLower(v.state.MangaData.Manga[mangaIndex].Title), searchTermLower) {
+				v.searchResults = append(v.searchResults, row)
 			}
 		}
 
