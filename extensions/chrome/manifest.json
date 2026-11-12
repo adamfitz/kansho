@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Kansho cf Helper",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Captures cf cookies and browser data for Kansho manga downloader",
   "permissions": [
     "cookies",
@@ -10,8 +10,7 @@
     "scripting",
     "storage",
     "clipboardWrite",
-    "webRequest",
-    "webRequestBlocking"
+    "webRequest"
   ],
   "host_permissions": [
     "<all_urls>"

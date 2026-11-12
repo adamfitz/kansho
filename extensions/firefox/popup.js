@@ -17,13 +17,25 @@ document.getElementById('captureBtn').addEventListener('click', async () => {
     const url = new URL(tab.url);
     const domain = url.hostname;
 
-    const cookies = await browser.cookies.getAll({ domain: domain });
-
     const parentDomain = domain.split('.').slice(-2).join('.');
-    const parentCookies = await browser.cookies.getAll({ domain: parentDomain });
 
-    const allCookies = [...cookies, ...parentCookies].reduce((acc, cookie) => {
-      const key = `${cookie.name}-${cookie.domain}`;
+    const cookieResults = [];
+    for (const query of [
+      { url: tab.url },
+      { domain: domain },
+      { domain: parentDomain },
+    ]) {
+      try {
+        cookieResults.push(...await browser.cookies.getAll(query));
+      } catch (e) {
+        console.debug('cookie query failed:', query, e);
+      }
+    }
+
+    const allCookies = cookieResults.reduce((acc, cookie) => {
+      const partition = cookie.partitionKey && cookie.partitionKey.topLevelSite
+        ? cookie.partitionKey.topLevelSite : '';
+      const key = `${cookie.name}-${cookie.domain}-${cookie.path}-${partition}`;
 
       if (!acc.has(key)) {
         acc.set(key, cookie);
@@ -82,7 +94,7 @@ document.getElementById('captureBtn').addEventListener('click', async () => {
       const turnstileResult = await browser.scripting.executeScript({
         target: { tabId: tab.id },
         func: () => {
-          const turnstileIframe = document.querySelector('iframe[src*="challenges.cf.com"]');
+          const turnstileIframe = document.querySelector('iframe[src*="challenges.cloudflare.com"]');
 
           const forms = document.querySelectorAll('form');
           let formData = {};
@@ -136,7 +148,8 @@ document.getElementById('captureBtn').addEventListener('click', async () => {
       if (cookie.path) raw += `; Path=${cookie.path}`;
       if (cookie.sameSite) raw += `; SameSite=${cookie.sameSite}`;
       if (cookie.secure) raw += `; Secure`;
-      raw += `; HttpOnly`;
+      if (cookie.httpOnly) raw += `; HttpOnly`;
+      if (cookie.partitionKey && cookie.partitionKey.topLevelSite) raw += `; Partitioned`;
       if (cookie.expirationDate) raw += `; Expires=${new Date(cookie.expirationDate * 1000).toUTCString()}`;
       return raw;
     };
@@ -211,6 +224,16 @@ document.getElementById('captureBtn').addEventListener('click', async () => {
       delete exportData.cfClearance;
       delete exportData.cfClearanceCapturedAt;
       delete exportData.cfClearanceUrl;
+    }
+
+    // Never claim success for an empty capture. Importing it would only fail
+    // with "no valid bypass data found".
+    const hasTurnstile = !!(turnstileData && turnstileData.hasTurnstile);
+    if (!cfClearanceRaw && allCookies.size === 0 && !hasTurnstile) {
+      throw new Error(
+        'Nothing captured: no cookies, no cf_clearance and no Turnstile token. ' +
+        'Solve the Cloudflare challenge on THIS page, then capture again.'
+      );
     }
 
     const jsonData = JSON.stringify(exportData, null, 2);

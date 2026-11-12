@@ -86,3 +86,36 @@ browser.webRequest.onHeadersReceived.addListener(
   },
   ["responseHeaders", "extraHeaders"]
 );
+
+// Fallback capture path: cf_clearance can be set without a webRequest event we
+// observe (for example when it already existed before the extension loaded).
+// The cookies API still fires onChanged when the browser writes it.
+browser.cookies.onChanged.addListener(({ removed, cookie }) => {
+  try {
+    if (removed || !cookie || cookie.name !== "cf_clearance" || !cookie.value) {
+      return;
+    }
+
+    let raw = `cf_clearance=${cookie.value}`;
+    if (cookie.domain) raw += `; Domain=${cookie.domain}`;
+    if (cookie.path) raw += `; Path=${cookie.path}`;
+    if (cookie.sameSite) raw += `; SameSite=${cookie.sameSite}`;
+    if (cookie.secure) raw += `; Secure`;
+    if (cookie.httpOnly) raw += `; HttpOnly`;
+    if (cookie.partitionKey && cookie.partitionKey.topLevelSite) {
+      raw += `; Partitioned`;
+    }
+    if (cookie.expirationDate) {
+      raw += `; Expires=${new Date(cookie.expirationDate * 1000).toUTCString()}`;
+    }
+
+    const domain = (cookie.domain || "").replace(/^\./, "");
+    browser.storage.local.set({
+      cfClearanceRaw: raw,
+      cfClearanceCapturedAt: new Date().toISOString(),
+      cfClearanceUrl: `https://${domain}${cookie.path || "/"}`
+    });
+  } catch (e) {
+    console.error("Error storing cf_clearance from cookies.onChanged:", e);
+  }
+});

@@ -136,7 +136,10 @@ func ParseCapturedData(jsonData string) (*BypassData, error) {
 
 	if data.Type == ProtectionNone {
 		logCF("ParseCapturedData: No valid bypass data found")
-		return nil, fmt.Errorf("no valid bypass data found (no cookies or turnstile tokens)")
+		return nil, fmt.Errorf(
+			"no valid bypass data found: capture has no cookies, no cf_clearance and no Turnstile token — " +
+				"solve the challenge on the capture page and copy the data again",
+		)
 	}
 
 	// Parse cf_clearance into structured cookie
@@ -161,6 +164,31 @@ func ParseCapturedData(jsonData string) (*BypassData, error) {
 		}
 	} else {
 		logCF("ParseCapturedData: No cfClearance string found")
+		// Some captures only include cf_clearance inside allCookies (for example
+		// when the extension reads the partitioned cookie straight from the jar).
+		// Promote it so both the import validation and the HTTP bypass see it.
+		for _, c := range data.AllCookies {
+			if c.Name != "cf_clearance" || c.Value == "" {
+				continue
+			}
+			cookie := &CfClearanceCookie{
+				Name:     c.Name,
+				Value:    c.Value,
+				Domain:   c.Domain,
+				Path:     c.Path,
+				HttpOnly: c.HTTPOnly,
+				Secure:   c.Secure,
+				SameSite: c.SameSite,
+			}
+			if c.ExpirationDate > 0 {
+				expires := time.Unix(int64(c.ExpirationDate), 0)
+				cookie.Expires = &expires
+			}
+			data.CfClearanceStruct = cookie
+			data.CfClearance = cookie.Value
+			logCF("ParseCapturedData: Promoted cf_clearance from allCookies")
+			break
+		}
 	}
 
 	// Parse cfClearanceCapturedAt
