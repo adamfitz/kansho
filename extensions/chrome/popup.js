@@ -48,24 +48,61 @@ document.getElementById('captureBtn').addEventListener('click', async () => {
     // -------------------------------------------------------------------------
     // Step 3: Get all cookies for the current domain
     // -------------------------------------------------------------------------
-    // chrome.cookies.getAll() queries the browser's cookie store
-    // This is like calling the Chrome API from Go using CGO
-    const cookies = await chrome.cookies.getAll({ domain: domain });
-    
-    // Also get cookies from the parent domain (e.g., ".mgeko.cc")
-    // Some cookies are set on the parent domain and apply to all subdomains
-    // Split by '.' and take last 2 parts: "www.mgeko.cc" -> ["mgeko", "cc"] -> "mgeko.cc"
+    // Cloudflare issues cf_clearance as a partitioned (CHIPS) cookie. The
+    // cookies API only returns unpartitioned cookies unless a partition key is
+    // supplied, so query both and merge the results.
     const parentDomain = domain.split('.').slice(-2).join('.');
-    const parentCookies = await chrome.cookies.getAll({ domain: parentDomain });
+    const cookieQueries = [
+      { url: tab.url },
+      { domain: domain },
+      { domain: parentDomain },
+    ];
+
+    // Ask Chrome for this tab's exact partition key (Chrome 132+). Older
+    // browsers throw; fall back to the page origin and the parent domain.
+    const partitionKeys = [];
+    try {
+      const tabPartitionKey = await chrome.cookies.getPartitionKey({ tabId: tab.id });
+      if (tabPartitionKey && tabPartitionKey.topLevelSite) {
+        partitionKeys.push(tabPartitionKey);
+      }
+    } catch (e) {
+      console.debug('cookies.getPartitionKey unavailable:', e);
+    }
+
+    const addPartitionKey = (topLevelSite) => {
+      if (!topLevelSite) return;
+      if (!partitionKeys.some(k => k.topLevelSite === topLevelSite)) {
+        partitionKeys.push({ topLevelSite });
+      }
+    };
+    addPartitionKey(url.origin);
+    addPartitionKey(`https://${parentDomain}`);
+
+    for (const partitionKey of partitionKeys) {
+      cookieQueries.push({ url: tab.url, partitionKey });
+      cookieQueries.push({ domain: domain, partitionKey });
+      cookieQueries.push({ domain: parentDomain, partitionKey });
+    }
+
+    const cookieResults = [];
+    for (const query of cookieQueries) {
+      try {
+        cookieResults.push(...await chrome.cookies.getAll(query));
+      } catch (e) {
+        console.debug('cookie query failed:', query, e);
+      }
+    }
     
     // -------------------------------------------------------------------------
     // Step 4: Combine and deduplicate cookies
     // -------------------------------------------------------------------------
-    // We might get the same cookie from multiple queries, so deduplicate using a Map
-    // Map is like Go's map[string]Cookie - key is "name-domain", value is cookie object
-    const allCookies = [...cookies, ...parentCookies].reduce((acc, cookie) => {
-      // Create a unique key for each cookie (name + domain combination)
-      const key = `${cookie.name}-${cookie.domain}`;
+    // We might get the same cookie from multiple queries, so deduplicate using a Map.
+    // Partitioned and unpartitioned cookies with the same name are distinct.
+    const allCookies = cookieResults.reduce((acc, cookie) => {
+      const partition = cookie.partitionKey && cookie.partitionKey.topLevelSite
+        ? cookie.partitionKey.topLevelSite : '';
+      const key = `${cookie.name}-${cookie.domain}-${cookie.path}-${partition}`;
       
       // Only add if we haven't seen this cookie before
       if (!acc.has(key)) {
@@ -169,7 +206,7 @@ document.getElementById('captureBtn').addEventListener('click', async () => {
         target: { tabId: tab.id },
         func: () => {
           // Look for Turnstile challenge form or iframe
-          const turnstileIframe = document.querySelector('iframe[src*="challenges.cf.com"]');
+          const turnstileIframe = document.querySelector('iframe[src*="challenges.cloudflare.com"]');
           
           // Look for form with Turnstile data
           const forms = document.querySelectorAll('form');
@@ -230,7 +267,8 @@ document.getElementById('captureBtn').addEventListener('click', async () => {
       if (cookie.path) raw += `; Path=${cookie.path}`;
       if (cookie.sameSite) raw += `; SameSite=${cookie.sameSite}`;
       if (cookie.secure) raw += `; Secure`;
-      raw += `; HttpOnly`;
+      if (cookie.httpOnly) raw += `; HttpOnly`;
+      if (cookie.partitionKey && cookie.partitionKey.topLevelSite) raw += `; Partitioned`;
       if (cookie.expirationDate) raw += `; Expires=${new Date(cookie.expirationDate * 1000).toUTCString()}`;
       return raw;
     };
@@ -337,6 +375,16 @@ document.getElementById('captureBtn').addEventListener('click', async () => {
       delete exportData.cfClearance;
       delete exportData.cfClearanceCapturedAt;
       delete exportData.cfClearanceUrl;
+    }
+
+    // Never claim success for an empty capture. Importing it would only fail
+    // with "no valid bypass data found".
+    const hasTurnstile = !!(turnstileData && turnstileData.hasTurnstile);
+    if (!cfClearanceRaw && allCookies.size === 0 && !hasTurnstile) {
+      throw new Error(
+        'Nothing captured: no cookies, no cf_clearance and no Turnstile token. ' +
+        'Solve the Cloudflare challenge on THIS page, then capture again.'
+      );
     }
 
     // -------------------------------------------------------------------------

@@ -102,8 +102,8 @@ func ApplyCookieBypass(c *colly.Collector, data *BypassData, targetURL string) e
 	// Add remaining cookies from AllCookies
 	log.Printf("  Adding %d additional cookies:", len(data.AllCookies))
 	for _, cookie := range data.AllCookies {
-		// Skip if this is cf_clearance (already added above)
-		if cookie.Name == "cf_clearance" {
+		// Skip cf_clearance only when the structured copy was already added.
+		if cookie.Name == "cf_clearance" && hasCFClearance {
 			continue
 		}
 
@@ -120,7 +120,12 @@ func ApplyCookieBypass(c *colly.Collector, data *BypassData, targetURL string) e
 		}
 
 		c.SetCookies(targetURL, []*http.Cookie{httpCookie})
-		log.Printf("    • %s=%s...", cookie.Name, cookie.Value[:min(20, len(cookie.Value))])
+		if cookie.Name == "cf_clearance" {
+			hasCFClearance = true
+			log.Printf("    ✓ Added cf_clearance from allCookies: %s", cookie.Value[:min(20, len(cookie.Value))])
+		} else {
+			log.Printf("    • %s=%s...", cookie.Name, cookie.Value[:min(20, len(cookie.Value))])
+		}
 	}
 
 	if !hasCFClearance {
@@ -191,14 +196,33 @@ func makeCookieRequest(client *http.Client, data *BypassData, targetURL string) 
 	// Set User-Agent
 	req.Header.Set("User-Agent", data.Entropy.UserAgent)
 
+	// Add the structured cf_clearance first (clearance-only captures have no
+	// entry in AllCookies).
+	hasCFClearance := false
+	if data.CfClearanceStruct != nil {
+		req.AddCookie(&http.Cookie{
+			Name:   data.CfClearanceStruct.Name,
+			Value:  data.CfClearanceStruct.Value,
+			Path:   data.CfClearanceStruct.Path,
+			Domain: data.CfClearanceStruct.Domain,
+		})
+		hasCFClearance = true
+	}
+
 	// Add cookies
 	for _, cookie := range data.AllCookies {
+		if cookie.Name == "cf_clearance" && hasCFClearance {
+			continue
+		}
 		req.AddCookie(&http.Cookie{
 			Name:   cookie.Name,
 			Value:  cookie.Value,
 			Path:   cookie.Path,
 			Domain: cookie.Domain,
 		})
+		if cookie.Name == "cf_clearance" {
+			hasCFClearance = true
+		}
 	}
 
 	// Set headers

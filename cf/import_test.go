@@ -206,6 +206,42 @@ func TestParseCapturedDataAcceptsClearanceOnlyWithoutCookies(t *testing.T) {
 	}
 }
 
+// TestParseCapturedDataPromotesCfClearanceFromAllCookies verifies that a
+// cf_clearance exported only in allCookies (for example after a partitioned
+// cookie is read directly from the browser jar) becomes the structured
+// clearance used by import validation and the HTTP bypass.
+func TestParseCapturedDataPromotesCfClearanceFromAllCookies(t *testing.T) {
+	jsonData := `{
+  "capturedAt": "2026-11-12T08:00:00Z",
+  "url": "https://manhuaus.com/manga/example/",
+  "domain": "manhuaus.com",
+  "allCookies": [
+    {"name": "cf_clearance", "value": "token-value", "domain": "manhuaus.com", "path": "/", "httpOnly": true, "secure": true, "sameSite": "no_restriction", "expirationDate": 1799999999}
+  ],
+  "headers": {"userAgent": "Mozilla/5.0", "acceptLanguage": "en-US"}
+}`
+
+	data, err := ParseCapturedData(jsonData)
+	if err != nil {
+		t.Fatalf("expected allCookies-only capture to parse, got: %v", err)
+	}
+	if data.Type != ProtectionCookie {
+		t.Errorf("expected protection type %q, got %q", ProtectionCookie, data.Type)
+	}
+	if data.CfClearanceStruct == nil {
+		t.Fatal("expected cf_clearance to be promoted from allCookies")
+	}
+	if data.CfClearanceStruct.Value != "token-value" {
+		t.Errorf("expected promoted value %q, got %q", "token-value", data.CfClearanceStruct.Value)
+	}
+	if data.CfClearanceStruct.Domain != "manhuaus.com" {
+		t.Errorf("expected promoted domain %q, got %q", "manhuaus.com", data.CfClearanceStruct.Domain)
+	}
+	if data.CfClearanceStruct.Expires == nil {
+		t.Error("expected expiration date to be promoted")
+	}
+}
+
 // TestDetermineProtectionTypeClearanceOnly covers the protection-type decision
 // directly, including the structured-cookie case used when reloading from disk.
 func TestDetermineProtectionTypeClearanceOnly(t *testing.T) {
