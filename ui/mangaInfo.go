@@ -213,6 +213,23 @@ func showMangaLookupDialog(query string, window fyne.Window, display DisplayMang
 	d.show()
 }
 
+// ShowMangaTitleLookup opens the MangaDex title picker even when the bookmark
+// already has a MangaDex ID. The Edit Manga panel uses it so a wrong metadata
+// mapping can be replaced. onChanged receives the chosen MangaDex ID after it
+// has been persisted to the database and before the information pane renders.
+func ShowMangaTitleLookup(manga config.Bookmarks, window fyne.Window, display DisplayMangaInfoFunc, onChanged func(id string)) {
+	if display == nil {
+		display = func(*mangadex.MangaInfo, string) {}
+	}
+	wrapped := func(info *mangadex.MangaInfo, bookmarkTitle string) {
+		if onChanged != nil && info != nil {
+			onChanged(info.ID)
+		}
+		display(info, bookmarkTitle)
+	}
+	showMangaLookupDialog(manga.Title, window, wrapped)
+}
+
 // --- Info window ---
 
 // makeSelectableLabel creates a label whose text can be highlighted and copied

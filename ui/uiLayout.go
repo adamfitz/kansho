@@ -83,6 +83,9 @@ func BuildMainLayout(window fyne.Window) fyne.CanvasObject {
 	mangaListView.SetInfoDisplayHandler(func(info *mangadex.MangaInfo, bookmarkTitle string) {
 		chapterListView.ShowMangaInfo(info, bookmarkTitle)
 	})
+	editMangaView.SetInfoDisplayHandler(func(info *mangadex.MangaInfo, bookmarkTitle string) {
+		chapterListView.ShowMangaInfo(info, bookmarkTitle)
+	})
 
 	// Status bar (bottom of the window)
 	// Mirrors the download queue page's status bar: it shows the selected

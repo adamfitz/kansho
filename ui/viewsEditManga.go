@@ -47,8 +47,12 @@ type EditMangaView struct {
 	AddButton            *widget.Button     // Button to add new manga
 	SaveButton           *widget.Button     // Button to save changes to existing manga
 	CancelButton         *widget.Button     // Button to cancel editing
+	EditMetadataButton   *widget.Button     // Button to replace the MangaDex metadata mapping
 	CustomDirectoryCheck *widget.Check      // Selects a custom root instead of the configured default
 	SelectedDirectoryURI fyne.ListableURI   // Stores the selected directory URI
+
+	// infoDisplayHandler renders a chosen MangaDex title in the chapter pane.
+	infoDisplayHandler DisplayMangaInfoFunc
 
 	// state is a reference to the shared application state
 	State *KanshoAppState
@@ -139,6 +143,12 @@ func NewEditMangaView(State *KanshoAppState) *EditMangaView {
 	})
 	view.CancelButton.Hide() // Hidden by default, shown in edit mode
 
+	// Create the Edit Metadata button
+	view.EditMetadataButton = widget.NewButton("Edit Metadata", func() {
+		view.onEditMetadataButtonClicked()
+	})
+	view.EditMetadataButton.Hide() // Hidden by default, shown in edit mode
+
 	// Create the name/title row with label on the left, entry on the right
 	nameRow := container.NewBorder(
 		nil,
@@ -183,6 +193,7 @@ func NewEditMangaView(State *KanshoAppState) *EditMangaView {
 			view.AddButton,
 			view.SaveButton,
 			view.CancelButton,
+			view.EditMetadataButton,
 		),
 	)
 
@@ -367,10 +378,11 @@ func (v *EditMangaView) LoadMangaForEditing(mangaID int) {
 	}
 	v.refreshDirectoryChoice(false)
 
-	// Show Save button and Cancel button, hide Add button
+	// Show Save button, Cancel button and Edit Metadata button, hide Add button
 	v.AddButton.Hide()
 	v.SaveButton.Show()
 	v.CancelButton.Show()
+	v.EditMetadataButton.Show()
 
 	log.Printf("[EditManga] Loaded manga for editing: %s (ID: %d)", manga.Title, mangaID)
 }
@@ -396,10 +408,58 @@ func (v *EditMangaView) clearForm() {
 	v.editingMangaID = -1
 	v.originalLocation = ""
 
-	// Show Add button, hide Save and Cancel buttons
+	// Show Add button, hide Save, Cancel and Edit Metadata buttons
 	v.SaveButton.Hide()
 	v.CancelButton.Hide()
+	v.EditMetadataButton.Hide()
 	v.AddButton.Show()
+}
+
+// SetInfoDisplayHandler registers the function that renders a chosen MangaDex
+// title in the chapter pane.
+func (v *EditMangaView) SetInfoDisplayHandler(handler DisplayMangaInfoFunc) {
+	v.infoDisplayHandler = handler
+}
+
+// onEditMetadataButtonClicked opens the MangaDex title picker for the manga in
+// edit mode, even if it already has a MangaDex ID, and updates the bookmark to
+// the newly chosen entry.
+func (v *EditMangaView) onEditMetadataButtonClicked() {
+	if !v.isEditMode || v.editingMangaID < 0 || v.editingMangaID >= len(v.State.MangaData.Manga) {
+		dialog.ShowInformation("Edit Metadata", "Select a manga to edit first.", v.State.Window)
+		return
+	}
+
+	editingID := v.editingMangaID
+	bookmarkTitle := v.State.MangaData.Manga[editingID].Title
+	manga := v.State.MangaData.Manga[editingID]
+
+	ShowMangaTitleLookup(manga, v.State.Window, v.infoDisplayHandler, func(id string) {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			return
+		}
+		target := -1
+		if editingID < len(v.State.MangaData.Manga) &&
+			strings.EqualFold(strings.TrimSpace(v.State.MangaData.Manga[editingID].Title), strings.TrimSpace(bookmarkTitle)) {
+			target = editingID
+		}
+		if target == -1 {
+			for i := range v.State.MangaData.Manga {
+				if strings.EqualFold(strings.TrimSpace(v.State.MangaData.Manga[i].Title), strings.TrimSpace(bookmarkTitle)) {
+					target = i
+					break
+				}
+			}
+		}
+		if target == -1 {
+			return
+		}
+		v.State.MangaData.Manga[target].MangaDexID = id
+		if err := saveBookmarksToStore(v.State.MangaData); err != nil {
+			dialog.ShowError(fmt.Errorf("failed to save MangaDex metadata mapping: %v", err), v.State.Window)
+		}
+	})
 }
 
 // onDirectoryButtonClicked opens a folder selection dialog.
