@@ -2,6 +2,7 @@ package ui
 
 import (
 	"kansho/mangadex"
+	"kansho/metadataqueue"
 	"kansho/refreshpool"
 
 	"fyne.io/fyne/v2"
@@ -102,6 +103,13 @@ func BuildMainLayout(window fyne.Window) fyne.CanvasObject {
 	refreshpool.Get().SetListener(func(s refreshpool.Status) {
 		fyne.Do(func() {
 			statusBar.SetRefreshPoolStatus(s)
+		})
+	})
+
+	// Feed the single metadata worker queue into the adjacent status readout.
+	metadataqueue.Get().SetListener(func(s metadataqueue.Status) {
+		fyne.Do(func() {
+			statusBar.SetMetadataQueueStatus(s)
 		})
 	})
 

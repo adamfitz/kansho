@@ -394,6 +394,13 @@ func chapterStatsWithDownloaded(manga *config.Bookmarks, current mangadex.Chapte
 	}
 }
 
+// chapterStatsHasSnapshot reports whether stats came from a real chapter-list
+// snapshot. A row with zero counts and no refresh date only exists to hold the
+// metadata check cursor.
+func chapterStatsHasSnapshot(stats *mangadex.ChapterStats) bool {
+	return stats != nil && (stats.Total > 0 || stats.LastRefresh != "")
+}
+
 func chapterStatsEqual(a, b mangadex.ChapterStats) bool {
 	return a.Title == b.Title && a.Site == b.Site && a.URL == b.URL &&
 		a.Total == b.Total && a.Downloaded == b.Downloaded &&
@@ -423,7 +430,7 @@ func downloadedChapterCount(items []*ChapterItem) int {
 }
 
 func (v *ChapterListView) syncSelectedChapterStats() {
-	if v.chapterStats == nil {
+	if !chapterStatsHasSnapshot(v.chapterStats) {
 		return
 	}
 	manga := v.state.GetSelectedManga()
@@ -456,7 +463,7 @@ func (v *ChapterListView) updateStoredDownloadedCount(manga *config.Bookmarks) {
 		log.Printf("[UI] Failed to load chapter counts for %s: %v", manga.Title, err)
 		return
 	}
-	if current == nil {
+	if !chapterStatsHasSnapshot(current) {
 		return
 	}
 	localNames, err := readLocalChapterNames(manga)
@@ -503,7 +510,10 @@ func (v *ChapterListView) updateStatusBar() {
 	}
 
 	var counts *chapterCounts
-	if v.chapterStats != nil {
+	// A row created only to hold the metadata check cursor has zero counts and
+	// no refresh date; treat it as "no snapshot yet" so the status bar does not
+	// show a bogus 0/0.
+	if chapterStatsHasSnapshot(v.chapterStats) {
 		counts = &chapterCounts{
 			Total:         v.chapterStats.Total,
 			Downloaded:    v.chapterStats.Downloaded,

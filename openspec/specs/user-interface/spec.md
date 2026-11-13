@@ -126,6 +126,19 @@ The system SHALL display the chapters of the currently selected manga with per-c
 - THEN the status bar SHALL not calculate or display a refresh date
 - AND selecting the manga SHALL not update the database
 
+#### Scenario: Metadata queue readout
+- GIVEN the main window is open
+- WHEN the metadata queue changes state
+- THEN the status bar SHALL show `⟳ Metadata: idle` when it has no work
+- AND `Metadata: N running · M queued` with an animated spinner while Check or Repair work is in flight
+- AND the metadata readout SHALL be clickable while busy to open a dialog listing the action, title and chapter of each job
+- AND the dialog SHALL close automatically when the queue becomes idle
+
+#### Scenario: Metadata tick in the info pane
+- GIVEN every local chapter for a title has passed a metadata Check
+- WHEN the MangaDex information pane is open
+- THEN a green tick SHALL appear next to the pane title
+
 #### Scenario: Chapter counts are hidden until first refresh
 - GIVEN a manga has no complete chapter-count snapshot in the local SQLite database
 - WHEN the manga is selected
