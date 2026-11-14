@@ -13,7 +13,7 @@ import (
 	"kansho/downloader"
 )
 
-// RavenscansSite implements the SitePlugin interface for ravenscans.com
+// RavenscansSite implements the SitePlugin interface for ravenscans.org
 type RavenscansSite struct{}
 
 // Ensure RavenscansSite implements SitePlugin
@@ -26,12 +26,12 @@ func (r *RavenscansSite) GetSiteName() string {
 
 // GetDomain returns the site domain
 func (r *RavenscansSite) GetDomain() string {
-	return "ravenscans.com"
+	return "ravenscans.org"
 }
 
 // NeedsCFBypass returns whether this site needs Cloudflare bypass
 func (r *RavenscansSite) NeedsCFBypass() bool {
-	return false // Ravenscans doesn't use CF protection
+	return true // Ravenscans now serves a Cloudflare challenge on ravenscans.org
 }
 
 // GetChapterExtractionMethod returns HOW to extract chapters

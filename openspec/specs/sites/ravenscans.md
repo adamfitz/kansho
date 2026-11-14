@@ -1,7 +1,7 @@
 # ravenscans Site Plugin
 
-- **Site name**: `ravenscans` — **Domain**: `ravenscans.com` — **File**: `sites/ravenscans.go`
-- **Cloudflare bypass needed**: no
+- **Site name**: `ravenscans` — **Domain**: `ravenscans.org` — **File**: `sites/ravenscans.go`
+- **Cloudflare bypass needed**: yes — `ravenscans.org` serves a Cloudflare challenge; `NeedsCFBypass()` returns `true` so captured bypass data is applied. The stored bypass is keyed by the request hostname (`ravenscans.org`), which must match the domain the browser extension exported.
 - **Extraction**: chapters via **browser JavaScript**; images via a **custom** static-HTML regex parser.
 
 ## What is scraped, how, and why
