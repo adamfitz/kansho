@@ -30,6 +30,14 @@ func (e *LockedError) Error() string {
 // transaction mode plus busy timeout prevents two writers from corrupting the
 // database when the file is in a synced directory.
 func (s *Store) withWriteTx(fn func(*sql.Tx) error) error {
+	// Queue writers for this database path before touching the advisory lock.
+	// Without this, the second in-process writer would find the lock row from the
+	// first and fail immediately instead of waiting for the short transaction to
+	// finish.
+	writeMu := s.writeLock()
+	writeMu.Lock()
+	defer writeMu.Unlock()
+
 	owner, err := s.acquireWriteLock()
 	if err != nil {
 		return err
@@ -50,6 +58,18 @@ func (s *Store) withWriteTx(fn func(*sql.Tx) error) error {
 	}
 	s.checkpoint()
 	return nil
+}
+
+// withWrite serializes a write that does not need an explicit transaction
+// (single atomic statements such as cursor advances) with every other write to
+// the same database path. It does not take the advisory lock because SQLite's
+// busy timeout already arbitrates short cross-process writes and the cursor
+// update must not be lost merely because another Kansho instance is saving.
+func (s *Store) withWrite(fn func() error) error {
+	writeMu := s.writeLock()
+	writeMu.Lock()
+	defer writeMu.Unlock()
+	return fn()
 }
 
 func (s *Store) acquireWriteLock() (string, error) {

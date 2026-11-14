@@ -1,9 +1,11 @@
 package mangadex
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"kansho/models"
 	"kansho/preferences"
@@ -1468,5 +1470,94 @@ func TestLoadBookmarksTrimsExistingWhitespace(t *testing.T) {
 	}
 	if loaded.Manga[0].Title != "Legacy Title" || loaded.Manga[0].Url != "https://example.test/legacy" {
 		t.Fatalf("loaded bookmark = %+v, want trimmed title and URL", loaded.Manga[0])
+	}
+}
+
+func TestConcurrentWritesQueueForSameDatabasePath(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "shared.db")
+	first, err := OpenPath(path)
+	if err != nil {
+		t.Fatalf("open first store: %v", err)
+	}
+	defer first.Close()
+	second, err := OpenPath(path)
+	if err != nil {
+		t.Fatalf("open second store: %v", err)
+	}
+	defer second.Close()
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- first.withWriteTx(func(tx *sql.Tx) error {
+			close(started)
+			<-release
+			_, err := tx.Exec(`INSERT INTO kansho_meta (key, value) VALUES ('first', '1')`)
+			return err
+		})
+	}()
+	<-started
+
+	secondDone := make(chan error, 1)
+	go func() {
+		secondDone <- second.UpsertChapterStats("second", ChapterStats{
+			Title: "Second Manga", Total: 1, NotDownloaded: 1,
+		})
+	}()
+
+	select {
+	case err := <-secondDone:
+		t.Fatalf("second write returned before the first transaction finished: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(release)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first write: %v", err)
+	}
+	if err := <-secondDone; err != nil {
+		t.Fatalf("second write should queue and succeed, got: %v", err)
+	}
+}
+
+func TestAdvanceCursorQueuesBehindActiveWrite(t *testing.T) {
+	store := tempStore(t)
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- store.withWriteTx(func(tx *sql.Tx) error {
+			close(started)
+			<-release
+			return nil
+		})
+	}()
+	<-started
+
+	advanceDone := make(chan error, 1)
+	go func() { advanceDone <- store.AdvanceChapterCheck("queued-cursor", 7) }()
+
+	select {
+	case err := <-advanceDone:
+		t.Fatalf("cursor advance returned before the active write finished: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(release)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("active write: %v", err)
+	}
+	if err := <-advanceDone; err != nil {
+		t.Fatalf("cursor advance should queue and succeed, got: %v", err)
+	}
+
+	stats, err := store.LookupChapterStats("queued-cursor")
+	if err != nil {
+		t.Fatalf("LookupChapterStats: %v", err)
+	}
+	if stats == nil || stats.LastCheckedChapter != 7 {
+		t.Fatalf("cursor stats = %+v, want LastCheckedChapter 7", stats)
 	}
 }

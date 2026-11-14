@@ -15,6 +15,13 @@ All metadata Check and Repair work SHALL run on one process-wide worker queue. A
 - AND the next task SHALL start only after the current task returns or panics
 - AND the queue SHALL recover from a task panic and continue with the next task
 
+#### Scenario: Cursor updates share the database write queue
+- GIVEN a metadata task finishes checking or repairing a file
+- WHEN it saves the chapter or volume cursor
+- THEN the cursor write SHALL queue behind any active database write from a concurrent chapter download
+- AND SHALL NOT be lost because another Kansho operation holds the database write lock
+- AND the task SHALL still count as successful once the cursor is stored
+
 #### Scenario: Duplicate submissions rejected
 - GIVEN a task with a dedupe key is pending or running
 - WHEN another task with the same dedupe key is submitted
