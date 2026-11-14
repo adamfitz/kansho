@@ -10,6 +10,7 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/test"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 )
 
@@ -48,6 +49,9 @@ func TestMainStatusBarShowsLastRefreshWhenAvailable(t *testing.T) {
 	}
 }
 
+// TestMetadataRefreshReadoutMatchesChapterRefresh verifies the metadata
+// readout uses the same idle label, busy label and spinner as the chapter
+// refresh readout.
 func TestMetadataRefreshReadoutMatchesChapterRefresh(t *testing.T) {
 	bar := NewMainStatusBar()
 	if got, want := bar.metaStatus.Text, "⟳ Metadata Refresh: idle"; got != want {
@@ -74,6 +78,36 @@ func TestMetadataRefreshReadoutMatchesChapterRefresh(t *testing.T) {
 	}
 	if got, want := bar.metaSpinner.Text, ""; got != want {
 		t.Fatalf("metadata spinner after drain = %q, want %q", got, want)
+	}
+}
+
+// TestStatusBarReadoutsKeepRightPadding verifies the idle metadata readout is
+// inset from the right edge and separated from the chapter refresh readout,
+// instead of sitting flush against the status bar.
+func TestStatusBarReadoutsKeepRightPadding(t *testing.T) {
+	app := test.NewApp()
+	w := test.NewWindow(nil)
+	t.Cleanup(func() {
+		w.Close()
+		app.Quit()
+	})
+
+	bar := NewMainStatusBar()
+	w.SetContent(container.NewBorder(nil, bar.Bar, nil, nil, widget.NewLabel("filler")))
+	w.Resize(fyne.NewSize(1250, 850))
+
+	abs := func(obj fyne.CanvasObject) fyne.Position {
+		return app.Driver().AbsolutePositionForObject(obj)
+	}
+	barRight := abs(bar.Bar).X + bar.Bar.Size().Width
+	metaRight := abs(bar.metaArea).X + bar.metaArea.Size().Width
+	if inset := barRight - metaRight; inset < theme.Padding()*2 {
+		t.Errorf("metadata readout right inset = %v, want at least %v", inset, theme.Padding()*2)
+	}
+
+	refreshRight := abs(bar.refreshArea).X + bar.refreshArea.Size().Width
+	if gap := abs(bar.metaArea).X - refreshRight; gap < theme.Padding()*2 {
+		t.Errorf("gap between readouts = %v, want at least %v", gap, theme.Padding()*2)
 	}
 }
 
