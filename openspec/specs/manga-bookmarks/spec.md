@@ -302,6 +302,14 @@ The system SHALL protect bookmark writes with an advisory database lock.
 - WHEN a bookmark write is attempted
 - THEN the write SHALL fail with a lock error that identifies the lock owner and age
 
+#### Scenario: Same-instance writes queue
+- GIVEN one Kansho operation is writing to the database
+- WHEN another operation in the same Kansho process writes at the same time (for example a metadata Repair advancing its cursor while a chapter download saves bookmark state)
+- THEN the second write SHALL wait for the first write to finish and SHALL then succeed
+- AND no `LockedError` SHALL be reported for a lock held by the same process
+- AND single-statement cursor updates SHALL use the same in-process write queue as transactional writes
+- AND readers SHALL continue under SQLite WAL while writes are serialized
+
 #### Scenario: Clear stale locks
 - GIVEN the user opens Database → Clear Transaction Locks
 - WHEN the user confirms the warning

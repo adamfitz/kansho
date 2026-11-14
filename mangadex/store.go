@@ -87,6 +87,23 @@ type Store struct {
 	platform string
 }
 
+// pathWriteLocks serializes database writes per database path. SQLite allows
+// only one writer at a time, so concurrent operations on the same database (for
+// example a metadata Repair advancing its cursor while a chapter download saves
+// bookmark state) queue here instead of racing the advisory write lock and
+// failing with a spurious LockedError. Closing and reopening the Store for the
+// same path keeps sharing the same lock. The advisory lock still rejects
+// writers from other Kansho processes.
+var pathWriteLocks sync.Map // database path -> *sync.Mutex
+
+func (s *Store) writeLock() *sync.Mutex {
+	if mu, ok := pathWriteLocks.Load(s.path); ok {
+		return mu.(*sync.Mutex)
+	}
+	mu, _ := pathWriteLocks.LoadOrStore(s.path, &sync.Mutex{})
+	return mu.(*sync.Mutex)
+}
+
 // DefaultDBPath returns the database path configured in kansho.conf.
 func DefaultDBPath() (string, error) {
 	prefs, err := preferences.Load()
@@ -733,7 +750,8 @@ func (s *Store) AdvanceChapterCheck(key string, chapter float64) error {
 	if key == "" || chapter <= 0 {
 		return nil
 	}
-	_, err := s.conn.Exec(`INSERT INTO manga_chapter_stats
+	return s.withWrite(func() error {
+		_, err := s.conn.Exec(`INSERT INTO manga_chapter_stats
 		(manga_key, total_chapters, downloaded_chapters, not_downloaded_chapters,
 		 last_checked_chapter, updated_at)
 		VALUES (?, 0, 0, 0, ?, CURRENT_TIMESTAMP)
@@ -744,11 +762,12 @@ func (s *Store) AdvanceChapterCheck(key string, chapter float64) error {
 				ELSE last_checked_chapter
 			END,
 			updated_at = CURRENT_TIMESTAMP`,
-		key, chapter)
-	if err != nil {
-		return fmt.Errorf("advance chapter check for %s: %w", key, err)
-	}
-	return nil
+			key, chapter)
+		if err != nil {
+			return fmt.Errorf("advance chapter check for %s: %w", key, err)
+		}
+		return nil
+	})
 }
 
 // AdvanceVolumeCheck records that every volume up to volume has been checked
@@ -760,7 +779,8 @@ func (s *Store) AdvanceVolumeCheck(key string, volume float64) error {
 	if key == "" || volume <= 0 {
 		return nil
 	}
-	_, err := s.conn.Exec(`INSERT INTO manga_chapter_stats
+	return s.withWrite(func() error {
+		_, err := s.conn.Exec(`INSERT INTO manga_chapter_stats
 		(manga_key, total_chapters, downloaded_chapters, not_downloaded_chapters,
 		 last_checked_volume, updated_at)
 		VALUES (?, 0, 0, 0, ?, CURRENT_TIMESTAMP)
@@ -771,11 +791,12 @@ func (s *Store) AdvanceVolumeCheck(key string, volume float64) error {
 				ELSE last_checked_volume
 			END,
 			updated_at = CURRENT_TIMESTAMP`,
-		key, volume)
-	if err != nil {
-		return fmt.Errorf("advance volume check for %s: %w", key, err)
-	}
-	return nil
+			key, volume)
+		if err != nil {
+			return fmt.Errorf("advance volume check for %s: %w", key, err)
+		}
+		return nil
+	})
 }
 
 // Count returns the number of stored title records.
