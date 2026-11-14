@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
@@ -698,19 +699,24 @@ func comicInfoForFile(base *ComicInfo, fileName string) ComicInfo {
 	return ci
 }
 
-// RepairCBZ rewrites the metadata of one CBZ when it is missing or does not
-// match the MangaDex title. It reports whether the file was changed.
+// RepairCBZ regenerates the metadata of one CBZ when it is missing, corrupt,
+// or does not match the MangaDex title. Matching files are left untouched so
+// Repair does not recompress every archive. It reports whether the file was
+// changed.
 func RepairCBZ(store *mangadex.Store, info *mangadex.MangaInfo, cbzPath string) (bool, error) {
 	if info == nil {
 		return false, nil
 	}
 	base := FromMangaInfo(info)
-	if hasComicInfo(cbzPath) && matchesBase(cbzPath, base) {
-		return false, nil
-	}
 	fileName := filepath.Base(cbzPath)
 	ci := comicInfoForFile(base, fileName)
 	coverBytes, _ := getCoverBytes(store, info)
+	if len(coverBytes) > 0 {
+		ci.Pages = &ComicPageList{Pages: []ComicPageInfo{{Image: 0, Type: "FrontCover"}}}
+	}
+	if matchesComicInfo(cbzPath, &ci) {
+		return false, nil
+	}
 	if err := applyComicInfo(cbzPath, &ci, coverBytes); err != nil {
 		return false, err
 	}
@@ -793,6 +799,54 @@ func hasComicInfo(cbzPath string) bool {
 		}
 	}
 	return false
+}
+
+func matchesComicInfo(cbzPath string, expected *ComicInfo) bool {
+	if expected == nil {
+		return true
+	}
+	r, err := zip.OpenReader(cbzPath)
+	if err != nil {
+		return false
+	}
+	defer r.Close()
+	var actual *ComicInfo
+	for _, f := range r.File {
+		if f.Name != "ComicInfo.xml" {
+			continue
+		}
+		if f.UncompressedSize64 == 0 {
+			return false
+		}
+		rc, err := f.Open()
+		if err != nil {
+			return false
+		}
+		data, err := io.ReadAll(rc)
+		rc.Close()
+		if err != nil {
+			return false
+		}
+		var parsed ComicInfo
+		if err := xml.Unmarshal(data, &parsed); err != nil {
+			return false
+		}
+		actual = &parsed
+		break
+	}
+	if actual == nil {
+		return false
+	}
+
+	want := *expected
+	actual.XMLName = xml.Name{}
+	want.XMLName = xml.Name{}
+	// When there is no cover to write, ignore any existing Pages entry so an
+	// unavailable cover download cannot force repeated rewrites.
+	if want.Pages == nil {
+		actual.Pages = nil
+	}
+	return reflect.DeepEqual(*actual, want)
 }
 
 func matchesBase(cbzPath string, base *ComicInfo) bool {

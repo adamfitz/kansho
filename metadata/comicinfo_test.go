@@ -191,6 +191,51 @@ func TestDirectoryFullyCheckedUsesCursor(t *testing.T) {
 	}
 }
 
+func TestRepairCBZComparesAllMetadataFields(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ch001.cbz")
+	info := &mangadex.MangaInfo{
+		Title:            map[string]string{"en": "Test Series"},
+		Author:           "Author",
+		Description:      map[string]string{"en": "Summary"},
+		Status:           "ongoing",
+		OriginalLanguage: "ja",
+	}
+	expected := comicInfoForFile(FromMangaInfo(info), filepath.Base(path))
+	xmlText, err := expected.ToXML()
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTestCBZ(t, path, map[string]string{"001.jpg": "page", "ComicInfo.xml": xmlText})
+
+	fixed, err := RepairCBZ(nil, info, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fixed {
+		t.Fatal("RepairCBZ() rewrote matching metadata")
+	}
+
+	mismatched := expected
+	mismatched.Title = "Wrong title"
+	xmlText, err = mismatched.ToXML()
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTestCBZ(t, path, map[string]string{"001.jpg": "page", "ComicInfo.xml": xmlText})
+
+	fixed, err = RepairCBZ(nil, info, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !fixed {
+		t.Fatal("RepairCBZ() did not rewrite mismatched metadata")
+	}
+	if !matchesComicInfo(path, &expected) {
+		t.Fatal("RepairCBZ() did not restore the expected metadata")
+	}
+}
+
 func writeTestCBZ(t *testing.T, path string, files map[string]string) {
 	t.Helper()
 	archive, err := os.Create(path)

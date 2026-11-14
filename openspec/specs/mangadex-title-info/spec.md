@@ -200,7 +200,9 @@ The information pane SHALL provide `Check` and `Repair` actions for the selected
 - GIVEN the information pane is open for a title with local CBZ files
 - WHEN the user clicks `Repair`
 - THEN Kansho SHALL queue every local CBZ file
-- AND SHALL preserve the existing selective behavior: only files whose metadata is missing or mismatched SHALL be rewritten
+- AND SHALL compare the existing metadata against every field Repair would write, including the per-file chapter, volume and title fields
+- AND SHALL rewrite only files whose metadata is missing, corrupt, or differs in any compared field
+- AND a file whose metadata matches in every field SHALL be left untouched, avoiding an unnecessary recompress
 - AND after a successful Repair the cursor SHALL advance through the highest repaired or already-correct chapter, and the volume cursor through the highest repaired or already-correct volume
 
 #### Scenario: Fully checked tick

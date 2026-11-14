@@ -44,19 +44,27 @@ The queue SHALL report running count, queued count and an ordered job list (runn
 - THEN it SHALL marshal the widget update onto the UI thread before applying it
 
 ### Requirement: Metadata Queue Dialog
-While metadata work is in flight, the status bar's metadata readout SHALL be a click target that opens a dialog listing the running and queued jobs. When idle the readout SHALL be inert and any open dialog SHALL close.
+While metadata work is in flight, the status bar's metadata readout SHALL be a click target that opens a compact progress dialog. When idle the readout SHALL be inert and any open dialog SHALL close.
 
-#### Scenario: Job rows
+#### Scenario: Progress display
 - GIVEN the metadata dialog is open
 - WHEN jobs are running or queued
-- THEN each row SHALL show the action, manga title and either a chapter, a volume, or a file label
-- AND the running job SHALL be listed first
-- AND each row SHALL show an animated dot indicator cycling `.`, `..`, `...`
+- THEN the running job's manga title SHALL appear as a bold header inside the dialog
+- AND below it SHALL appear the running job's action and its chapter, volume, or file label
+- AND below that SHALL appear the running and queued counts
+- AND the current job row SHALL show an animated dot indicator cycling `.`, `..`, `...`
+
+#### Scenario: Content-sized dialog
+- GIVEN the metadata dialog is open
+- WHEN the current title, job label, or counts change length
+- THEN the dialog SHALL resize to fit the text plus its chrome
+- AND it SHALL NOT use a fixed minimum content width
+- AND it SHALL remain capped to the window size
 
 #### Scenario: Live drain
 - GIVEN the metadata dialog is open
 - WHEN further statuses arrive or the queue becomes idle
-- THEN the job list SHALL track jobs starting and finishing
+- THEN the header, current job label, and counts SHALL track jobs starting and finishing
 - AND the dialog SHALL close automatically and stop its animation once the queue is idle
 
 #### Scenario: No stacking

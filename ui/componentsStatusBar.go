@@ -60,6 +60,9 @@ type MainStatusBar struct {
 	metaSpinFrame  int
 	metaCurStatus  metadataqueue.Status
 	metaDialog     *dialog.CustomDialog
+	metaTitle      *widget.Label
+	metaCounts     *widget.Label
+	metaContent    *fyne.Container
 	metaLabels     []*widget.Label
 	metaDotsLabels []*widget.Label
 	metaRowsBox    *fyne.Container
@@ -466,25 +469,35 @@ func (s *MainStatusBar) stopDots() {
 	s.dotsDone = nil
 }
 
-// showMetadataDialog opens the metadata queue dialog. Only one worker runs at
-// a time, so the first row is the running job and the rest are queued.
+// showMetadataDialog opens a compact progress dialog for the serialized
+// metadata worker: the current manga title as a header, the job it is on, and
+// the running/queued counts. It updates in place as jobs are worked off.
 func (s *MainStatusBar) showMetadataDialog() {
 	if s.window == nil || s.metaCurStatus.IsIdle() || s.metaDialog != nil {
 		return
 	}
 
+	s.metaTitle = widget.NewLabel("")
+	s.metaTitle.TextStyle = fyne.TextStyle{Bold: true}
+	s.metaTitle.Truncation = fyne.TextTruncateEllipsis
 	s.metaRowsBox = container.NewVBox()
+	s.metaCounts = widget.NewLabel("")
+	s.metaCounts.TextStyle = fyne.TextStyle{Monospace: true}
 	s.rebuildMetadataRows(s.metaCurStatus.Jobs)
 
-	content := container.NewVBox(
-		widget.NewLabel("Metadata Check / Repair:"),
+	s.metaContent = container.NewVBox(
+		s.metaTitle,
 		s.metaRowsBox,
+		s.metaCounts,
 	)
 
-	d := dialog.NewCustom("Metadata Queue", "Close", content, s.window)
+	d := dialog.NewCustom("Metadata Queue", "Close", s.metaContent, s.window)
 	d.SetOnClosed(func() {
 		s.stopMetadataDots()
 		s.metaDialog = nil
+		s.metaTitle = nil
+		s.metaCounts = nil
+		s.metaContent = nil
 		s.metaDotsLabels = nil
 	})
 	s.metaDialog = d
@@ -502,23 +515,34 @@ func (s *MainStatusBar) rebuildMetadataRows(jobs []metadataqueue.Job) {
 	s.metaDotsLabels = nil
 	s.metaRowsBox.Objects = nil
 	if len(jobs) == 0 {
-		s.metaRowsBox.Add(widget.NewLabel("Waiting for the metadata worker..."))
+		if s.metaTitle != nil {
+			s.metaTitle.SetText("Waiting for the metadata worker")
+		}
+		if s.metaCounts != nil {
+			s.metaCounts.SetText(fmt.Sprintf("%d running · %d queued", s.metaCurStatus.Running, s.metaCurStatus.Queued))
+		}
 		s.metaRowsBox.Refresh()
 		return
 	}
-	for _, job := range jobs {
-		text := job.Title
-		if job.Chapter != "" {
-			text = fmt.Sprintf("%s — %s", job.Title, job.Chapter)
-		}
-		label := widget.NewLabel(fmt.Sprintf("%s · %s", job.Action, text))
-		label.Truncation = fyne.TextTruncateEllipsis
-		dots := widget.NewLabel(metadataDotsFrames[0])
-		dots.TextStyle = fyne.TextStyle{Monospace: true}
-		s.metaLabels = append(s.metaLabels, label)
-		s.metaDotsLabels = append(s.metaDotsLabels, dots)
-		s.metaRowsBox.Add(container.NewBorder(nil, nil, nil, dots, label))
+
+	current := jobs[0]
+	if s.metaTitle != nil {
+		s.metaTitle.SetText(current.Title)
 	}
+	if s.metaCounts != nil {
+		s.metaCounts.SetText(fmt.Sprintf("%d running · %d queued", s.metaCurStatus.Running, s.metaCurStatus.Queued))
+	}
+
+	text := current.Action
+	if current.Chapter != "" {
+		text = fmt.Sprintf("%s · %s", current.Action, current.Chapter)
+	}
+	label := widget.NewLabel(text)
+	dots := widget.NewLabel(metadataDotsFrames[0])
+	dots.TextStyle = fyne.TextStyle{Monospace: true}
+	s.metaLabels = append(s.metaLabels, label)
+	s.metaDotsLabels = append(s.metaDotsLabels, dots)
+	s.metaRowsBox.Add(container.NewBorder(nil, nil, nil, dots, label))
 	s.metaRowsBox.Refresh()
 
 	if s.metaDialog != nil {
@@ -527,7 +551,7 @@ func (s *MainStatusBar) rebuildMetadataRows(jobs []metadataqueue.Job) {
 }
 
 func (s *MainStatusBar) sizeMetadataDialog() {
-	if s.metaDialog == nil || s.metaRowsBox == nil {
+	if s.metaDialog == nil || s.metaContent == nil {
 		return
 	}
 
@@ -537,17 +561,14 @@ func (s *MainStatusBar) sizeMetadataDialog() {
 		canvasW, canvasH = 900, 700
 	}
 
-	rowsMin := s.metaRowsBox.MinSize()
-	w := rowsMin.Width + 96
-	h := rowsMin.Height + 170
+	contentMin := s.metaContent.MinSize()
+	w := contentMin.Width + 96
+	h := contentMin.Height + 150
 	if maxW := canvasW * 0.95; w > maxW {
 		w = maxW
 	}
 	if maxH := canvasH * 0.9; h > maxH {
 		h = maxH
-	}
-	if w < 380 {
-		w = 380
 	}
 	s.metaDialogSize = fyne.NewSize(w, h)
 	s.metaDialog.Resize(s.metaDialogSize)
