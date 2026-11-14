@@ -88,8 +88,9 @@ The pool SHALL report a single snapshot of its state (running count, queued coun
 #### Scenario: Status bar shows pool state
 - GIVEN the listener is wired to the main window status bar
 - WHEN tasks are queued, start running, or finish
-- THEN the right edge of the status bar SHALL show "⟳ Refreshes: idle" when nothing is pending
-- AND "Refreshes: N running · M queued" next to an animated bash-style spinner (|/-\) while the pool has work in flight
+- THEN the right edge of the status bar SHALL show "⟳ Chapter Refresh: idle" when nothing is pending
+- AND "Chapter Refresh: N running · M queued" next to an animated bash-style spinner (|/-\) while the pool has work in flight
+- AND the adjacent metadata queue readout SHALL remain separate from the refresh pool readout
 
 #### Scenario: Listener thread safety
 - GIVEN pool callbacks fire on pool goroutines

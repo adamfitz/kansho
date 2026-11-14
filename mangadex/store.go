@@ -254,6 +254,8 @@ func (s *Store) EnsureSchema() error {
 		downloaded_chapters    INTEGER NOT NULL CHECK (downloaded_chapters >= 0),
 		not_downloaded_chapters INTEGER NOT NULL CHECK (not_downloaded_chapters >= 0),
 		last_refresh          TEXT NOT NULL DEFAULT '',
+		last_checked_chapter  REAL NOT NULL DEFAULT 0,
+		last_checked_volume   REAL NOT NULL DEFAULT 0,
 		updated_at             DATETIME DEFAULT CURRENT_TIMESTAMP,
 		CHECK (downloaded_chapters <= total_chapters),
 		CHECK (downloaded_chapters + not_downloaded_chapters = total_chapters)
@@ -329,7 +331,7 @@ func (s *Store) EnsureSchema() error {
 		owner       TEXT NOT NULL DEFAULT '',
 		acquired_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 	);
-	PRAGMA user_version = 8;
+	PRAGMA user_version = 10;
 	`
 	_, err := s.conn.Exec(schema)
 	if err != nil {
@@ -343,6 +345,8 @@ func (s *Store) EnsureSchema() error {
 	defer columns.Close()
 
 	hasLastRefresh := false
+	hasLastCheckedChapter := false
+	hasLastCheckedVolume := false
 	for columns.Next() {
 		var cid int
 		var name, ctype string
@@ -354,6 +358,12 @@ func (s *Store) EnsureSchema() error {
 		if name == "last_refresh" {
 			hasLastRefresh = true
 		}
+		if name == "last_checked_chapter" {
+			hasLastCheckedChapter = true
+		}
+		if name == "last_checked_volume" {
+			hasLastCheckedVolume = true
+		}
 	}
 	if err := columns.Err(); err != nil {
 		return fmt.Errorf("read chapter stats columns: %w", err)
@@ -361,6 +371,16 @@ func (s *Store) EnsureSchema() error {
 	if !hasLastRefresh {
 		if _, err := s.conn.Exec("ALTER TABLE manga_chapter_stats ADD COLUMN last_refresh TEXT NOT NULL DEFAULT ''"); err != nil {
 			return fmt.Errorf("add last_refresh column: %w", err)
+		}
+	}
+	if !hasLastCheckedChapter {
+		if _, err := s.conn.Exec("ALTER TABLE manga_chapter_stats ADD COLUMN last_checked_chapter REAL NOT NULL DEFAULT 0"); err != nil {
+			return fmt.Errorf("add last_checked_chapter column: %w", err)
+		}
+	}
+	if !hasLastCheckedVolume {
+		if _, err := s.conn.Exec("ALTER TABLE manga_chapter_stats ADD COLUMN last_checked_volume REAL NOT NULL DEFAULT 0"); err != nil {
+			return fmt.Errorf("add last_checked_volume column: %w", err)
 		}
 	}
 
@@ -398,13 +418,15 @@ func (s *Store) EnsureSchema() error {
 }
 
 type ChapterStats struct {
-	Title         string
-	Site          string
-	URL           string
-	Total         int
-	Downloaded    int
-	NotDownloaded int
-	LastRefresh   string
+	Title              string
+	Site               string
+	URL                string
+	Total              int
+	Downloaded         int
+	NotDownloaded      int
+	LastRefresh        string
+	LastCheckedChapter float64
+	LastCheckedVolume  float64
 }
 
 // rowMeta is the persistent form of a MangaInfo record inside the database.
@@ -649,8 +671,9 @@ func (s *Store) UpsertChapterStats(key string, stats ChapterStats) error {
 	return s.withWriteTx(func(tx *sql.Tx) error {
 		_, err := tx.Exec(`INSERT INTO manga_chapter_stats
 			(manga_key, title, site, url, total_chapters, downloaded_chapters,
-			 not_downloaded_chapters, last_refresh, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+			 not_downloaded_chapters, last_refresh, last_checked_chapter,
+			 last_checked_volume, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 			ON CONFLICT(manga_key) DO UPDATE SET
 				title = excluded.title,
 				site = excluded.site,
@@ -661,7 +684,8 @@ func (s *Store) UpsertChapterStats(key string, stats ChapterStats) error {
 				last_refresh = excluded.last_refresh,
 				updated_at = CURRENT_TIMESTAMP`,
 			key, stats.Title, stats.Site, stats.URL, stats.Total,
-			stats.Downloaded, stats.NotDownloaded, stats.LastRefresh)
+			stats.Downloaded, stats.NotDownloaded, stats.LastRefresh,
+			stats.LastCheckedChapter, stats.LastCheckedVolume)
 		if err != nil {
 			return fmt.Errorf("store chapter stats for %s: %w", key, err)
 		}
@@ -677,7 +701,8 @@ func (s *Store) LookupChapterStats(key string) (*ChapterStats, error) {
 
 	var stats ChapterStats
 	err := s.conn.QueryRow(`SELECT title, site, url, total_chapters,
-		downloaded_chapters, not_downloaded_chapters, last_refresh
+		downloaded_chapters, not_downloaded_chapters, last_refresh,
+		last_checked_chapter, last_checked_volume
 		FROM manga_chapter_stats WHERE manga_key = ?`, key).Scan(
 		&stats.Title,
 		&stats.Site,
@@ -686,6 +711,8 @@ func (s *Store) LookupChapterStats(key string) (*ChapterStats, error) {
 		&stats.Downloaded,
 		&stats.NotDownloaded,
 		&stats.LastRefresh,
+		&stats.LastCheckedChapter,
+		&stats.LastCheckedVolume,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -694,6 +721,61 @@ func (s *Store) LookupChapterStats(key string) (*ChapterStats, error) {
 		return nil, fmt.Errorf("lookup chapter stats for %s: %w", key, err)
 	}
 	return &stats, nil
+}
+
+// AdvanceChapterCheck records that every chapter up to chapter has been
+// checked for the given title. The stored value never moves backwards, so a
+// later check can resume after the highest checked chapter. A missing chapter
+// stats row is created with zero counts so the cursor can persist before the
+// first remote refresh.
+func (s *Store) AdvanceChapterCheck(key string, chapter float64) error {
+	key = strings.TrimSpace(key)
+	if key == "" || chapter <= 0 {
+		return nil
+	}
+	_, err := s.conn.Exec(`INSERT INTO manga_chapter_stats
+		(manga_key, total_chapters, downloaded_chapters, not_downloaded_chapters,
+		 last_checked_chapter, updated_at)
+		VALUES (?, 0, 0, 0, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(manga_key) DO UPDATE SET
+			last_checked_chapter = CASE
+				WHEN last_checked_chapter < excluded.last_checked_chapter
+				THEN excluded.last_checked_chapter
+				ELSE last_checked_chapter
+			END,
+			updated_at = CURRENT_TIMESTAMP`,
+		key, chapter)
+	if err != nil {
+		return fmt.Errorf("advance chapter check for %s: %w", key, err)
+	}
+	return nil
+}
+
+// AdvanceVolumeCheck records that every volume up to volume has been checked
+// for the given title. Volume archives use a separate cursor from numbered
+// chapters because a volume number and a chapter number are not comparable. The
+// stored value never moves backwards.
+func (s *Store) AdvanceVolumeCheck(key string, volume float64) error {
+	key = strings.TrimSpace(key)
+	if key == "" || volume <= 0 {
+		return nil
+	}
+	_, err := s.conn.Exec(`INSERT INTO manga_chapter_stats
+		(manga_key, total_chapters, downloaded_chapters, not_downloaded_chapters,
+		 last_checked_volume, updated_at)
+		VALUES (?, 0, 0, 0, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(manga_key) DO UPDATE SET
+			last_checked_volume = CASE
+				WHEN last_checked_volume < excluded.last_checked_volume
+				THEN excluded.last_checked_volume
+				ELSE last_checked_volume
+			END,
+			updated_at = CURRENT_TIMESTAMP`,
+		key, volume)
+	if err != nil {
+		return fmt.Errorf("advance volume check for %s: %w", key, err)
+	}
+	return nil
 }
 
 // Count returns the number of stored title records.

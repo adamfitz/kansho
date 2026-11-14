@@ -21,7 +21,7 @@ MangaDex title information and generic per-manga chapter-count snapshots SHALL b
 - GIVEN the user invokes the info button
 - WHEN the database does not exist yet
 - THEN the database SHALL be created on first use with `manga_title`, `manga_title_lookup`, and `manga_chapter_stats` tables
-- AND `manga_chapter_stats` SHALL key records by a stable manga source identity and store title, site, URL, total chapters, downloaded chapters, not-downloaded chapters, and the update timestamp
+- AND `manga_chapter_stats` SHALL key records by a stable manga source identity and store title, site, URL, total chapters, downloaded chapters, not-downloaded chapters, the last-refresh date, the last-checked chapter number, the last-checked volume number and the update timestamp
 - AND the database SHALL also contain separate Linux and Windows bookmark tables
 - AND the former `bookmarks` table SHALL remain available for compatibility during migration
 
@@ -158,6 +158,64 @@ The information pane SHALL display every stored detail for a MangaDex title insi
 - AND SHALL redraw the pane with the fetched title data
 - WHEN the entered value is not a valid MangaDex URL or the fetch fails
 - THEN Kansho SHALL show the error inside the prompt and keep it open
+
+### Requirement: Metadata Check and Repair
+The information pane SHALL provide `Check` and `Repair` actions for the selected title's local CBZ files. Both actions SHALL run through the single metadata queue and SHALL operate one archive at a time. The former `Generate` action SHALL NOT be shown.
+
+#### Scenario: Quick Check
+- GIVEN the information pane is open for a title with local CBZ files
+- WHEN the user clicks `Check`
+- THEN Kansho SHALL list the CBZ files by parsed chapter number, then volume-only files by parsed volume number
+- AND SHALL queue only chapters above the stored last-checked chapter, only volume-only archives above the stored last-checked volume, plus any file without a parsed number
+- AND SHALL recognise volume names containing `Vol`, `Volume`, `V`, or `v` case-insensitively
+- AND SHALL treat a file with both a chapter and volume number as a chapter file
+- AND for each file SHALL only confirm that `ComicInfo.xml` exists and is non-empty
+- AND SHALL NOT parse, rewrite or compare the metadata contents
+- AND a file that fails Check SHALL be reported and left unchanged
+
+#### Scenario: Result summary names each type
+- GIVEN a Check or Repair run included chapters and volume-only archives
+- WHEN the run finishes
+- THEN the result summary SHALL report chapter and volume counts separately
+- AND SHALL identify whether each failure was a chapter or a volume
+- AND each metadata queue row SHALL label the job as a chapter, a volume, or a file
+
+#### Scenario: Check cursor persistence
+- GIVEN a chapter-count refresh updates `manga_chapter_stats`
+- WHEN the row is upserted
+- THEN the stored last-checked chapter and volume SHALL be preserved
+
+#### Scenario: Cursor advancement
+- GIVEN a Check run processes chapters in ascending order
+- WHEN a chapter passes and no earlier chapter in the run has failed
+- THEN `manga_chapter_stats.last_checked_chapter` SHALL advance to that chapter number, never moving backwards
+- AND when a volume-only archive passes, `manga_chapter_stats.last_checked_volume` SHALL advance to that volume number, never moving backwards
+- AND a volume number SHALL NOT advance or be covered by the chapter cursor
+- AND if the title has no chapter stats row yet, one SHALL be created with zero counts and no refresh date so the cursors can persist
+- AND a cursor-only row SHALL NOT be treated as a chapter-count snapshot in the status bar
+- WHEN a chapter or volume fails
+- THEN its cursor SHALL NOT advance past that failure for the rest of the run
+
+#### Scenario: Repair
+- GIVEN the information pane is open for a title with local CBZ files
+- WHEN the user clicks `Repair`
+- THEN Kansho SHALL queue every local CBZ file
+- AND SHALL compare the existing metadata against every field Repair would write, including the per-file chapter, volume and title fields
+- AND SHALL rewrite only files whose metadata is missing, corrupt, or differs in any compared field
+- AND a file whose metadata matches in every field SHALL be left untouched, avoiding an unnecessary recompress
+- AND after a successful Repair the cursor SHALL advance through the highest repaired or already-correct chapter, and the volume cursor through the highest repaired or already-correct volume
+
+#### Scenario: Fully checked tick
+- GIVEN a title has at least one local CBZ file and stored check cursors
+- WHEN every local chapter has a parsed chapter number at or below the chapter cursor and every volume-only archive has a parsed volume number at or below the volume cursor
+- THEN the MangaDex information pane title SHALL show a green tick
+- AND the tick SHALL NOT appear in the manga list
+
+#### Scenario: No local files
+- GIVEN the information pane is open for a title with no local CBZ files
+- WHEN the user clicks `Check` or `Repair`
+- THEN Kansho SHALL report that no CBZ files were found
+- AND SHALL NOT advance the cursor
 
 ### Requirement: Language Selection
 The information pane SHALL default to English and let the user choose from any language the MangaDex title is actually published in.

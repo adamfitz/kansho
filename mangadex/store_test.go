@@ -374,6 +374,83 @@ func TestChapterStatsRoundTripAndReopen(t *testing.T) {
 	}
 }
 
+func TestAdvanceChapterCheckOnlyMovesForward(t *testing.T) {
+	store := tempStore(t)
+	if err := store.UpsertChapterStats("source-key", ChapterStats{Title: "One Piece", Total: 10, NotDownloaded: 10}); err != nil {
+		t.Fatalf("UpsertChapterStats: %v", err)
+	}
+	if err := store.AdvanceChapterCheck("source-key", 5); err != nil {
+		t.Fatalf("AdvanceChapterCheck(5): %v", err)
+	}
+	if err := store.AdvanceChapterCheck("source-key", 3); err != nil {
+		t.Fatalf("AdvanceChapterCheck(3): %v", err)
+	}
+	got, err := store.LookupChapterStats("source-key")
+	if err != nil || got == nil {
+		t.Fatalf("LookupChapterStats: %v (got %v)", err, got)
+	}
+	if got.LastCheckedChapter != 5 {
+		t.Fatalf("LastCheckedChapter = %v, want 5", got.LastCheckedChapter)
+	}
+
+	if err := store.UpsertChapterStats("source-key", ChapterStats{Title: "One Piece", Total: 12, Downloaded: 2, NotDownloaded: 10}); err != nil {
+		t.Fatalf("UpsertChapterStats after check: %v", err)
+	}
+	got, err = store.LookupChapterStats("source-key")
+	if err != nil || got == nil {
+		t.Fatalf("LookupChapterStats after upsert: %v (got %v)", err, got)
+	}
+	if got.LastCheckedChapter != 5 {
+		t.Fatalf("LastCheckedChapter after upsert = %v, want 5", got.LastCheckedChapter)
+	}
+
+	if err := store.AdvanceChapterCheck("absent-key", 9); err != nil {
+		t.Fatalf("AdvanceChapterCheck on missing row: %v", err)
+	}
+	got, err = store.LookupChapterStats("absent-key")
+	if err != nil || got == nil {
+		t.Fatalf("LookupChapterStats created row: %v (got %v)", err, got)
+	}
+	if got.LastCheckedChapter != 9 || got.Total != 0 {
+		t.Fatalf("cursor-only row = %+v, want cursor 9 with zero counts", got)
+	}
+
+	if err := store.AdvanceVolumeCheck("source-key", 4); err != nil {
+		t.Fatalf("AdvanceVolumeCheck(4): %v", err)
+	}
+	if err := store.AdvanceVolumeCheck("source-key", 2); err != nil {
+		t.Fatalf("AdvanceVolumeCheck(2): %v", err)
+	}
+	got, err = store.LookupChapterStats("source-key")
+	if err != nil || got == nil {
+		t.Fatalf("LookupChapterStats after volume check: %v (got %v)", err, got)
+	}
+	if got.LastCheckedVolume != 4 {
+		t.Fatalf("LastCheckedVolume = %v, want 4", got.LastCheckedVolume)
+	}
+	if err := store.UpsertChapterStats("source-key", ChapterStats{Title: "One Piece", Total: 12, Downloaded: 2, NotDownloaded: 10}); err != nil {
+		t.Fatalf("UpsertChapterStats after volume check: %v", err)
+	}
+	got, err = store.LookupChapterStats("source-key")
+	if err != nil || got == nil {
+		t.Fatalf("LookupChapterStats after volume upsert: %v (got %v)", err, got)
+	}
+	if got.LastCheckedVolume != 4 {
+		t.Fatalf("LastCheckedVolume after upsert = %v, want 4", got.LastCheckedVolume)
+	}
+
+	if err := store.AdvanceVolumeCheck("absent-volume-key", 7); err != nil {
+		t.Fatalf("AdvanceVolumeCheck on missing row: %v", err)
+	}
+	got, err = store.LookupChapterStats("absent-volume-key")
+	if err != nil || got == nil {
+		t.Fatalf("LookupChapterStats created volume row: %v (got %v)", err, got)
+	}
+	if got.LastCheckedVolume != 7 || got.LastCheckedChapter != 0 || got.Total != 0 {
+		t.Fatalf("volume cursor-only row = %+v, want volume 7 with zero counts", got)
+	}
+}
+
 func TestEnsureSchemaMigratesExistingDatabase(t *testing.T) {
 	store := tempStore(t)
 	if _, err := store.conn.Exec(`DROP TABLE manga_chapter_stats; PRAGMA user_version = 2;`); err != nil {
@@ -387,8 +464,8 @@ func TestEnsureSchemaMigratesExistingDatabase(t *testing.T) {
 	if err := store.conn.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		t.Fatalf("read user_version: %v", err)
 	}
-	if version != 8 {
-		t.Fatalf("user_version = %d, want 8", version)
+	if version != 10 {
+		t.Fatalf("user_version = %d, want 10", version)
 	}
 
 	stats := ChapterStats{Title: "One Piece", Total: 2, NotDownloaded: 2}

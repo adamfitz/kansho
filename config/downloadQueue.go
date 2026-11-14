@@ -81,6 +81,35 @@ type DownloadQueue struct {
 	onQueueEmpty  func()
 }
 
+// cloneTask returns a snapshot safe to read after the queue lock is released.
+// DownloadTask contains only scalar fields and a value Bookmarks, so a shallow
+// copy is enough.
+func cloneTask(task *DownloadTask) *DownloadTask {
+	if task == nil {
+		return nil
+	}
+	snapshot := *task
+	return &snapshot
+}
+
+func (q *DownloadQueue) notifyTaskAdded(task *DownloadTask) {
+	if cb := q.onTaskAdded; cb != nil {
+		cb(cloneTask(task))
+	}
+}
+
+func (q *DownloadQueue) notifyTaskUpdated(task *DownloadTask) {
+	if cb := q.onTaskUpdated; cb != nil {
+		cb(cloneTask(task))
+	}
+}
+
+func (q *DownloadQueue) notifyTaskRemoved(id string) {
+	if cb := q.onTaskRemoved; cb != nil {
+		cb(id)
+	}
+}
+
 // Global download queue instance
 var globalQueue *DownloadQueue
 var queueOnce sync.Once
@@ -150,14 +179,12 @@ func (q *DownloadQueue) AddChapterTask(manga *Bookmarks, chapter, chapterURL str
 
 	log.Printf("[Queue] Added chapter task: %s - %s (%s)", task.Manga.Title, task.Chapter, task.ID)
 
-	if q.onTaskAdded != nil {
-		q.onTaskAdded(task)
-	}
+	q.notifyTaskAdded(task)
 
 	// Start the worker pool if it is not running, then wake it for the new task.
 	q.startDispatcher()
 
-	return task, nil
+	return cloneTask(task), nil
 }
 
 // AddTask adds a legacy whole-manga download to the queue.
@@ -191,25 +218,23 @@ func (q *DownloadQueue) AddTask(manga *Bookmarks) (*DownloadTask, error) {
 
 	log.Printf("[Queue] Added task: %s (%s) - Location: %s", task.Manga.Title, task.ID, task.Manga.Location)
 
-	if q.onTaskAdded != nil {
-		q.onTaskAdded(task)
-	}
+	q.notifyTaskAdded(task)
 
 	// Start the worker pool if it is not running, then wake it for the new task.
 	q.startDispatcher()
 
-	return task, nil
+	return cloneTask(task), nil
 }
 
-// GetTaskForChapter returns the task for the given manga title and chapter,
-// or nil if no such task is in the queue.
+// GetTaskForChapter returns a snapshot of the task for the given manga title
+// and chapter, or nil if no such task is in the queue.
 func (q *DownloadQueue) GetTaskForChapter(mangaTitle, chapter string) *DownloadTask {
 	q.mu.RLock()
 	defer q.mu.RUnlock()
 
 	for _, task := range q.tasks {
 		if task.Manga.Title == mangaTitle && task.Chapter == chapter {
-			return task
+			return cloneTask(task)
 		}
 	}
 	return nil
@@ -244,9 +269,7 @@ func (q *DownloadQueue) RetryTask(id string) error {
 				task.Error = nil
 				q.idleNotified = false
 
-				if q.onTaskUpdated != nil {
-					q.onTaskUpdated(task)
-				}
+				q.notifyTaskUpdated(task)
 
 				// Wake the worker pool so the retried task is dispatched.
 				q.startDispatcher()
@@ -259,13 +282,16 @@ func (q *DownloadQueue) RetryTask(id string) error {
 	return fmt.Errorf("task not found: %s", id)
 }
 
-// GetTasks returns a copy of all tasks
+// GetTasks returns snapshots of every queued task. The caller may read them
+// without holding the queue lock while workers continue to update live tasks.
 func (q *DownloadQueue) GetTasks() []*DownloadTask {
 	q.mu.RLock()
 	defer q.mu.RUnlock()
 
 	tasksCopy := make([]*DownloadTask, len(q.tasks))
-	copy(tasksCopy, q.tasks)
+	for i, task := range q.tasks {
+		tasksCopy[i] = cloneTask(task)
+	}
 	return tasksCopy
 }
 
@@ -279,9 +305,7 @@ func (q *DownloadQueue) RemoveTask(id string) error {
 			q.tasks = append(q.tasks[:i], q.tasks[i+1:]...)
 			q.mu.Unlock()
 
-			if q.onTaskRemoved != nil {
-				q.onTaskRemoved(id)
-			}
+			q.notifyTaskRemoved(id)
 			return nil
 		}
 	}
@@ -290,14 +314,14 @@ func (q *DownloadQueue) RemoveTask(id string) error {
 	return fmt.Errorf("task not found: %s", id)
 }
 
-// GetTask returns a specific task by ID
+// GetTask returns a snapshot of the task with the given ID.
 func (q *DownloadQueue) GetTask(id string) *DownloadTask {
 	q.mu.RLock()
 	defer q.mu.RUnlock()
 
 	for _, task := range q.tasks {
 		if task.ID == id {
-			return task
+			return cloneTask(task)
 		}
 	}
 	return nil
@@ -316,9 +340,7 @@ func (q *DownloadQueue) CancelTask(id string) error {
 				task.StatusMessage = "Cancelling..."
 
 				// Notify UI immediately before the slow context cancellation unwinds
-				if q.onTaskUpdated != nil {
-					q.onTaskUpdated(task)
-				}
+				q.notifyTaskUpdated(task)
 				q.mu.Unlock()
 
 				// Trigger cancellation - the download will notice and return quickly now
@@ -334,9 +356,7 @@ func (q *DownloadQueue) CancelTask(id string) error {
 
 				q.mu.Unlock()
 
-				if q.onTaskRemoved != nil {
-					q.onTaskRemoved(id)
-				}
+				q.notifyTaskRemoved(id)
 				return nil
 			} else {
 				q.mu.Unlock()
@@ -367,9 +387,7 @@ func (q *DownloadQueue) CancelAll() {
 			task.StatusMessage = "Cancelled by user"
 		}
 
-		if q.onTaskUpdated != nil {
-			q.onTaskUpdated(task)
-		}
+		q.notifyTaskUpdated(task)
 	}
 
 	q.mu.Unlock()
@@ -401,9 +419,7 @@ func (q *DownloadQueue) CancelMangaQueue(mangaTitle string) {
 		task.Status = "cancelled"
 		task.StatusMessage = "Cancelled by user"
 
-		if q.onTaskUpdated != nil {
-			q.onTaskUpdated(task)
-		}
+		q.notifyTaskUpdated(task)
 	}
 
 	q.mu.Unlock()
@@ -467,9 +483,7 @@ func (q *DownloadQueue) RemoveCompletedTasks() {
 		if task.Status == "queued" || task.Status == "downloading" || task.Status == "waiting_cf" || task.Status == "skipped_cf" {
 			newTasks = append(newTasks, task)
 		} else {
-			if q.onTaskRemoved != nil {
-				q.onTaskRemoved(task.ID)
-			}
+			q.notifyTaskRemoved(task.ID)
 		}
 	}
 
@@ -539,9 +553,7 @@ func (q *DownloadQueue) fillSlots() {
 		q.running++
 		q.mu.Unlock()
 
-		if q.onTaskUpdated != nil {
-			q.onTaskUpdated(task)
-		}
+		q.notifyTaskUpdated(task)
 
 		go q.runTask(task)
 	}
@@ -630,9 +642,7 @@ func (q *DownloadQueue) executeTask(task *DownloadTask) {
 	task.CancelFunc = cancel
 	q.mu.Unlock()
 
-	if q.onTaskUpdated != nil {
-		q.onTaskUpdated(task)
-	}
+	q.notifyTaskUpdated(task)
 
 	// Progress callback
 	progressCallback := func(status string, progress float64, actualChapter, currentDownload, totalFound int) {
@@ -644,9 +654,7 @@ func (q *DownloadQueue) executeTask(task *DownloadTask) {
 		task.TotalFound = totalFound
 		q.mu.Unlock()
 
-		if q.onTaskUpdated != nil {
-			q.onTaskUpdated(task)
-		}
+		q.notifyTaskUpdated(task)
 	}
 
 	// CRITICAL: Pass a pointer to the manga copy
@@ -675,9 +683,7 @@ func (q *DownloadQueue) executeTask(task *DownloadTask) {
 				log.Printf("[Queue] CF challenge detected for %s (URL: %s)", task.Manga.Title, cfErr.URL)
 
 				q.mu.Unlock()
-				if q.onTaskUpdated != nil {
-					q.onTaskUpdated(task)
-				}
+				q.notifyTaskUpdated(task)
 				return
 			}
 
@@ -693,9 +699,7 @@ func (q *DownloadQueue) executeTask(task *DownloadTask) {
 	task.CancelFunc = nil
 	q.mu.Unlock()
 
-	if q.onTaskUpdated != nil {
-		q.onTaskUpdated(task)
-	}
+	q.notifyTaskUpdated(task)
 
 	if task.Status == "completed" {
 		// Successfully downloaded chapters are removed from the queue so they do
@@ -758,9 +762,7 @@ func (q *DownloadQueue) handleCfWait(task *DownloadTask) {
 			task.StatusMessage = "CF data received - resuming download"
 			task.Error = nil
 			q.mu.Unlock()
-			if q.onTaskUpdated != nil {
-				q.onTaskUpdated(task)
-			}
+			q.notifyTaskUpdated(task)
 			return
 		}
 
@@ -794,9 +796,7 @@ func (q *DownloadQueue) skipCfBlockedTasks(blockedTaskID string) {
 	q.mu.Unlock()
 
 	for _, t := range updated {
-		if q.onTaskUpdated != nil {
-			q.onTaskUpdated(t)
-		}
+		q.notifyTaskUpdated(t)
 	}
 }
 
@@ -827,9 +827,7 @@ func (q *DownloadQueue) ResumeCfTasks() {
 	q.mu.Unlock()
 
 	for _, t := range resumed {
-		if q.onTaskUpdated != nil {
-			q.onTaskUpdated(t)
-		}
+		q.notifyTaskUpdated(t)
 	}
 
 	if len(resumed) > 0 {

@@ -66,6 +66,7 @@ func newChapterListViewTest(t *testing.T, location string) (*KanshoAppState, *Ch
 		SelectedMangaID: 0,
 	}
 	view := NewChapterListView(state, NewDownloadQueueButton(state))
+	view.disableMetadataPrompt = true
 	view.chapterStatsStore = &memoryChapterStatsStore{stats: make(map[string]mangadex.ChapterStats)}
 	return state, view, w
 }

@@ -4,6 +4,7 @@ import (
 	"slices"
 	"testing"
 
+	"kansho/metadataqueue"
 	"kansho/refreshpool"
 
 	"fyne.io/fyne/v2"
@@ -44,6 +45,35 @@ func TestMainStatusBarShowsLastRefreshWhenAvailable(t *testing.T) {
 	bar.ShowManga("test", &chapterCounts{Total: 4, Downloaded: 2, NotDownloaded: 2, LastRefresh: "2026-09-26"})
 	if got, want := bar.message.Text, "2 of 4 chapters downloaded · 2 to download · Last Refresh: 2026-09-26"; got != want {
 		t.Fatalf("message = %q, want %q", got, want)
+	}
+}
+
+func TestMetadataRefreshReadoutMatchesChapterRefresh(t *testing.T) {
+	bar := NewMainStatusBar()
+	if got, want := bar.metaStatus.Text, "⟳ Metadata Refresh: idle"; got != want {
+		t.Fatalf("metadata idle text = %q, want %q", got, want)
+	}
+	if got, want := bar.metaSpinner.Text, ""; got != want {
+		t.Fatalf("metadata idle spinner = %q, want %q", got, want)
+	}
+
+	bar.SetMetadataQueueStatus(metadataqueue.Status{Running: 2, Queued: 3})
+	if got, want := bar.metaStatus.Text, "Metadata Refresh: 2 running · 3 queued"; got != want {
+		t.Fatalf("metadata busy text = %q, want %q", got, want)
+	}
+	if got, want := bar.metaSpinner.Text, refreshSpinnerFrames[0]; got != want {
+		t.Fatalf("metadata busy spinner = %q, want %q", got, want)
+	}
+	if !bar.metaArea.clickable {
+		t.Error("metadata refresh area should be clickable while busy")
+	}
+
+	bar.SetMetadataQueueStatus(metadataqueue.Status{})
+	if got, want := bar.metaStatus.Text, "⟳ Metadata Refresh: idle"; got != want {
+		t.Fatalf("metadata idle text after drain = %q, want %q", got, want)
+	}
+	if got, want := bar.metaSpinner.Text, ""; got != want {
+		t.Fatalf("metadata spinner after drain = %q, want %q", got, want)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"kansho/metadataqueue"
 	"kansho/refreshpool"
 
 	"fyne.io/fyne/v2"
@@ -49,6 +50,26 @@ type MainStatusBar struct {
 	dotsTicker    *time.Ticker
 	dotsDone      chan struct{}
 	dotsFrame     int
+
+	// Metadata queue state; one serialized Check/Repair worker.
+	metaSpinner    *widget.Label
+	metaStatus     *widget.Label
+	metaArea       *tapArea
+	metaSpinTicker *time.Ticker
+	metaSpinDone   chan struct{}
+	metaSpinFrame  int
+	metaCurStatus  metadataqueue.Status
+	metaDialog     *dialog.CustomDialog
+	metaTitle      *widget.Label
+	metaCounts     *widget.Label
+	metaContent    *fyne.Container
+	metaLabels     []*widget.Label
+	metaDotsLabels []*widget.Label
+	metaRowsBox    *fyne.Container
+	metaDialogSize fyne.Size
+	metaDotsTicker *time.Ticker
+	metaDotsDone   chan struct{}
+	metaDotsFrame  int
 }
 
 type chapterCounts struct {
@@ -94,8 +115,16 @@ func NewMainStatusBar() *MainStatusBar {
 	right := container.NewHBox(s.spinner, s.poolStatus)
 	s.refreshArea = newTapArea(right, s.showRefreshDialog)
 
+	s.metaStatus = widget.NewLabel("")
+	s.metaStatus.Alignment = fyne.TextAlignTrailing
+	s.metaStatus.SetText(metadataQueueIdleText)
+	s.metaSpinner = widget.NewLabel("")
+	s.metaSpinner.TextStyle = fyne.TextStyle{Monospace: true}
+	metaRight := container.NewHBox(s.metaSpinner, s.metaStatus)
+	s.metaArea = newTapArea(metaRight, s.showMetadataDialog)
+
 	statusRow := container.NewBorder(nil, nil, s.badge,
-		s.refreshArea, s.message)
+		container.NewHBox(s.refreshArea, s.metaArea), s.message)
 
 	// A slim white strip keeps the bar readable against the purple gradient
 	// and matches the look of the download queue page. It is built by hand
@@ -132,6 +161,9 @@ func (s *MainStatusBar) SetIdle() {
 // refresh pool has nothing queued or running.
 const refreshPoolIdleText = "⟳ Chapter Refresh: idle"
 
+// metadataQueueIdleText is shown while no metadata Check/Repair is pending.
+const metadataQueueIdleText = "⟳ Metadata Refresh: idle"
+
 // refreshSpinnerFrames is the classic bash-style spinner sequence, cycled
 // while the refresh pool has work in flight.
 var refreshSpinnerFrames = []string{"|", "/", "-", "\\"}
@@ -161,6 +193,67 @@ func (s *MainStatusBar) SetRefreshPoolStatus(status refreshpool.Status) {
 	if s.refreshDialog != nil {
 		s.rebuildDomainRows(status.Sites)
 	}
+}
+
+// SetMetadataQueueStatus shows the single metadata worker queue: an animated
+// spinner while Check/Repair tasks are in flight plus running and queued
+// counts. While busy the readout is clickable; when idle any open metadata
+// dialog is closed again. Must be called on the UI goroutine.
+func (s *MainStatusBar) SetMetadataQueueStatus(status metadataqueue.Status) {
+	s.metaCurStatus = status
+	if status.IsIdle() {
+		s.metaArea.SetClickable(false)
+		s.stopMetadataSpinner()
+		s.metaStatus.SetText(metadataQueueIdleText)
+		s.closeMetadataDialog()
+		return
+	}
+	s.metaArea.SetClickable(true)
+	s.startMetadataSpinner()
+	s.metaStatus.SetText(fmt.Sprintf("Metadata Refresh: %d running · %d queued", status.Running, status.Queued))
+	if s.metaDialog != nil {
+		s.rebuildMetadataRows(status.Jobs)
+	}
+}
+
+func (s *MainStatusBar) startMetadataSpinner() {
+	if s.metaSpinTicker != nil {
+		return
+	}
+	s.metaSpinFrame = 0
+	s.metaSpinner.SetText(refreshSpinnerFrames[0])
+
+	ticker := time.NewTicker(poolSpinnerInterval)
+	done := make(chan struct{})
+	s.metaSpinTicker = ticker
+	s.metaSpinDone = done
+	go func() {
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				fyne.Do(func() {
+					if s.metaSpinTicker == nil {
+						return
+					}
+					s.metaSpinFrame = (s.metaSpinFrame + 1) % len(refreshSpinnerFrames)
+					s.metaSpinner.SetText(refreshSpinnerFrames[s.metaSpinFrame])
+				})
+			}
+		}
+	}()
+}
+
+func (s *MainStatusBar) stopMetadataSpinner() {
+	if s.metaSpinTicker == nil {
+		return
+	}
+	close(s.metaSpinDone)
+	s.metaSpinTicker.Stop()
+	s.metaSpinTicker = nil
+	s.metaSpinDone = nil
+	s.metaSpinner.SetText("")
 }
 
 // startPoolSpinner begins cycling the |/-\ frames next to the counts. It is a
@@ -215,6 +308,9 @@ func (s *MainStatusBar) stopPoolSpinner() {
 // refreshDotsFrames is the animated "ongoing" indicator shown in the refresh
 // dialog, cycling one to three dots.
 var refreshDotsFrames = []string{"...", "..", "."}
+
+// metadataDotsFrames is the same animated indicator for metadata queue rows.
+var metadataDotsFrames = []string{"...", "..", "."}
 
 // dotsInterval is how often the dialog's dot indicator advances its frame.
 const dotsInterval = 400 * time.Millisecond
@@ -371,4 +467,161 @@ func (s *MainStatusBar) stopDots() {
 	s.dotsTicker.Stop()
 	s.dotsTicker = nil
 	s.dotsDone = nil
+}
+
+// showMetadataDialog opens a compact progress dialog for the serialized
+// metadata worker: the current manga title as a header, the job it is on, and
+// the running/queued counts. It updates in place as jobs are worked off.
+func (s *MainStatusBar) showMetadataDialog() {
+	if s.window == nil || s.metaCurStatus.IsIdle() || s.metaDialog != nil {
+		return
+	}
+
+	s.metaTitle = widget.NewLabel("")
+	s.metaTitle.TextStyle = fyne.TextStyle{Bold: true}
+	s.metaTitle.Truncation = fyne.TextTruncateEllipsis
+	s.metaRowsBox = container.NewVBox()
+	s.metaCounts = widget.NewLabel("")
+	s.metaCounts.TextStyle = fyne.TextStyle{Monospace: true}
+	s.rebuildMetadataRows(s.metaCurStatus.Jobs)
+
+	s.metaContent = container.NewVBox(
+		s.metaTitle,
+		s.metaRowsBox,
+		s.metaCounts,
+	)
+
+	d := dialog.NewCustom("Metadata Queue", "Close", s.metaContent, s.window)
+	d.SetOnClosed(func() {
+		s.stopMetadataDots()
+		s.metaDialog = nil
+		s.metaTitle = nil
+		s.metaCounts = nil
+		s.metaContent = nil
+		s.metaDotsLabels = nil
+	})
+	s.metaDialog = d
+
+	s.startMetadataDots()
+	d.Show()
+	s.sizeMetadataDialog()
+}
+
+func (s *MainStatusBar) rebuildMetadataRows(jobs []metadataqueue.Job) {
+	if s.metaRowsBox == nil {
+		return
+	}
+	s.metaLabels = nil
+	s.metaDotsLabels = nil
+	s.metaRowsBox.Objects = nil
+	if len(jobs) == 0 {
+		if s.metaTitle != nil {
+			s.metaTitle.SetText("Waiting for the metadata worker")
+		}
+		if s.metaCounts != nil {
+			s.metaCounts.SetText(fmt.Sprintf("%d running · %d queued", s.metaCurStatus.Running, s.metaCurStatus.Queued))
+		}
+		s.metaRowsBox.Refresh()
+		return
+	}
+
+	current := jobs[0]
+	if s.metaTitle != nil {
+		s.metaTitle.SetText(current.Title)
+	}
+	if s.metaCounts != nil {
+		s.metaCounts.SetText(fmt.Sprintf("%d running · %d queued", s.metaCurStatus.Running, s.metaCurStatus.Queued))
+	}
+
+	text := current.Action
+	if current.Chapter != "" {
+		text = fmt.Sprintf("%s · %s", current.Action, current.Chapter)
+	}
+	label := widget.NewLabel(text)
+	dots := widget.NewLabel(metadataDotsFrames[0])
+	dots.TextStyle = fyne.TextStyle{Monospace: true}
+	s.metaLabels = append(s.metaLabels, label)
+	s.metaDotsLabels = append(s.metaDotsLabels, dots)
+	s.metaRowsBox.Add(container.NewBorder(nil, nil, nil, dots, label))
+	s.metaRowsBox.Refresh()
+
+	if s.metaDialog != nil {
+		s.sizeMetadataDialog()
+	}
+}
+
+func (s *MainStatusBar) sizeMetadataDialog() {
+	if s.metaDialog == nil || s.metaContent == nil {
+		return
+	}
+
+	canvasSize := s.window.Canvas().Size()
+	canvasW, canvasH := canvasSize.Width, canvasSize.Height
+	if canvasW <= 0 {
+		canvasW, canvasH = 900, 700
+	}
+
+	contentMin := s.metaContent.MinSize()
+	w := contentMin.Width + 96
+	h := contentMin.Height + 150
+	if maxW := canvasW * 0.95; w > maxW {
+		w = maxW
+	}
+	if maxH := canvasH * 0.9; h > maxH {
+		h = maxH
+	}
+	s.metaDialogSize = fyne.NewSize(w, h)
+	s.metaDialog.Resize(s.metaDialogSize)
+}
+
+func (s *MainStatusBar) closeMetadataDialog() {
+	if s.metaDialog == nil {
+		return
+	}
+	s.metaDialog.Hide()
+}
+
+func (s *MainStatusBar) startMetadataDots() {
+	if s.metaDotsTicker != nil {
+		return
+	}
+	s.metaDotsFrame = 0
+	s.setMetadataDotsFrames(metadataDotsFrames[0])
+
+	ticker := time.NewTicker(dotsInterval)
+	done := make(chan struct{})
+	s.metaDotsTicker = ticker
+	s.metaDotsDone = done
+	go func() {
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				fyne.Do(func() {
+					if s.metaDotsTicker == nil {
+						return
+					}
+					s.metaDotsFrame = (s.metaDotsFrame + 1) % len(metadataDotsFrames)
+					s.setMetadataDotsFrames(metadataDotsFrames[s.metaDotsFrame])
+				})
+			}
+		}
+	}()
+}
+
+func (s *MainStatusBar) setMetadataDotsFrames(frame string) {
+	for _, dots := range s.metaDotsLabels {
+		dots.SetText(frame)
+	}
+}
+
+func (s *MainStatusBar) stopMetadataDots() {
+	if s.metaDotsTicker == nil {
+		return
+	}
+	close(s.metaDotsDone)
+	s.metaDotsTicker.Stop()
+	s.metaDotsTicker = nil
+	s.metaDotsDone = nil
 }

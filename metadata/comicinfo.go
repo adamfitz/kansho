@@ -13,8 +13,10 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -214,16 +216,14 @@ func FromMangaInfo(info *mangadex.MangaInfo) *ComicInfo {
 }
 
 var (
-	chRe1  = regexp.MustCompile(`(?i)^ch[-_\s]*([0-9]+(?:\.[0-9]+)?)`)
-	chRe2  = regexp.MustCompile(`(?i)^chapter[-_\s]*([0-9]+(?:\.[0-9]+)?)`)
-	chRe3  = regexp.MustCompile(`(?i)^c[-_\s]*([0-9]+(?:\.[0-9]+)?)`)
-	chRe4  = regexp.MustCompile(`(?i)[-_\s]ch[-_\s]*([0-9]+(?:\.[0-9]+)?)`)
-	chRe5  = regexp.MustCompile(`(?i)[-_\s]chapter[-_\s]*([0-9]+(?:\.[0-9]+)?)`)
-	chRe6  = regexp.MustCompile(`(?i)[-_\s]c[-_\s]*([0-9]+(?:\.[0-9]+)?)`)
-	volRe1 = regexp.MustCompile(`(?i)v(?:ol(?:ume)?)?[-_\s]*([0-9]+)`)
-	volRe2 = regexp.MustCompile(`(?i)volume[-_\s]*([0-9]+)`)
-	volRe3 = regexp.MustCompile(`(?i)vol[-_\s]*([0-9]+)`)
-	volRe4 = regexp.MustCompile(`[-_\s]v([0-9]+)`)
+	chRe1  = regexp.MustCompile(`(?i)^ch[-_.\s]*([0-9]+(?:\.[0-9]+)?)`)
+	chRe2  = regexp.MustCompile(`(?i)^chapter[-_.\s]*([0-9]+(?:\.[0-9]+)?)`)
+	chRe3  = regexp.MustCompile(`(?i)^c[-_.\s]*([0-9]+(?:\.[0-9]+)?)`)
+	chRe4  = regexp.MustCompile(`(?i)[-_.\s]ch[-_.\s]*([0-9]+(?:\.[0-9]+)?)`)
+	chRe5  = regexp.MustCompile(`(?i)[-_.\s]chapter[-_.\s]*([0-9]+(?:\.[0-9]+)?)`)
+	chRe6  = regexp.MustCompile(`(?i)[-_.\s]c[-_.\s]*([0-9]+(?:\.[0-9]+)?)`)
+	volRe1 = regexp.MustCompile(`(?i)(?:^|[-_\s.])vol(?:ume)?\.?[-_\s]*([0-9]+)`)
+	volRe2 = regexp.MustCompile(`(?i)(?:^|[-_\s.])v\.?[-_\s]*([0-9]+)`)
 )
 
 func ExtractChapterNumber(filename string) string {
@@ -231,22 +231,178 @@ func ExtractChapterNumber(filename string) string {
 	nameLower := strings.ToLower(name)
 	for _, re := range []*regexp.Regexp{chRe1, chRe2, chRe3, chRe4, chRe5, chRe6} {
 		if m := re.FindStringSubmatch(nameLower); len(m) > 1 {
-			return strings.TrimLeft(m[1], "0")
+			return normalizeNumber(m[1])
 		}
 	}
 	// parser helpers not available; rely on our own regexes
 	return ""
 }
 
+// normalizeNumber strips leading zeroes without turning a zero-only number such
+// as "000" into an empty string.
+func normalizeNumber(raw string) string {
+	trimmed := strings.TrimLeft(raw, "0")
+	if trimmed == "" {
+		return "0"
+	}
+	if strings.HasPrefix(trimmed, ".") {
+		return "0" + trimmed
+	}
+	return trimmed
+}
+
+// ChapterNumberValue returns the numeric chapter number encoded in a CBZ
+// filename. OK is false when no chapter number can be parsed. Volume-only
+// archives use VolumeNumberValue instead; their volume number is not a chapter
+// number.
+func ChapterNumberValue(filename string) (value float64, ok bool) {
+	raw := ExtractChapterNumber(filename)
+	if raw == "" {
+		return 0, false
+	}
+	parsed, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		return 0, false
+	}
+	return parsed, true
+}
+
+// VolumeNumberValue returns the numeric volume number encoded in a CBZ
+// filename. OK is false when no volume number can be parsed.
+func VolumeNumberValue(filename string) (value float64, ok bool) {
+	raw := ExtractVolumeNumber(filename)
+	if raw == "" {
+		return 0, false
+	}
+	parsed, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		return 0, false
+	}
+	return parsed, true
+}
+
+// ChapterFile is a local CBZ file together with its parsed chapter and volume
+// numbers. A volume-only archive is a digital volume that bundles several
+// chapters; it has HasVolume set and HasNumber unset.
+type ChapterFile struct {
+	Name         string
+	Path         string
+	Number       float64
+	HasNumber    bool
+	VolumeNumber float64
+	HasVolume    bool
+	IsVolume     bool
+}
+
+// ListChapterFiles lists the CBZ files in dir sorted by chapter number, then
+// volume-only archives by volume number, falling back to filename order for
+// files without either number. Paths are absolute inputs to the metadata
+// helpers.
+func ListChapterFiles(dir string) ([]ChapterFile, error) {
+	expandedDir, err := parser.ExpandPath(dir)
+	if err != nil {
+		return nil, err
+	}
+	names, err := parser.LocalChapterList(expandedDir)
+	if err != nil {
+		names = nil
+	}
+	if len(names) == 0 {
+		entries, readErr := os.ReadDir(expandedDir)
+		if readErr == nil {
+			for _, e := range entries {
+				if !e.IsDir() && strings.EqualFold(filepath.Ext(e.Name()), ".cbz") {
+					names = append(names, e.Name())
+				}
+			}
+		}
+	}
+	files := make([]ChapterFile, 0, len(names))
+	for _, name := range names {
+		chapter, hasChapter := ChapterNumberValue(name)
+		volume, hasVolume := VolumeNumberValue(name)
+		files = append(files, ChapterFile{
+			Name:         name,
+			Path:         filepath.Join(expandedDir, name),
+			Number:       chapter,
+			HasNumber:    hasChapter,
+			VolumeNumber: volume,
+			HasVolume:    hasVolume,
+			IsVolume:     hasVolume && !hasChapter,
+		})
+	}
+	sort.SliceStable(files, func(i, j int) bool {
+		a, b := files[i], files[j]
+		if a.HasNumber != b.HasNumber {
+			return a.HasNumber
+		}
+		if a.HasNumber {
+			if a.Number != b.Number {
+				return a.Number < b.Number
+			}
+			return a.Name < b.Name
+		}
+		if a.IsVolume != b.IsVolume {
+			return a.IsVolume
+		}
+		if a.IsVolume && a.VolumeNumber != b.VolumeNumber {
+			return a.VolumeNumber < b.VolumeNumber
+		}
+		return a.Name < b.Name
+	})
+	return files, nil
+}
+
+// CheckCBZ performs the quick metadata check: it opens the CBZ central
+// directory and confirms a non-empty ComicInfo.xml entry exists. It does not
+// decompress pages or compare the metadata against MangaDex.
+func CheckCBZ(cbzPath string) error {
+	r, err := zip.OpenReader(cbzPath)
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+	for _, f := range r.File {
+		if f.Name == "ComicInfo.xml" {
+			if f.UncompressedSize64 == 0 {
+				return fmt.Errorf("ComicInfo.xml is empty")
+			}
+			return nil
+		}
+	}
+	return fmt.Errorf("ComicInfo.xml not found")
+}
+
+// DirectoryFullyChecked reports whether every CBZ in dir is covered by the
+// stored cursors. Numbered chapters compare against lastCheckedChapter and
+// volume-only archives compare against lastCheckedVolume.
+func DirectoryFullyChecked(dir string, lastCheckedChapter, lastCheckedVolume float64) bool {
+	files, err := ListChapterFiles(dir)
+	if err != nil || len(files) == 0 {
+		return false
+	}
+	for _, file := range files {
+		switch {
+		case file.HasNumber:
+			if file.Number > lastCheckedChapter {
+				return false
+			}
+		case file.IsVolume:
+			if file.VolumeNumber > lastCheckedVolume {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 func ExtractVolumeNumber(filename string) string {
 	name := strings.TrimSuffix(filename, filepath.Ext(filename))
-	for _, re := range []*regexp.Regexp{volRe1, volRe2, volRe3, volRe4} {
+	for _, re := range []*regexp.Regexp{volRe1, volRe2} {
 		if m := re.FindStringSubmatch(name); len(m) > 1 {
-			vol := strings.TrimLeft(m[1], "0")
-			if vol == "" {
-				vol = "0"
-			}
-			return vol
+			return normalizeNumber(m[1])
 		}
 	}
 	return ""
@@ -523,56 +679,48 @@ type Result struct {
 	Error  string
 }
 
-func GenerateForDirectory(store *mangadex.Store, info *mangadex.MangaInfo, dir string) []Result {
-	if info == nil {
-		return nil
-	}
-	files, err := parser.LocalChapterList(dir)
-	if err != nil {
-		files = nil
-	}
-	var absFiles []string
-	for _, f := range files {
-		absFiles = append(absFiles, filepath.Join(dir, f))
-	}
-	files = absFiles
-	if len(files) == 0 {
-		entries, err := os.ReadDir(dir)
-		if err == nil {
-			for _, e := range entries {
-				if !e.IsDir() && strings.EqualFold(filepath.Ext(e.Name()), ".cbz") {
-					files = append(files, filepath.Join(dir, e.Name()))
-				}
-			}
-		}
-	}
-	sort.Strings(files)
-	base := FromMangaInfo(info)
-	coverBytes, _ := getCoverBytes(store, info)
-	var results []Result
-	for _, cbzPath := range files {
-		fileName := filepath.Base(cbzPath)
-		chapterNum := ExtractChapterNumber(fileName)
-		if chapterNum == "" {
-			if v := ExtractVolumeNumber(fileName); v != "" {
-				chapterNum = v
-			} else {
-				chapterNum = "1"
-			}
-		}
-		ci := *base
-		ci.Number = chapterNum
+// comicInfoForFile returns a copy of base with the chapter number, volume and
+// title fields filled in for one CBZ filename.
+func comicInfoForFile(base *ComicInfo, fileName string) ComicInfo {
+	chapterNum := ExtractChapterNumber(fileName)
+	if chapterNum == "" {
 		if v := ExtractVolumeNumber(fileName); v != "" {
-			ci.Volume = v
+			chapterNum = v
+		} else {
+			chapterNum = "1"
 		}
-		ci.Title = chapterTitle(base, fileName, chapterNum)
-		if err := applyComicInfo(cbzPath, &ci, coverBytes); err != nil {
-			results = append(results, Result{Name: fileName, Status: "Failed", Error: err.Error()})
-			continue
-		}
-		results = append(results, Result{Name: fileName, Status: "OK"})
 	}
-	return results
+	ci := *base
+	ci.Number = chapterNum
+	if v := ExtractVolumeNumber(fileName); v != "" {
+		ci.Volume = v
+	}
+	ci.Title = chapterTitle(base, fileName, chapterNum)
+	return ci
+}
+
+// RepairCBZ regenerates the metadata of one CBZ when it is missing, corrupt,
+// or does not match the MangaDex title. Matching files are left untouched so
+// Repair does not recompress every archive. It reports whether the file was
+// changed.
+func RepairCBZ(store *mangadex.Store, info *mangadex.MangaInfo, cbzPath string) (bool, error) {
+	if info == nil {
+		return false, nil
+	}
+	base := FromMangaInfo(info)
+	fileName := filepath.Base(cbzPath)
+	ci := comicInfoForFile(base, fileName)
+	coverBytes, _ := getCoverBytes(store, info)
+	if len(coverBytes) > 0 {
+		ci.Pages = &ComicPageList{Pages: []ComicPageInfo{{Image: 0, Type: "FrontCover"}}}
+	}
+	if matchesComicInfo(cbzPath, &ci) {
+		return false, nil
+	}
+	if err := applyComicInfo(cbzPath, &ci, coverBytes); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func VerifyForDirectory(store *mangadex.Store, info *mangadex.MangaInfo, dir string) []Result {
@@ -651,6 +799,54 @@ func hasComicInfo(cbzPath string) bool {
 		}
 	}
 	return false
+}
+
+func matchesComicInfo(cbzPath string, expected *ComicInfo) bool {
+	if expected == nil {
+		return true
+	}
+	r, err := zip.OpenReader(cbzPath)
+	if err != nil {
+		return false
+	}
+	defer r.Close()
+	var actual *ComicInfo
+	for _, f := range r.File {
+		if f.Name != "ComicInfo.xml" {
+			continue
+		}
+		if f.UncompressedSize64 == 0 {
+			return false
+		}
+		rc, err := f.Open()
+		if err != nil {
+			return false
+		}
+		data, err := io.ReadAll(rc)
+		rc.Close()
+		if err != nil {
+			return false
+		}
+		var parsed ComicInfo
+		if err := xml.Unmarshal(data, &parsed); err != nil {
+			return false
+		}
+		actual = &parsed
+		break
+	}
+	if actual == nil {
+		return false
+	}
+
+	want := *expected
+	actual.XMLName = xml.Name{}
+	want.XMLName = xml.Name{}
+	// When there is no cover to write, ignore any existing Pages entry so an
+	// unavailable cover download cannot force repeated rewrites.
+	if want.Pages == nil {
+		actual.Pages = nil
+	}
+	return reflect.DeepEqual(*actual, want)
 }
 
 func matchesBase(cbzPath string, base *ComicInfo) bool {

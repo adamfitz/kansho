@@ -14,6 +14,7 @@ import (
 
 	"kansho/mangadex"
 	"kansho/metadata"
+	"kansho/metadataqueue"
 	"kansho/parser"
 )
 
@@ -497,7 +498,40 @@ func (m *Manager) downloadChapter(ctx context.Context, chapterURL, cbzName strin
 		}
 		if err := metadata.ApplyToCBZ(store, info, cbzPath); err != nil {
 			log.Printf("[Metadata] failed to apply metadata to %s: %v", cbzPath, err)
+			return
 		}
+		chapter, hasChapter := metadata.ChapterNumberValue(cbzName)
+		volume, hasVolume := metadata.VolumeNumberValue(cbzName)
+		label := metadata.ExtractChapterNumber(cbzName)
+		if label != "" {
+			label = "Chapter " + label
+		} else if volumeLabel := metadata.ExtractVolumeNumber(cbzName); volumeLabel != "" {
+			label = "Volume " + volumeLabel
+		} else {
+			label = cbzName
+		}
+		key := metadata.MangaSourceKey(*manga)
+		metadataqueue.Get().Submit(&metadataqueue.Task{
+			Action:    "Check",
+			Title:     manga.Title,
+			Chapter:   label,
+			DedupeKey: fmt.Sprintf("metadata:%s:%s:%s", key, "Check", cbzName),
+			Run: func(ctx context.Context) error {
+				return metadata.CheckCBZ(cbzPath)
+			},
+			OnSuccess: func() {
+				switch {
+				case hasChapter:
+					if err := store.AdvanceChapterCheck(key, chapter); err != nil {
+						log.Printf("[Metadata] could not advance checked chapter for %s: %v", cbzPath, err)
+					}
+				case hasVolume:
+					if err := store.AdvanceVolumeCheck(key, volume); err != nil {
+						log.Printf("[Metadata] could not advance checked volume for %s: %v", cbzPath, err)
+					}
+				}
+			},
+		})
 	}()
 	return nil
 }

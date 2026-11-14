@@ -18,6 +18,12 @@ func statusByID(tasks []*DownloadTask) map[string]string {
 	return statuses
 }
 
+// disableDispatcherForTest marks the dispatcher as already started so a test
+// can exercise queue bookkeeping without spawning real download workers.
+func disableDispatcherForTest(q *DownloadQueue) {
+	q.startOnce.Do(func() {})
+}
+
 // TestCancelMangaQueueCancelsOnlyQueuedChapters verifies that CancelMangaQueue
 // cancels the queued and CF-skipped chapters for the matching manga title but
 // leaves the chapter currently downloading for that manga running, along with
@@ -171,6 +177,7 @@ func TestExecuteTaskKeepsFailedChapter(t *testing.T) {
 // TestRetryTaskAllowsCancelled verifies that a cancelled task can be retried.
 func TestRetryTaskAllowsCancelled(t *testing.T) {
 	q := &DownloadQueue{}
+	disableDispatcherForTest(q)
 
 	q.tasks = []*DownloadTask{
 		{ID: "1", Manga: Bookmarks{Title: "Manga A"}, Chapter: "a1.cbz", Status: "cancelled"},
@@ -283,6 +290,7 @@ func TestRetryTaskRejectsActiveTasks(t *testing.T) {
 // Cloudflare data was provided can be retried once the data is available.
 func TestRetryTaskAllowsSkippedCF(t *testing.T) {
 	q := &DownloadQueue{}
+	disableDispatcherForTest(q)
 
 	q.tasks = []*DownloadTask{
 		{ID: "1", Manga: Bookmarks{Title: "Manga A"}, Chapter: "a1.cbz", Status: "skipped_cf"},
@@ -510,6 +518,7 @@ func TestResumeCfTasksRequeuesBlockedTasksWithData(t *testing.T) {
 	})
 
 	q := &DownloadQueue{}
+	disableDispatcherForTest(q)
 	q.tasks = []*DownloadTask{
 		{ID: "wait", Manga: Bookmarks{Site: "cf-site", Url: "https://ready.example.com/manga"}, Chapter: "a1.cbz", Status: "waiting_cf", Error: &cf.CfChallengeError{URL: "https://ready.example.com/chapter-1/"}},
 		{ID: "skip", Manga: Bookmarks{Site: "cf-site", Url: "https://ready.example.com/manga"}, Chapter: "a2.cbz", Status: "skipped_cf"},

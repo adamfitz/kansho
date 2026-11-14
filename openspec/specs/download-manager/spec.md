@@ -66,6 +66,14 @@ Each chapter download SHALL fetch page images, convert them to JPEG, and package
 - AND SHALL place the CBZ in the manga's configured location directory
 - AND SHALL clean up the temporary directory
 
+#### Scenario: Auto-check new download
+- GIVEN a chapter CBZ was created successfully
+- WHEN MangaDex metadata was applied to the CBZ successfully
+- THEN a metadata `Check` task for that CBZ SHALL be submitted to the single metadata queue
+- AND the stored last-checked chapter SHALL advance only if the Check passes
+- AND a volume-only CBZ SHALL advance the stored last-checked volume instead
+- AND a failed Check SHALL leave the matching cursor unchanged
+
 #### Scenario: Empty chapter rejected
 - GIVEN a chapter page is fetched
 - WHEN no images are found on the page

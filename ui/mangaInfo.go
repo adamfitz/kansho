@@ -286,9 +286,12 @@ func buildMangaInfoContent(parentWindow fyne.Window, replace func(fyne.CanvasObj
 	titleLabel.Wrapping = fyne.TextWrapWord
 	titleLabel.Selectable = true
 
+	// Green tick shown once every local CBZ for this title has passed Check.
+	checkIcon := widget.NewIcon(greenTickResource)
+	checkIcon.Hide()
+
 	notifyLabel := widget.NewLabel("")
 	notifyLabel.Wrapping = fyne.TextWrapWord
-	generateSpinner := newBashSpinner()
 
 	// The scrollable field area; swapped in place when the language changes.
 	fieldScroll := container.NewVScroll(container.NewVBox())
@@ -405,83 +408,128 @@ func buildMangaInfoContent(parentWindow fyne.Window, replace func(fyne.CanvasObj
 		}
 	}
 
-	generateButton := widget.NewButton("Generate", nil)
-	verifyButton := widget.NewButton("Verify", nil)
-	if matchedBookmark == nil || strings.TrimSpace(matchedBookmark.Location) == "" {
-		generateButton.Disable()
-		verifyButton.Disable()
+	updateCheckIcon := func() {
+		show := false
+		if matchedBookmark != nil && strings.TrimSpace(matchedBookmark.Location) != "" {
+			if store, err := mangadex.GetStore(); err == nil {
+				if stats, statsErr := store.LookupChapterStats(mangaSourceKey(matchedBookmark)); statsErr == nil && stats != nil {
+					show = metadata.DirectoryFullyChecked(matchedBookmark.Location, stats.LastCheckedChapter, stats.LastCheckedVolume)
+				}
+			}
+		}
+		if show {
+			checkIcon.Show()
+		} else {
+			checkIcon.Hide()
+		}
+		checkIcon.Refresh()
 	}
-	generateButton.OnTapped = func() {
+	updateCheckIcon()
+
+	repairButton := widget.NewButton(metadataActionRepair, nil)
+	checkButton := widget.NewButton(metadataActionCheck, nil)
+	if matchedBookmark == nil || strings.TrimSpace(matchedBookmark.Location) == "" {
+		repairButton.Disable()
+		checkButton.Disable()
+	}
+	repairButton.OnTapped = func() {
 		if matchedBookmark == nil {
 			return
 		}
-		generateButton.Disable()
-		verifyButton.Disable()
-		notifyLabel.SetText("Generating metadata for all files...")
-		generateSpinner.Start()
+		repairButton.Disable()
+		checkButton.Disable()
+		notifyLabel.SetText("Queueing metadata repair for all files...")
+		bookmark := *matchedBookmark
+		infoAtTap := info
 		go func() {
-			store, _ := mangadex.GetStore()
-			res := metadata.GenerateForDirectory(store, info, matchedBookmark.Location)
-			fyne.Do(func() {
-				generateSpinner.Stop()
-				generateButton.Enable()
-				verifyButton.Enable()
-				okCount, failCount := 0, 0
-				for _, r := range res {
-					if r.Status == "OK" {
-						okCount++
-					} else if r.Status == "Failed" {
-						failCount++
-					}
-				}
-				if len(res) == 0 {
+			store, err := mangadex.GetStore()
+			if err != nil {
+				fyne.Do(func() {
+					repairButton.Enable()
+					checkButton.Enable()
+					notifyLabel.SetText(fmt.Sprintf("Cannot open the database: %v", err))
+				})
+				return
+			}
+			files, err := metadata.ListChapterFiles(bookmark.Location)
+			if err != nil || len(files) == 0 {
+				fyne.Do(func() {
+					repairButton.Enable()
+					checkButton.Enable()
 					notifyLabel.SetText("No CBZ files found in directory.")
-					return
-				}
-				notifyLabel.SetText(fmt.Sprintf("Generate: %d OK, %d Failed", okCount, failCount))
+				})
+				return
+			}
+			submitMetadataRun(metadataActionRepair, store, infoAtTap, &bookmark, files, func(summary metadataRunSummary) {
+				fyne.Do(func() {
+					repairButton.Enable()
+					checkButton.Enable()
+					updateCheckIcon()
+					notifyLabel.SetText(summary.message())
+				})
 			})
 		}()
 	}
-	verifyButton.OnTapped = func() {
+	checkButton.OnTapped = func() {
 		if matchedBookmark == nil {
 			return
 		}
-		generateButton.Disable()
-		verifyButton.Disable()
-		notifyLabel.SetText("Verifying metadata...")
-		generateSpinner.Start()
+		repairButton.Disable()
+		checkButton.Disable()
+		notifyLabel.SetText("Queueing quick metadata check...")
+		bookmark := *matchedBookmark
+		infoAtTap := info
 		go func() {
-			store, _ := mangadex.GetStore()
-			res := metadata.VerifyForDirectory(store, info, matchedBookmark.Location)
-			fyne.Do(func() {
-				generateSpinner.Stop()
-				generateButton.Enable()
-				verifyButton.Enable()
-				okCount, fixedCount, failCount := 0, 0, 0
-				for _, r := range res {
-					if r.Status == "OK" {
-						okCount++
-					} else if r.Status == "Fixed" {
-						fixedCount++
-					} else if r.Status == "Failed" {
-						failCount++
-						log.Printf("[UI] Verify metadata failed for %s: %s", r.Name, r.Error)
-					}
-				}
-				if len(res) == 0 {
-					notifyLabel.SetText("No CBZ files found in directory.")
-					return
-				}
-				notifyLabel.SetText(fmt.Sprintf("Verify: %d OK, %d Fixed, %d Failed", okCount, fixedCount, failCount))
+			store, err := mangadex.GetStore()
+			if err != nil {
+				fyne.Do(func() {
+					repairButton.Enable()
+					checkButton.Enable()
+					notifyLabel.SetText(fmt.Sprintf("Cannot open the database: %v", err))
+				})
+				return
+			}
+			cursor := 0.0
+			volumeCursor := 0.0
+			if stats, statsErr := store.LookupChapterStats(mangaSourceKey(&bookmark)); statsErr == nil && stats != nil {
+				cursor = stats.LastCheckedChapter
+				volumeCursor = stats.LastCheckedVolume
+			}
+			files, err := uncheckedChapterFiles(bookmark.Location, cursor, volumeCursor)
+			if err != nil {
+				fyne.Do(func() {
+					repairButton.Enable()
+					checkButton.Enable()
+					notifyLabel.SetText(fmt.Sprintf("Cannot list chapters: %v", err))
+				})
+				return
+			}
+			if len(files) == 0 {
+				fyne.Do(func() {
+					repairButton.Enable()
+					checkButton.Enable()
+					updateCheckIcon()
+					notifyLabel.SetText("All chapters are already checked.")
+				})
+				return
+			}
+			submitMetadataRun(metadataActionCheck, store, infoAtTap, &bookmark, files, func(summary metadataRunSummary) {
+				fyne.Do(func() {
+					repairButton.Enable()
+					checkButton.Enable()
+					updateCheckIcon()
+					notifyLabel.SetText(summary.message())
+				})
 			})
 		}()
 	}
 
+	titleRow := container.NewBorder(nil, nil, nil, checkIcon, titleLabel)
 	titleBlock := container.NewVBox(
-		titleLabel,
-		container.NewHBox(infoFieldLabel("Language:"), langSelect, refreshButton, generateButton, verifyButton),
+		titleRow,
+		container.NewHBox(infoFieldLabel("Language:"), langSelect, refreshButton, checkButton, repairButton),
 	)
-	statusRow := container.NewBorder(nil, nil, nil, generateSpinner, notifyLabel)
+	statusRow := container.NewBorder(nil, nil, nil, nil, notifyLabel)
 	header := container.NewVBox(titleBlock, statusRow, NewSeparator())
 
 	return container.NewBorder(header, nil, nil, nil, fieldScroll)
