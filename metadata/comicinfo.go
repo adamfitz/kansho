@@ -216,12 +216,12 @@ func FromMangaInfo(info *mangadex.MangaInfo) *ComicInfo {
 }
 
 var (
-	chRe1  = regexp.MustCompile(`(?i)^ch[-_\s]*([0-9]+(?:\.[0-9]+)?)`)
-	chRe2  = regexp.MustCompile(`(?i)^chapter[-_\s]*([0-9]+(?:\.[0-9]+)?)`)
-	chRe3  = regexp.MustCompile(`(?i)^c[-_\s]*([0-9]+(?:\.[0-9]+)?)`)
-	chRe4  = regexp.MustCompile(`(?i)[-_\s]ch[-_\s]*([0-9]+(?:\.[0-9]+)?)`)
-	chRe5  = regexp.MustCompile(`(?i)[-_\s]chapter[-_\s]*([0-9]+(?:\.[0-9]+)?)`)
-	chRe6  = regexp.MustCompile(`(?i)[-_\s]c[-_\s]*([0-9]+(?:\.[0-9]+)?)`)
+	chRe1  = regexp.MustCompile(`(?i)^ch[-_.\s]*([0-9]+(?:\.[0-9]+)?)`)
+	chRe2  = regexp.MustCompile(`(?i)^chapter[-_.\s]*([0-9]+(?:\.[0-9]+)?)`)
+	chRe3  = regexp.MustCompile(`(?i)^c[-_.\s]*([0-9]+(?:\.[0-9]+)?)`)
+	chRe4  = regexp.MustCompile(`(?i)[-_.\s]ch[-_.\s]*([0-9]+(?:\.[0-9]+)?)`)
+	chRe5  = regexp.MustCompile(`(?i)[-_.\s]chapter[-_.\s]*([0-9]+(?:\.[0-9]+)?)`)
+	chRe6  = regexp.MustCompile(`(?i)[-_.\s]c[-_.\s]*([0-9]+(?:\.[0-9]+)?)`)
 	volRe1 = regexp.MustCompile(`(?i)(?:^|[-_\s.])vol(?:ume)?\.?[-_\s]*([0-9]+)`)
 	volRe2 = regexp.MustCompile(`(?i)(?:^|[-_\s.])v\.?[-_\s]*([0-9]+)`)
 )

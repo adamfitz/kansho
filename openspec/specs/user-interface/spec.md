@@ -129,8 +129,8 @@ The system SHALL display the chapters of the currently selected manga with per-c
 #### Scenario: Metadata queue readout
 - GIVEN the main window is open
 - WHEN the metadata queue changes state
-- THEN the status bar SHALL show `⟳ Metadata: idle` when it has no work
-- AND `Metadata: N running · M queued` with an animated spinner while Check or Repair work is in flight
+- THEN the status bar SHALL show `⟳ Metadata Refresh: idle` when it has no work
+- AND `Metadata Refresh: N running · M queued` with an animated spinner while Check or Repair work is in flight
 - AND the metadata readout SHALL be clickable while busy to open a dialog listing the action, title and chapter of each job
 - AND the dialog SHALL close automatically when the queue becomes idle
 
@@ -358,3 +358,19 @@ The system SHALL provide menus and keyboard shortcuts for common operations.
 - GIVEN the user presses Ctrl+Shift+C
 - WHEN the config window opens
 - THEN it SHALL display application configuration including version, git commit, build time, and rlv (rlv companion tool) version
+
+### Requirement: Concurrency Discipline
+The UI SHALL read download state only through queue snapshots and SHALL mutate widgets only on the Fyne UI thread.
+
+#### Scenario: Queue callbacks read snapshots
+- GIVEN a download worker updates a task
+- WHEN an onTaskAdded or onTaskUpdated callback runs
+- THEN the callback SHALL use the `DownloadTask` snapshot it receives
+- AND it SHALL NOT retain that pointer as live queue state
+- AND it SHALL defer widget changes with `fyne.Do`
+
+#### Scenario: Background metadata prompt in tests
+- GIVEN a UI test constructs a chapter list view
+- WHEN the test does not exercise the MangaDex metadata prompt
+- THEN the test fixture SHALL disable the background metadata prompt
+- AND the test SHALL NOT leave a prompt goroutine running after the test app closes

@@ -40,7 +40,8 @@ The queue SHALL manage download tasks through defined states.
 - THEN a task with a unique ID SHALL be created using `fmt.Sprintf("%s-%s-%d", manga.Shortname, chapter, len(q.tasks))`
 - AND the task SHALL store the chapter CBZ filename and its download URL
 - AND a value copy of the manga data SHALL be stored (not a pointer) to prevent external mutation
-- AND a callback SHALL notify UI of the new task
+- AND a callback SHALL notify UI of the new task with a task snapshot
+- AND the returned task SHALL be a snapshot, not the live queue entry
 - AND queue processing SHALL start automatically in a goroutine
 
 #### Scenario: Duplicate chapter rejected
@@ -51,7 +52,8 @@ The queue SHALL manage download tasks through defined states.
 #### Scenario: Look up task for a chapter
 - GIVEN tasks exist in the queue
 - WHEN `GetTaskForChapter(mangaTitle, chapter)` is called
-- THEN it SHALL return the matching task, or nil if none exists
+- THEN it SHALL return a snapshot of the matching task, or nil if none exists
+- AND the returned task SHALL NOT alias the live task that workers mutate
 - AND `ChapterQueued(mangaTitle, chapter)` SHALL return true if such a task exists
 
 ### Requirement: Concurrent Worker Pool
@@ -190,12 +192,36 @@ The queue SHALL notify the UI of state changes through registered callbacks.
 - WHEN `SetCallbacks` is called
 - THEN callbacks for onTaskAdded, onTaskUpdated, onTaskRemoved, and onQueueEmpty SHALL be registered
 - AND these callbacks SHALL be invoked on corresponding state changes
+- AND task callbacks SHALL receive a snapshot rather than a live pointer to a worker-mutated task
 
 #### Scenario: Clean up completed tasks
 - GIVEN there are completed or cancelled tasks in the queue
 - WHEN `RemoveCompletedTasks` is called
 - THEN all non-active tasks (not queued, downloading, waiting_cf, or skipped_cf) SHALL be removed
 - AND removal callbacks SHALL be triggered for each removed task
+
+### Requirement: Thread-Safe Task Snapshots
+The queue SHALL keep live task mutation behind its mutex and SHALL expose task state to callers only through snapshots.
+
+#### Scenario: Getters return snapshots
+- GIVEN a worker is updating a live task under the queue lock
+- WHEN `GetTasks`, `GetTask`, `GetTaskForChapter`, `AddChapterTask`, or `AddTask` returns task data
+- THEN each returned `DownloadTask` SHALL be a value copy of the live task
+- AND the caller SHALL be able to read every field after the queue lock is released without racing the worker
+- AND mutating a returned snapshot SHALL NOT change the queued task
+
+#### Scenario: Callbacks receive snapshots
+- GIVEN the UI registered task callbacks
+- WHEN the queue invokes a callback for an added or updated task
+- THEN the callback SHALL receive a snapshot of the task at notification time
+- AND the callback SHALL NOT hold a pointer that workers later mutate
+
+#### Scenario: Worker-pool tests isolate the dispatcher
+- GIVEN a test exercises queue bookkeeping without testing downloads
+- WHEN the test calls a queue method that can start the worker pool
+- THEN the test SHALL disable the dispatcher before that call
+- AND the test SHALL read queued tasks through snapshot getters or while holding the queue mutex
+- AND only tests that specifically exercise dispatch or workers SHALL start the real dispatcher
 
 ### Requirement: Context-Bound Task Execution
 Each downloading task SHALL use a cancellable context for aborting in-flight operations.

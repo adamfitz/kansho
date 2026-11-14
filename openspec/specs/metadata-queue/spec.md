@@ -34,8 +34,8 @@ The queue SHALL report running count, queued count and an ordered job list (runn
 #### Scenario: Status bar shows metadata queue state
 - GIVEN the listener is wired to the main window status bar
 - WHEN metadata tasks are queued, start running, or finish
-- THEN the status bar SHALL show `⟳ Metadata: idle` when nothing is pending
-- AND `Metadata: N running · M queued` next to an animated bash-style spinner while work is in flight
+- THEN the status bar SHALL show `⟳ Metadata Refresh: idle` when nothing is pending
+- AND `Metadata Refresh: N running · M queued` next to an animated bash-style spinner while work is in flight
 - AND the readout SHALL sit next to the chapter refresh readout
 
 #### Scenario: Listener thread safety

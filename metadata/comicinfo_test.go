@@ -137,6 +137,20 @@ func TestChapterAndVolumeZeroAreNotDropped(t *testing.T) {
 	}
 }
 
+func TestChapterNumbersAllowDotAfterPrefix(t *testing.T) {
+	cases := map[string]float64{
+		"Ch.0014 - Underwear (en) [Tomoshibi scan].cbz":          14,
+		"Vol.01 Ch.0001 - WHAT THE FUCK HAPPENED YESTERDAY?.cbz": 1,
+		"Chapter.7 - Test.cbz":                                   7,
+	}
+	for name, want := range cases {
+		got, ok := ChapterNumberValue(name)
+		if !ok || got != want {
+			t.Fatalf("ChapterNumberValue(%q) = %v, %v; want %v, true", name, got, ok, want)
+		}
+	}
+}
+
 func TestCheckCBZRequiresNonEmptyComicInfo(t *testing.T) {
 	dir := t.TempDir()
 	missing := filepath.Join(dir, "missing.cbz")

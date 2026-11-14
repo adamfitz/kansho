@@ -97,6 +97,11 @@ type ChapterListView struct {
 	chapterStats      *mangadex.ChapterStats
 	chapterStatsStore chapterStatsRepository
 
+	// disableMetadataPrompt lets tests avoid the background MangaDex prompt
+	// goroutine, which would otherwise outlive a test and race with the next
+	// Fyne test app.
+	disableMetadataPrompt bool
+
 	// statusBar is the main window's status bar. It is optional (nil in
 	// tests); when attached, it shows the selected manga's site and chapter
 	// counts.
@@ -801,7 +806,7 @@ func (v *ChapterListView) applyRefreshedChapters(manga *config.Bookmarks, remote
 	}
 
 	// Prompt to link MangaDex metadata if not already linked
-	if v.loadGeneration == gen && isSelected {
+	if !v.disableMetadataPrompt && v.loadGeneration == gen && isSelected {
 		go v.promptForMangaDexMetadataIfNeeded(manga)
 	}
 

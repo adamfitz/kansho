@@ -162,7 +162,7 @@ func (s *MainStatusBar) SetIdle() {
 const refreshPoolIdleText = "⟳ Chapter Refresh: idle"
 
 // metadataQueueIdleText is shown while no metadata Check/Repair is pending.
-const metadataQueueIdleText = "⟳ Metadata: idle"
+const metadataQueueIdleText = "⟳ Metadata Refresh: idle"
 
 // refreshSpinnerFrames is the classic bash-style spinner sequence, cycled
 // while the refresh pool has work in flight.
@@ -210,7 +210,7 @@ func (s *MainStatusBar) SetMetadataQueueStatus(status metadataqueue.Status) {
 	}
 	s.metaArea.SetClickable(true)
 	s.startMetadataSpinner()
-	s.metaStatus.SetText(fmt.Sprintf("Metadata: %d running · %d queued", status.Running, status.Queued))
+	s.metaStatus.SetText(fmt.Sprintf("Metadata Refresh: %d running · %d queued", status.Running, status.Queued))
 	if s.metaDialog != nil {
 		s.rebuildMetadataRows(status.Jobs)
 	}
