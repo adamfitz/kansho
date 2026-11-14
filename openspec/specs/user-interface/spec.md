@@ -133,6 +133,8 @@ The system SHALL display the chapters of the currently selected manga with per-c
 - AND `Metadata Refresh: N running · M queued` with an animated spinner while Check or Repair work is in flight
 - AND the metadata readout SHALL be clickable while busy to open a dialog listing the action, title and chapter of each job
 - AND the dialog SHALL close automatically when the queue becomes idle
+- AND the metadata readout SHALL keep a visible gap from the chapter refresh readout
+- AND the readout group SHALL keep a visible inset from the right edge of the status bar when both queues are idle
 
 #### Scenario: Metadata tick in the info pane
 - GIVEN every local chapter for a title has passed a metadata Check

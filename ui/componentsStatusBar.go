@@ -11,6 +11,7 @@ import (
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 )
@@ -112,8 +113,8 @@ func NewMainStatusBar() *MainStatusBar {
 
 	// While the pool is busy the whole readout becomes a click target that
 	// opens the refresh dialog; idle it is inert (no cursor, no dialog).
-	right := container.NewHBox(s.spinner, s.poolStatus)
-	s.refreshArea = newTapArea(right, s.showRefreshDialog)
+	refreshRight := container.NewHBox(s.spinner, s.poolStatus)
+	s.refreshArea = newTapArea(refreshRight, s.showRefreshDialog)
 
 	s.metaStatus = widget.NewLabel("")
 	s.metaStatus.Alignment = fyne.TextAlignTrailing
@@ -123,8 +124,13 @@ func NewMainStatusBar() *MainStatusBar {
 	metaRight := container.NewHBox(s.metaSpinner, s.metaStatus)
 	s.metaArea = newTapArea(metaRight, s.showMetadataDialog)
 
-	statusRow := container.NewBorder(nil, nil, s.badge,
-		container.NewHBox(s.refreshArea, s.metaArea), s.message)
+	// Keep the two readouts apart and inset from the right edge. Without this
+	// the metadata label sits flush against the bar when its queue is idle.
+	readoutGap := theme.Padding() * 2
+	readouts := container.New(layout.NewCustomPaddedHBoxLayout(readoutGap), s.refreshArea, s.metaArea)
+	readouts = container.New(layout.NewCustomPaddedLayout(0, 0, 0, readoutGap), readouts)
+
+	statusRow := container.NewBorder(nil, nil, s.badge, readouts, s.message)
 
 	// A slim white strip keeps the bar readable against the purple gradient
 	// and matches the look of the download queue page. It is built by hand
