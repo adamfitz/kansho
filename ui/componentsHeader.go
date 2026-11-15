@@ -39,7 +39,7 @@ func NewHeader(rightObject fyne.CanvasObject) (fyne.CanvasObject, func(int)) {
 	subtitleText.TextSize = SubtitleTextSize      // Smaller font (16pt)
 	subtitleText.Alignment = fyne.TextAlignCenter // Centered to match title
 
-	titleCountText := canvas.NewText("Manga titles: 0", TextColorLight)
+	titleCountText := canvas.NewText("Titles: 0", TextColorLight)
 	titleCountText.TextSize = SubtitleTextSize
 	titleCountText.Alignment = fyne.TextAlignCenter
 
@@ -66,7 +66,7 @@ func NewHeader(rightObject fyne.CanvasObject) (fyne.CanvasObject, func(int)) {
 	)
 
 	updateTitleCount := func(count int) {
-		titleCountText.Text = fmt.Sprintf("Manga titles: %d", count)
+		titleCountText.Text = fmt.Sprintf("Titles: %d", count)
 		titleCountText.Refresh()
 	}
 	return header, updateTitleCount

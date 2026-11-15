@@ -421,9 +421,8 @@ func (v *EditMangaView) SetInfoDisplayHandler(handler DisplayMangaInfoFunc) {
 	v.infoDisplayHandler = handler
 }
 
-// onEditMetadataButtonClicked opens the MangaDex title picker for the manga in
-// edit mode, even if it already has a MangaDex ID, and updates the bookmark to
-// the newly chosen entry.
+// onEditMetadataButtonClicked opens the metadata source picker for the manga in
+// edit mode, even if it already has a MangaDex ID.
 func (v *EditMangaView) onEditMetadataButtonClicked() {
 	if !v.isEditMode || v.editingMangaID < 0 || v.editingMangaID >= len(v.State.MangaData.Manga) {
 		dialog.ShowInformation("Edit Metadata", "Select a manga to edit first.", v.State.Window)
@@ -435,12 +434,12 @@ func (v *EditMangaView) onEditMetadataButtonClicked() {
 	manga := v.State.MangaData.Manga[editingID]
 
 	ShowMangaTitleLookup(manga, v.State.Window, v.infoDisplayHandler, func(id string) {
-		id = strings.TrimSpace(id)
-		if id == "" {
+		if editingID < 0 || editingID >= len(v.State.MangaData.Manga) {
 			return
 		}
+		id = strings.TrimSpace(id)
 		target := -1
-		if editingID < len(v.State.MangaData.Manga) &&
+		if editingID >= 0 && editingID < len(v.State.MangaData.Manga) &&
 			strings.EqualFold(strings.TrimSpace(v.State.MangaData.Manga[editingID].Title), strings.TrimSpace(bookmarkTitle)) {
 			target = editingID
 		}
@@ -457,7 +456,7 @@ func (v *EditMangaView) onEditMetadataButtonClicked() {
 		}
 		v.State.MangaData.Manga[target].MangaDexID = id
 		if err := saveBookmarksToStore(v.State.MangaData); err != nil {
-			dialog.ShowError(fmt.Errorf("failed to save MangaDex metadata mapping: %v", err), v.State.Window)
+			dialog.ShowError(fmt.Errorf("failed to save metadata source selection: %v", err), v.State.Window)
 		}
 	})
 }

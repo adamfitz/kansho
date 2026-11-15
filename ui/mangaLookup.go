@@ -11,11 +11,15 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
+	"kansho/config"
 	"kansho/mangadex"
+	"kansho/metadata"
 )
 
 // lookupPageSize is the number of MangaDex search results fetched per page.
 const lookupPageSize = 50
+const titleLookupDialogWidth = 760
+const titleLookupDialogHeight = 620
 
 // tappableLabel is a single-line text row that reacts to a tap. It is used for
 // each MangaDex search result in the lookup dialog.
@@ -30,11 +34,11 @@ func (l *tappableLabel) Tapped(_ *fyne.PointEvent) {
 	}
 }
 
-// titleLookupDialog presents a searchable, scrollable list of MangaDex title
-// candidates plus a manual URL/title-id field. Search results are fetched 50 at
-// a time; scrolling near the bottom loads the next page in the background.
+// titleLookupDialog presents MangaDex search results, direct URL/ID lookup, and
+// a manual metadata editor. Search results load 50 at a time.
 type titleLookupDialog struct {
-	window fyne.Window
+	window   fyne.Window
+	bookmark config.Bookmarks
 
 	// display renders the chosen MangaDex title in the chapter list pane.
 	display DisplayMangaInfoFunc
@@ -49,6 +53,8 @@ type titleLookupDialog struct {
 	statusLabel  *widget.Label
 	resultBox    *fyne.Container
 	resultScroll *container.Scroll
+	body         *fyne.Container
+	searchBody   fyne.CanvasObject
 
 	dlg *dialog.CustomDialog
 
@@ -58,12 +64,13 @@ type titleLookupDialog struct {
 	total     int
 }
 
-func newTitleLookupDialog(initialQuery string, window fyne.Window, display DisplayMangaInfoFunc) *titleLookupDialog {
+func newTitleLookupDialog(bookmark config.Bookmarks, window fyne.Window, display DisplayMangaInfoFunc) *titleLookupDialog {
 	d := &titleLookupDialog{
 		window:        window,
 		display:       display,
-		bookmarkTitle: initialQuery,
-		queryText:     initialQuery,
+		bookmark:      bookmark,
+		bookmarkTitle: bookmark.Title,
+		queryText:     bookmark.Title,
 	}
 
 	d.statusLabel = widget.NewLabel("")
@@ -71,10 +78,11 @@ func newTitleLookupDialog(initialQuery string, window fyne.Window, display Displ
 
 	d.searchEntry = widget.NewEntry()
 	d.searchEntry.SetPlaceHolder("Search MangaDex titles...")
-	d.searchEntry.SetText(initialQuery)
+	d.searchEntry.SetText(bookmark.Title)
 
 	searchButton := widget.NewButtonWithIcon("Search", theme.SearchIcon(), d.doSearch)
 	d.searchEntry.OnSubmitted = func(_ string) { d.doSearch() }
+	manualEntryButton := widget.NewButton("Manual Entry", d.openManualEntry)
 
 	d.manualEntry = widget.NewEntry()
 	d.manualEntry.SetPlaceHolder("https://mangadex.org/title/<id>  or  <id>")
@@ -99,9 +107,9 @@ func newTitleLookupDialog(initialQuery string, window fyne.Window, display Displ
 		d.onScrolled(pos)
 	}
 
-	content := container.NewBorder(
+	searchContent := container.NewBorder(
 		container.NewVBox(
-			widget.NewLabel("Search MangaDex:"),
+			container.NewBorder(nil, nil, nil, manualEntryButton, widget.NewLabel("Search MangaDex:")),
 			container.NewBorder(nil, nil, nil, searchButton, d.searchEntry),
 			NewSeparator(),
 			widget.NewLabel("MangaDex URL or title ID:"),
@@ -114,9 +122,11 @@ func newTitleLookupDialog(initialQuery string, window fyne.Window, display Displ
 		nil,
 		d.resultScroll,
 	)
+	d.searchBody = searchContent
+	d.body = container.NewMax(searchContent)
 
-	d.dlg = dialog.NewCustom("MangaDex Title Lookup", "Close", content, window)
-	d.dlg.Resize(fyne.NewSize(760, 620))
+	d.dlg = dialog.NewCustom("MangaDex Title Lookup", "Close", d.body, window)
+	d.dlg.Resize(fyne.NewSize(titleLookupDialogWidth, titleLookupDialogHeight))
 	return d
 }
 
@@ -127,6 +137,31 @@ func (d *titleLookupDialog) show() {
 
 func (d *titleLookupDialog) setStatus(msg string) {
 	d.statusLabel.SetText(msg)
+}
+
+func (d *titleLookupDialog) openManualEntry() {
+	editor := buildManualMetadataForm(d.window, nil, 360, func() {
+		d.setBody(d.searchBody)
+	}, func(info *mangadex.MangaInfo) error {
+		store, err := mangadex.GetStore()
+		if err != nil {
+			return err
+		}
+		if err := store.UpsertManualMetadata(metadata.MangaSourceKey(d.bookmark), info); err != nil {
+			return err
+		}
+		d.dlg.Hide()
+		d.display(info, d.bookmarkTitle)
+		return nil
+	})
+	d.setBody(editor)
+}
+
+func (d *titleLookupDialog) setBody(content fyne.CanvasObject) {
+	d.body.Objects = []fyne.CanvasObject{content}
+	d.body.Refresh()
+	d.dlg.Resize(fyne.NewSize(titleLookupDialogWidth, titleLookupDialogHeight))
+	d.dlg.Refresh()
 }
 
 // doSearch starts afresh a MangaDex title search with the current search entry

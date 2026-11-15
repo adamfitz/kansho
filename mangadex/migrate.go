@@ -256,6 +256,31 @@ func comparisonSpecs(conn *sql.Conn, platform string) ([]tableSpec, error) {
 			},
 		},
 		{
+			name:        "manga_manual_metadata",
+			sourceCount: `SELECT COUNT(*) FROM source.manga_manual_metadata`,
+			targetCount: `SELECT COUNT(*) FROM main.manga_manual_metadata`,
+			missingQuery: `SELECT s.manga_key, s.info_json
+				FROM source.manga_manual_metadata s
+				WHERE NOT EXISTS (
+					SELECT 1 FROM main.manga_manual_metadata m WHERE m.manga_key = s.manga_key
+				)
+				ORDER BY s.manga_key`,
+			insertQuery: `INSERT INTO main.manga_manual_metadata (manga_key, info_json)
+				SELECT s.manga_key, s.info_json
+				FROM source.manga_manual_metadata s
+				WHERE NOT EXISTS (
+					SELECT 1 FROM main.manga_manual_metadata m WHERE m.manga_key = s.manga_key
+				)`,
+			describeRow: func(rows *sql.Rows) (string, error) {
+				var key string
+				var data string
+				if err := rows.Scan(&key, &data); err != nil {
+					return "", err
+				}
+				return fmt.Sprintf("manual metadata | key=%s", key), nil
+			},
+		},
+		{
 			name:        "manga_chapter_stats",
 			sourceCount: `SELECT COUNT(*) FROM source.manga_chapter_stats`,
 			targetCount: `SELECT COUNT(*) FROM main.manga_chapter_stats`,

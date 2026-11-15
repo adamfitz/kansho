@@ -1,6 +1,7 @@
 # mangadex-title-info Specification
 
 ## Purpose
+This flow also supports optional, bookmark-scoped manual metadata. Manual records are the active source when present and never modify MangaDex title records.
 Provide MangaDex title information (title, alt titles, description, author, artist, status, demographic, year, tags, cover, URL) for any bookmarked manga through an info (i) button on each manga list row. Title info is fetched from the MangaDex API, stored in a local SQLite database, and displayed in the main window's chapter list pane (in place of the chapter list) with copyable fields, a clickable MangaDex URL, and a language selector. The same SQLite file also stores per-source manga chapter-count snapshots for all supported sites; remote chapter URLs and chapter rows remain separate from these aggregates.
 
 ## Requirements
@@ -30,6 +31,12 @@ MangaDex title information and generic per-manga chapter-count snapshots SHALL b
 - WHEN the dashboard is saved locally
 - THEN the stored record SHALL include at least: MangaDex ID, title (all languages), alt titles (all languages), description (all languages), original language, publication demographic, year, content rating, status, tags (all languages), author, artist, cover URL and MangaDex URL
 - AND records SHALL be keyed on the unique MangaDex ID so re-fetching updates rather than duplicates
+
+#### Scenario: Manual metadata storage
+- GIVEN a bookmark has manually entered metadata
+- WHEN the metadata is saved
+- THEN the full localized record SHALL be stored in `manga_manual_metadata`, keyed by the bookmark's stable source identity
+- AND the MangaDex title tables and records SHALL remain unchanged
 
 ### Requirement: Lookup Sequence
 The user SHALL be shown local database content when available, and a lookup dialog otherwise.
@@ -109,6 +116,31 @@ The lookup dialog SHALL let the user pick the correct MangaDex title for a bookm
 - WHEN the fetch action is triggered
 - THEN Kansho SHALL fetch that title directly, ignoring the search results
 - AND a manual entry SHALL take precedence over any tapped search result until it is cleared
+
+#### Scenario: Manual entry
+- GIVEN the MangaDex title lookup dialog is open
+- WHEN the user selects `Manual Entry`
+- THEN the dialog SHALL show editable fields for every title metadata field except the MangaDex-only ID
+- AND localized title, alternative title, description and tag values SHALL be editable by language
+- AND every field SHALL be optional
+- AND `Cancel` SHALL return to the MangaDex search dialog without saving
+- WHEN the user selects `Save`
+- THEN the manual metadata SHALL be stored for that bookmark and shown in the information pane
+- AND no MangaDex title record or mapping SHALL be changed
+
+#### Scenario: Manual metadata update
+- GIVEN the information pane is open
+- WHEN the user selects `Manual Update`
+- THEN an existing manual record SHALL be loaded for editing, or a MangaDex-backed title SHALL start with empty fields
+- AND saving SHALL make manual metadata the active source for that bookmark
+- AND the MangaDex metadata cache SHALL remain unchanged
+- WHEN the user selects a MangaDex result for that bookmark
+- THEN its manual metadata SHALL be removed and the MangaDex result SHALL become the active source
+
+#### Scenario: Manual metadata for chapter downloads
+- GIVEN a bookmark has manual metadata
+- WHEN a chapter is downloaded or repaired
+- THEN Kansho SHALL use only the manual metadata for its ComicInfo data
 
 ### Requirement: Information Pane
 The information pane SHALL display every stored detail for a MangaDex title inside the main window's chapter list card.
