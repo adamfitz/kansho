@@ -72,6 +72,47 @@ func TestUpsertAndLookupByID(t *testing.T) {
 	}
 }
 
+func TestManualMetadataDoesNotChangeMangaDexRecords(t *testing.T) {
+	store := tempStore(t)
+	mangaDexInfo := sampleInfo()
+	if err := store.Upsert(mangaDexInfo); err != nil {
+		t.Fatalf("Upsert MangaDex metadata: %v", err)
+	}
+
+	manualInfo := &MangaInfo{
+		ID:          mangaDexInfo.ID,
+		Title:       map[string]string{"en": "Manual title"},
+		Description: map[string]string{"en": "Manual synopsis"},
+	}
+	if err := store.UpsertManualMetadata("bookmark-key", manualInfo); err != nil {
+		t.Fatalf("UpsertManualMetadata: %v", err)
+	}
+	gotManual, err := store.LookupManualMetadata("bookmark-key")
+	if err != nil {
+		t.Fatalf("LookupManualMetadata: %v", err)
+	}
+	if gotManual == nil || gotManual.ID != "" || gotManual.Title["en"] != "Manual title" ||
+		gotManual.Description["en"] != "Manual synopsis" {
+		t.Fatalf("manual metadata = %+v, want saved metadata without a MangaDex ID", gotManual)
+	}
+
+	gotMangaDex, err := store.LookupByID(mangaDexInfo.ID)
+	if err != nil {
+		t.Fatalf("LookupByID: %v", err)
+	}
+	if gotMangaDex == nil || gotMangaDex.Title["en"] != "One Piece" {
+		t.Fatalf("MangaDex record changed: %+v", gotMangaDex)
+	}
+
+	if err := store.DeleteManualMetadata("bookmark-key"); err != nil {
+		t.Fatalf("DeleteManualMetadata: %v", err)
+	}
+	gotManual, err = store.LookupManualMetadata("bookmark-key")
+	if err != nil || gotManual != nil {
+		t.Fatalf("manual metadata after delete = %+v, err=%v; want nil", gotManual, err)
+	}
+}
+
 func TestListCoverCache(t *testing.T) {
 	store := tempStore(t)
 	info := sampleInfo()
@@ -1374,21 +1415,26 @@ func TestCompareAndMergeMissingRows(t *testing.T) {
 	if err := target.SaveBookmarks(targetBookmarks); err != nil {
 		t.Fatalf("target SaveBookmarks: %v", err)
 	}
+	if err := source.UpsertManualMetadata("manual-bookmark", &MangaInfo{
+		Title: map[string]string{"en": "Manual title"},
+	}); err != nil {
+		t.Fatalf("source UpsertManualMetadata: %v", err)
+	}
 
 	diff, err := target.CompareWith(source.Path())
 	if err != nil {
 		t.Fatalf("CompareWith: %v", err)
 	}
-	if diff.TotalMissing != 2 {
-		t.Fatalf("TotalMissing = %d, want 2 platform rows (%+v)", diff.TotalMissing, diff)
+	if diff.TotalMissing != 3 {
+		t.Fatalf("TotalMissing = %d, want 2 platform rows and manual metadata (%+v)", diff.TotalMissing, diff)
 	}
 
 	result, err := target.MergeMissingFrom(source.Path(), nil)
 	if err != nil {
 		t.Fatalf("MergeMissingFrom: %v", err)
 	}
-	if result.TotalInserted != 2 {
-		t.Fatalf("TotalInserted = %d, want 2 platform rows", result.TotalInserted)
+	if result.TotalInserted != 3 {
+		t.Fatalf("TotalInserted = %d, want 2 platform rows and manual metadata", result.TotalInserted)
 	}
 	if _, err := os.Stat(result.BackupPath); err != nil {
 		t.Fatalf("target backup missing: %v", err)
@@ -1400,6 +1446,10 @@ func TestCompareAndMergeMissingRows(t *testing.T) {
 	}
 	if len(merged.Manga) != 3 {
 		t.Fatalf("merged bookmarks = %+v, want 3 rows", merged.Manga)
+	}
+	manual, err := target.LookupManualMetadata("manual-bookmark")
+	if err != nil || manual == nil || manual.Title["en"] != "Manual title" {
+		t.Fatalf("merged manual metadata = %+v, err=%v", manual, err)
 	}
 }
 

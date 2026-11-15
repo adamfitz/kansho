@@ -452,11 +452,15 @@ func getCoverBytes(store *mangadex.Store, info *mangadex.MangaInfo) ([]byte, err
 	if store == nil || info == nil {
 		return nil, nil
 	}
-	if b, err := store.GetCoverCache(info.ID); err == nil && len(b) > 0 {
-		return b, nil
+	if info.ID != "" {
+		if b, err := store.GetCoverCache(info.ID); err == nil && len(b) > 0 {
+			return b, nil
+		}
 	}
 	if b, err := downloadCoverJPEG(info.CoverURL); err == nil && len(b) > 0 {
-		_ = store.SetCoverCache(info.ID, b, info.CoverURL)
+		if info.ID != "" {
+			_ = store.SetCoverCache(info.ID, b, info.CoverURL)
+		}
 		return b, nil
 	}
 	return nil, nil
@@ -948,6 +952,17 @@ func GetMangaInfoForBookmark(manga config.Bookmarks) (*mangadex.MangaInfo, error
 	store, err := mangadex.GetStore()
 	if err != nil {
 		return nil, err
+	}
+	return mangaInfoForBookmark(store, manga)
+}
+
+func mangaInfoForBookmark(store *mangadex.Store, manga config.Bookmarks) (*mangadex.MangaInfo, error) {
+	manual, err := store.LookupManualMetadata(MangaSourceKey(manga))
+	if err != nil {
+		return nil, err
+	}
+	if manual != nil {
+		return manual, nil
 	}
 
 	ids := make([]string, 0, 2)

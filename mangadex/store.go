@@ -262,6 +262,11 @@ func (s *Store) EnsureSchema() error {
 	);
 	CREATE INDEX IF NOT EXISTS idx_manga_title_lookup_id
 		ON manga_title_lookup (mangadex_id);
+	CREATE TABLE IF NOT EXISTS manga_manual_metadata (
+		manga_key  TEXT PRIMARY KEY,
+		info_json  TEXT NOT NULL,
+		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
 	CREATE TABLE IF NOT EXISTS manga_chapter_stats (
 		manga_key             TEXT PRIMARY KEY,
 		title                 TEXT NOT NULL DEFAULT '',
@@ -618,6 +623,76 @@ func (s *Store) LookupByID(id string) (*MangaInfo, error) {
 		return nil, fmt.Errorf("lookup mangadex id %s: %w", id, err)
 	}
 	return rowToInfo(m)
+}
+
+// LookupManualMetadata returns manually entered metadata for one bookmark.
+func (s *Store) LookupManualMetadata(key string) (*MangaInfo, error) {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return nil, fmt.Errorf("cannot look up manual metadata without a manga key")
+	}
+	var data string
+	err := s.conn.QueryRow(`SELECT info_json FROM manga_manual_metadata WHERE manga_key = ?`, key).Scan(&data)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("lookup manual metadata: %w", err)
+	}
+	var info MangaInfo
+	if err := json.Unmarshal([]byte(data), &info); err != nil {
+		return nil, fmt.Errorf("decode manual metadata: %w", err)
+	}
+	if info.Title == nil {
+		info.Title = map[string]string{}
+	}
+	if info.Description == nil {
+		info.Description = map[string]string{}
+	}
+	info.ID = ""
+	info.SelectedEnglishTitle = ""
+	return &info, nil
+}
+
+// UpsertManualMetadata stores user-entered metadata without changing any
+// MangaDex title record.
+func (s *Store) UpsertManualMetadata(key string, info *MangaInfo) error {
+	key = strings.TrimSpace(key)
+	if key == "" || info == nil {
+		return fmt.Errorf("manual metadata requires a manga key and metadata")
+	}
+	storedInfo := *info
+	storedInfo.ID = ""
+	storedInfo.SelectedEnglishTitle = ""
+	data, err := json.Marshal(&storedInfo)
+	if err != nil {
+		return fmt.Errorf("encode manual metadata: %w", err)
+	}
+	return s.withWriteTx(func(tx *sql.Tx) error {
+		_, err := tx.Exec(`INSERT INTO manga_manual_metadata (manga_key, info_json, updated_at)
+			VALUES (?, ?, CURRENT_TIMESTAMP)
+			ON CONFLICT(manga_key) DO UPDATE SET
+				info_json = excluded.info_json,
+				updated_at = CURRENT_TIMESTAMP`, key, string(data))
+		if err != nil {
+			return fmt.Errorf("store manual metadata: %w", err)
+		}
+		return nil
+	})
+}
+
+// DeleteManualMetadata makes a bookmark use its MangaDex metadata source again.
+func (s *Store) DeleteManualMetadata(key string) error {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return fmt.Errorf("cannot delete manual metadata without a manga key")
+	}
+	return s.withWriteTx(func(tx *sql.Tx) error {
+		if _, err := tx.Exec(`DELETE FROM manga_manual_metadata WHERE manga_key = ?`, key); err != nil {
+			return fmt.Errorf("delete manual metadata: %w", err)
+		}
+		return nil
+	})
 }
 
 // Upsert stores (or updates) MangaDex title information keyed by manga ID.

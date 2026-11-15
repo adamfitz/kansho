@@ -6,8 +6,49 @@ import (
 	"path/filepath"
 	"testing"
 
+	"kansho/config"
 	"kansho/mangadex"
 )
+
+func TestManualMetadataOverridesMangaDexBookmarkMetadata(t *testing.T) {
+	store, err := mangadex.OpenPath(filepath.Join(t.TempDir(), "manual-metadata.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	bookmark := config.Bookmarks{
+		Title:      "Bookmark title",
+		Site:       "local",
+		MangaDexID: "existing-mangadex-id",
+	}
+	if err := store.Upsert(&mangadex.MangaInfo{
+		ID:    bookmark.MangaDexID,
+		Title: map[string]string{"en": "MangaDex title"},
+	}); err != nil {
+		t.Fatalf("Upsert MangaDex metadata: %v", err)
+	}
+	if err := store.UpsertManualMetadata(MangaSourceKey(bookmark), &mangadex.MangaInfo{
+		Title:       map[string]string{"en": "Manual title"},
+		Description: map[string]string{"en": "Manual synopsis"},
+	}); err != nil {
+		t.Fatalf("UpsertManualMetadata: %v", err)
+	}
+
+	got, err := mangaInfoForBookmark(store, bookmark)
+	if err != nil {
+		t.Fatalf("mangaInfoForBookmark: %v", err)
+	}
+	if got == nil || got.ID != "" || got.EnglishTitle() != "Manual title" ||
+		got.DescriptionIn("en") != "Manual synopsis" {
+		t.Fatalf("metadata = %+v, want manual metadata despite the MangaDex ID", got)
+	}
+
+	comicInfo := FromMangaInfo(got)
+	if comicInfo.Series != "Manual title" || comicInfo.Summary != "Manual synopsis" {
+		t.Fatalf("ComicInfo = %+v, want manual title and synopsis", comicInfo)
+	}
+}
 
 func TestFromMangaInfoUsesSelectedEnglishTitleForSeries(t *testing.T) {
 	info := &mangadex.MangaInfo{

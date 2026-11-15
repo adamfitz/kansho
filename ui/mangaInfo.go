@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"fyne.io/fyne/v2"
@@ -18,16 +19,11 @@ import (
 	"kansho/metadata"
 )
 
-// DisplayMangaInfoFunc renders a fetched MangaDex title record. It is supplied
-// by the chapter list pane so title info is shown in the main window instead of
-// a separate dialog window.
+// DisplayMangaInfoFunc renders title metadata in the chapter list pane.
 type DisplayMangaInfoFunc func(info *mangadex.MangaInfo, bookmarkTitle string)
 
-// ShowMangaTitleInfo is the entry point for the (i) info button on a manga
-// list row. It looks the manga up in the local Kansho database first. When a
-// local record exists it renders the information pane immediately; otherwise a
-// title lookup dialog is shown so the user can pick the correct MangaDex
-// title (or enter a MangaDex URL / title ID manually).
+// ShowMangaTitleInfo opens metadata for the selected bookmark. Manual metadata
+// is checked before any MangaDex ID or title mapping.
 func ShowMangaTitleInfo(manga config.Bookmarks, window fyne.Window, display DisplayMangaInfoFunc) {
 	if display == nil {
 		dialog.ShowError(fmt.Errorf("MangaDex information display is not available"), window)
@@ -37,6 +33,16 @@ func ShowMangaTitleInfo(manga config.Bookmarks, window fyne.Window, display Disp
 	store, err := mangadex.GetStore()
 	if err != nil {
 		dialog.ShowError(fmt.Errorf("cannot open Kansho database: %v", err), window)
+		return
+	}
+
+	manual, err := store.LookupManualMetadata(metadata.MangaSourceKey(manga))
+	if err != nil {
+		dialog.ShowError(fmt.Errorf("cannot look up manual metadata: %v", err), window)
+		return
+	}
+	if manual != nil {
+		display(manual, manga.Title)
 		return
 	}
 
@@ -83,7 +89,7 @@ func ShowMangaTitleInfo(manga config.Bookmarks, window fyne.Window, display Disp
 		return
 	}
 
-	showMangaLookupDialog(manga.Title, window, display)
+	showMangaLookupDialog(manga, window, display)
 }
 
 // storeFetchedInfo persists a fetched MangaDex title and records the bookmark
@@ -208,26 +214,289 @@ func fetchAndShow(window fyne.Window, id, bookmarkTitle string, display DisplayM
 // searchable, scrollable list of matching titles (50 at a time, loading more in
 // the background as the user scrolls) plus a manual field for a MangaDex URL or
 // title ID.
-func showMangaLookupDialog(query string, window fyne.Window, display DisplayMangaInfoFunc) {
-	d := newTitleLookupDialog(query, window, display)
+func showMangaLookupDialog(manga config.Bookmarks, window fyne.Window, display DisplayMangaInfoFunc) {
+	d := newTitleLookupDialog(manga, window, display)
 	d.show()
 }
 
-// ShowMangaTitleLookup opens the MangaDex title picker even when the bookmark
-// already has a MangaDex ID. The Edit Manga panel uses it so a wrong metadata
-// mapping can be replaced. onChanged receives the chosen MangaDex ID after it
-// has been persisted to the database and before the information pane renders.
+// ShowMangaTitleLookup opens the MangaDex picker even when the bookmark already
+// has a MangaDex ID. onChanged receives a selected MangaDex ID after it has
+// been persisted and before the information pane renders.
 func ShowMangaTitleLookup(manga config.Bookmarks, window fyne.Window, display DisplayMangaInfoFunc, onChanged func(id string)) {
 	if display == nil {
 		display = func(*mangadex.MangaInfo, string) {}
 	}
 	wrapped := func(info *mangadex.MangaInfo, bookmarkTitle string) {
-		if onChanged != nil && info != nil {
+		if info != nil && info.ID != "" {
+			store, err := mangadex.GetStore()
+			if err != nil {
+				dialog.ShowError(fmt.Errorf("cannot open Kansho database: %v", err), window)
+				return
+			}
+			if err := store.DeleteManualMetadata(metadata.MangaSourceKey(manga)); err != nil {
+				dialog.ShowError(fmt.Errorf("cannot switch to MangaDex metadata: %v", err), window)
+				return
+			}
+		}
+		if onChanged != nil && info != nil && info.ID != "" {
 			onChanged(info.ID)
 		}
 		display(info, bookmarkTitle)
 	}
-	showMangaLookupDialog(manga.Title, window, wrapped)
+	showMangaLookupDialog(manga, window, wrapped)
+}
+
+func buildManualMetadataForm(window fyne.Window, initial *mangadex.MangaInfo, scrollHeight float32, cancel func(), save func(*mangadex.MangaInfo) error) fyne.CanvasObject {
+	info := &mangadex.MangaInfo{
+		Title:       map[string]string{},
+		Description: map[string]string{},
+		AltTitles:   []map[string]string{},
+		Tags:        []mangadex.TagInfo{},
+	}
+	if initial != nil {
+		*info = *initial
+		info.Title = cloneStringMap(initial.Title)
+		info.Description = cloneStringMap(initial.Description)
+		info.AltTitles = make([]map[string]string, 0, len(initial.AltTitles))
+		for _, alt := range initial.AltTitles {
+			info.AltTitles = append(info.AltTitles, cloneStringMap(alt))
+		}
+		info.Tags = make([]mangadex.TagInfo, 0, len(initial.Tags))
+		for _, tag := range initial.Tags {
+			tag.Name = cloneStringMap(tag.Name)
+			info.Tags = append(info.Tags, tag)
+		}
+		if initial.Year != nil {
+			year := *initial.Year
+			info.Year = &year
+		}
+	}
+	if info.Title == nil {
+		info.Title = map[string]string{}
+	}
+	if info.Description == nil {
+		info.Description = map[string]string{}
+	}
+	info.ID = ""
+	info.SelectedEnglishTitle = ""
+
+	languages := info.AvailableLanguages()
+	if !stringInSlice(languages, "en") {
+		languages = append(languages, "en")
+	}
+	currentLanguage := "en"
+	if !stringInSlice(languages, currentLanguage) && len(languages) > 0 {
+		currentLanguage = languages[0]
+	}
+
+	languageSelect := widget.NewSelect(languages, nil)
+	languageSelect.SetSelected(currentLanguage)
+	titleEntry := widget.NewEntry()
+	titleEntry.SetPlaceHolder("Title")
+	altTitlesEntry := widget.NewMultiLineEntry()
+	altTitlesEntry.SetPlaceHolder("One alternative title per line")
+	descriptionEntry := widget.NewMultiLineEntry()
+	descriptionEntry.SetPlaceHolder("Synopsis")
+	tagsEntry := widget.NewMultiLineEntry()
+	tagsEntry.SetPlaceHolder("One tag per line")
+
+	originalLanguageEntry := widget.NewEntry()
+	statusEntry := widget.NewEntry()
+	demographicEntry := widget.NewEntry()
+	yearEntry := widget.NewEntry()
+	contentRatingEntry := widget.NewEntry()
+	authorEntry := widget.NewEntry()
+	artistEntry := widget.NewEntry()
+	coverEntry := widget.NewEntry()
+	urlEntry := widget.NewEntry()
+
+	loadLanguage := func(lang string) {
+		titleEntry.SetText(info.Title[lang])
+		var altTitles []string
+		for _, alt := range info.AltTitles {
+			if title := strings.TrimSpace(alt[lang]); title != "" {
+				altTitles = append(altTitles, title)
+			}
+		}
+		altTitlesEntry.SetText(strings.Join(altTitles, "\n"))
+		descriptionEntry.SetText(info.Description[lang])
+		var tags []string
+		for _, tag := range info.Tags {
+			if name := strings.TrimSpace(tag.Name[lang]); name != "" {
+				tags = append(tags, name)
+			}
+		}
+		tagsEntry.SetText(strings.Join(tags, "\n"))
+	}
+
+	saveLanguage := func(lang string) {
+		setLocalizedValue(info.Title, lang, titleEntry.Text)
+		setLocalizedValue(info.Description, lang, descriptionEntry.Text)
+
+		altTitles := stringsToLines(altTitlesEntry.Text)
+		keptAltTitles := make([]map[string]string, 0, len(info.AltTitles)+len(altTitles))
+		for _, alt := range info.AltTitles {
+			delete(alt, lang)
+			if len(alt) > 0 {
+				keptAltTitles = append(keptAltTitles, alt)
+			}
+		}
+		for _, title := range altTitles {
+			keptAltTitles = append(keptAltTitles, map[string]string{lang: title})
+		}
+		info.AltTitles = keptAltTitles
+
+		tagNames := stringsToLines(tagsEntry.Text)
+		keptTags := make([]mangadex.TagInfo, 0, len(info.Tags)+len(tagNames))
+		nextName := 0
+		for _, tag := range info.Tags {
+			delete(tag.Name, lang)
+			if nextName < len(tagNames) {
+				if tag.Name == nil {
+					tag.Name = map[string]string{}
+				}
+				tag.Name[lang] = tagNames[nextName]
+				nextName++
+			}
+			if len(tag.Name) > 0 {
+				keptTags = append(keptTags, tag)
+			}
+		}
+		for ; nextName < len(tagNames); nextName++ {
+			keptTags = append(keptTags, mangadex.TagInfo{
+				Name: map[string]string{lang: tagNames[nextName]},
+			})
+		}
+		info.Tags = keptTags
+	}
+
+	loadLanguage(currentLanguage)
+	languageSelect.OnChanged = func(lang string) {
+		if lang == "" || lang == currentLanguage {
+			return
+		}
+		saveLanguage(currentLanguage)
+		currentLanguage = lang
+		loadLanguage(currentLanguage)
+	}
+
+	addLanguageButton := widget.NewButton("Add Language", func() {
+		codeEntry := widget.NewEntry()
+		codeEntry.SetPlaceHolder("Language code, for example en or ja")
+		addDialog := dialog.NewCustomConfirm("Add Metadata Language", "Add", "Cancel",
+			container.NewVBox(widget.NewLabel("Enter a language code."), codeEntry),
+			func(confirm bool) {
+				if !confirm {
+					return
+				}
+				code := strings.TrimSpace(codeEntry.Text)
+				if code == "" {
+					dialog.ShowError(fmt.Errorf("enter a language code"), window)
+					return
+				}
+				saveLanguage(currentLanguage)
+				if !stringInSlice(languages, code) {
+					languages = append(languages, code)
+					languageSelect.Options = languages
+					languageSelect.Refresh()
+				}
+				languageSelect.SetSelected(code)
+			}, window)
+		addDialog.Show()
+	})
+
+	if info.OriginalLanguage != "" {
+		originalLanguageEntry.SetText(info.OriginalLanguage)
+	}
+	statusEntry.SetText(info.Status)
+	demographicEntry.SetText(info.PublicationDemographic)
+	if info.Year != nil {
+		yearEntry.SetText(strconv.Itoa(*info.Year))
+	}
+	contentRatingEntry.SetText(info.ContentRating)
+	authorEntry.SetText(info.Author)
+	artistEntry.SetText(info.Artist)
+	coverEntry.SetText(info.CoverURL)
+	urlEntry.SetText(info.URL)
+
+	field := func(label string, object fyne.CanvasObject) fyne.CanvasObject {
+		return container.NewVBox(widget.NewLabel(label), object)
+	}
+	editorFields := container.NewVBox(
+		field("Language", container.NewBorder(nil, nil, nil, addLanguageButton, languageSelect)),
+		field("Title", titleEntry),
+		field("Alternative Titles", altTitlesEntry),
+		field("Synopsis", descriptionEntry),
+		field("Original Language", originalLanguageEntry),
+		field("Status", statusEntry),
+		field("Demographic", demographicEntry),
+		field("Year", yearEntry),
+		field("Author(s)", authorEntry),
+		field("Artist(s)", artistEntry),
+		field("Content Rating", contentRatingEntry),
+		field("Tags", tagsEntry),
+		field("Cover URL", coverEntry),
+		field("URL", urlEntry),
+	)
+	editorScroll := container.NewVScroll(editorFields)
+	editorScroll.SetMinSize(fyne.NewSize(680, scrollHeight))
+	statusLabel := widget.NewLabel("")
+	statusLabel.Wrapping = fyne.TextWrapWord
+	cancelButton := widget.NewButton("Cancel", cancel)
+	saveButton := widget.NewButton("Save", func() {
+		saveLanguage(currentLanguage)
+		info.OriginalLanguage = strings.TrimSpace(originalLanguageEntry.Text)
+		info.Status = strings.TrimSpace(statusEntry.Text)
+		info.PublicationDemographic = strings.TrimSpace(demographicEntry.Text)
+		info.ContentRating = strings.TrimSpace(contentRatingEntry.Text)
+		info.Author = strings.TrimSpace(authorEntry.Text)
+		info.Artist = strings.TrimSpace(artistEntry.Text)
+		info.CoverURL = strings.TrimSpace(coverEntry.Text)
+		info.URL = strings.TrimSpace(urlEntry.Text)
+		info.Year = nil
+		if rawYear := strings.TrimSpace(yearEntry.Text); rawYear != "" {
+			year, err := strconv.Atoi(rawYear)
+			if err != nil {
+				statusLabel.SetText(fmt.Sprintf("Year must be a whole number: %v", err))
+				return
+			}
+			info.Year = &year
+		}
+		if err := save(info); err != nil {
+			statusLabel.SetText(fmt.Sprintf("Could not save manual metadata: %v", err))
+		}
+	})
+
+	return container.NewBorder(nil, container.NewVBox(statusLabel, container.NewHBox(cancelButton, saveButton)),
+		nil, nil, editorScroll)
+}
+
+func setLocalizedValue(values map[string]string, lang, value string) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		delete(values, lang)
+		return
+	}
+	values[lang] = value
+}
+
+func cloneStringMap(values map[string]string) map[string]string {
+	cloned := make(map[string]string, len(values))
+	for key, value := range values {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func stringsToLines(value string) []string {
+	lines := strings.Split(value, "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if line = strings.TrimSpace(line); line != "" {
+			out = append(out, line)
+		}
+	}
+	return out
 }
 
 // --- Info window ---
@@ -253,11 +522,8 @@ func infoFieldLabel(text string) *widget.Label {
 // replace) after a refresh so a newer (or different) title record is shown with
 // its own language set.
 //
-// English is the default language; a dropdown lists every language MangaDex
-// actually publishes for the title and switching language re-queries MangaDex
-// (with a visible notice) and redraws the fields. The Refresh button re-queries
-// MangaDex and, when that returns nothing, prompts the user for a MangaDex URL
-// or title ID.
+// English is the default language. MangaDex records are re-queried when the
+// language changes; manual records redraw from their local values.
 func buildMangaInfoContent(parentWindow fyne.Window, replace func(fyne.CanvasObject), info *mangadex.MangaInfo, bookmarkTitle, initialLang string) fyne.CanvasObject {
 	langs := info.AvailableLanguages()
 	displayNames := make([]string, 0, len(langs)+1)
@@ -297,8 +563,13 @@ func buildMangaInfoContent(parentWindow fyne.Window, replace func(fyne.CanvasObj
 	fieldScroll := container.NewVScroll(container.NewVBox())
 
 	rebuildFields := func(lang string) {
-		box := container.NewVBox(
-			infoRow("MangaDex ID", info.ID),
+		rows := []fyne.CanvasObject{
+			infoRow("Metadata Source", metadataSourceLabel(info)),
+		}
+		if info.ID != "" {
+			rows = append(rows, infoRow("MangaDex ID", info.ID))
+		}
+		rows = append(rows,
 			infoRow("Original Language", languageDisplayName(info.OriginalLanguage)),
 			infoRow("Status", prettifyStatus(info.Status)),
 			infoRow("Demographic", prettifyDemographic(info.PublicationDemographic)),
@@ -308,10 +579,11 @@ func buildMangaInfoContent(parentWindow fyne.Window, replace func(fyne.CanvasObj
 			infoRow("Content Rating", prettifyRating(info.ContentRating)),
 			infoRow("Tags", strings.Join(info.TagList(lang), ", ")),
 			infoRow("Alt Titles", strings.Join(info.AltTitleList(), "\n")),
-			buildURLRow(info.URL),
+			buildURLRow(metadataURLLabel(info), info.URL),
 			NewSeparator(),
 			infoRow("Description", strings.TrimSpace(info.DescriptionIn(lang))),
 		)
+		box := container.NewVBox(rows...)
 		fieldScroll.Content = box
 		fieldScroll.Refresh()
 	}
@@ -326,6 +598,10 @@ func buildMangaInfoContent(parentWindow fyne.Window, replace func(fyne.CanvasObj
 		currentLang = newLang
 		notifyLabel.SetText(fmt.Sprintf("Requested language '%s' is being queried for this title...", display))
 		rebuildFields(newLang)
+		if info.ID == "" {
+			notifyLabel.SetText(fmt.Sprintf("Showing %s for this title.", display))
+			return
+		}
 		// Re-query MangaDex for this title so the shown language data is
 		// verified against the latest remote record, then store the result.
 		fetchLang := newLang
@@ -356,6 +632,9 @@ func buildMangaInfoContent(parentWindow fyne.Window, replace func(fyne.CanvasObj
 	// Refresh re-queries MangaDex for the current title. If the query returns
 	// nothing the user is prompted for a MangaDex URL or title ID instead.
 	refreshButton := widget.NewButtonWithIcon("Refresh", theme.ViewRefreshIcon(), nil)
+	if info.ID == "" {
+		refreshButton.Hide()
+	}
 	refreshButton.OnTapped = func() {
 		notifyLabel.SetText("Refreshing from MangaDex...")
 		id := info.ID
@@ -406,6 +685,36 @@ func buildMangaInfoContent(parentWindow fyne.Window, replace func(fyne.CanvasObj
 				break
 			}
 		}
+	}
+
+	manualUpdateButton := widget.NewButton("Manual Update", nil)
+	manualUpdateButton.OnTapped = func() {
+		if matchedBookmark == nil {
+			dialog.ShowError(fmt.Errorf("cannot find the bookmark for manual metadata"), parentWindow)
+			return
+		}
+		var initial *mangadex.MangaInfo
+		if info.ID == "" {
+			initial = info
+		}
+		var editor *dialog.CustomDialog
+		form := buildManualMetadataForm(parentWindow, initial, 420, func() {
+			editor.Hide()
+		}, func(updated *mangadex.MangaInfo) error {
+			store, err := mangadex.GetStore()
+			if err != nil {
+				return err
+			}
+			if err := store.UpsertManualMetadata(metadata.MangaSourceKey(*matchedBookmark), updated); err != nil {
+				return err
+			}
+			editor.Hide()
+			replace(buildMangaInfoContent(parentWindow, replace, updated, bookmarkTitle, currentLang))
+			return nil
+		})
+		editor = dialog.NewCustom("Manual Metadata", "Close", form, parentWindow)
+		editor.Resize(fyne.NewSize(760, 620))
+		editor.Show()
 	}
 
 	updateCheckIcon := func() {
@@ -527,7 +836,7 @@ func buildMangaInfoContent(parentWindow fyne.Window, replace func(fyne.CanvasObj
 	titleRow := container.NewBorder(nil, nil, nil, checkIcon, titleLabel)
 	titleBlock := container.NewVBox(
 		titleRow,
-		container.NewHBox(infoFieldLabel("Language:"), langSelect, refreshButton, checkButton, repairButton),
+		container.NewHBox(infoFieldLabel("Language:"), langSelect, refreshButton, checkButton, repairButton, manualUpdateButton),
 	)
 	statusRow := container.NewBorder(nil, nil, nil, nil, notifyLabel)
 	header := container.NewVBox(titleBlock, statusRow, NewSeparator())
@@ -623,10 +932,22 @@ func infoRow(field, value string) fyne.CanvasObject {
 	return container.NewBorder(nil, nil, infoFieldLabel(field+":"), nil, valueLabel)
 }
 
-// buildURLRow shows the MangaDex page URL as a clickable hyperlink (the URL
-// text itself opens the page in the default browser) plus a Copy button so the
-// raw URL can still be copied to the clipboard.
-func buildURLRow(rawURL string) fyne.CanvasObject {
+// buildURLRow shows a clickable URL and a Copy button.
+func metadataSourceLabel(info *mangadex.MangaInfo) string {
+	if info.ID == "" {
+		return "Manual"
+	}
+	return "MangaDex"
+}
+
+func metadataURLLabel(info *mangadex.MangaInfo) string {
+	if info.ID == "" {
+		return "URL"
+	}
+	return "MangaDex"
+}
+
+func buildURLRow(label, rawURL string) fyne.CanvasObject {
 	parsed, _ := url.Parse(rawURL)
 	link := widget.NewHyperlink(rawURL, parsed)
 	link.Truncation = fyne.TextTruncateEllipsis
@@ -635,7 +956,7 @@ func buildURLRow(rawURL string) fyne.CanvasObject {
 			fyne.CurrentApp().Clipboard().SetContent(rawURL)
 		}
 	})
-	return container.NewBorder(nil, nil, infoFieldLabel("MangaDex:"), copyButton, link)
+	return container.NewBorder(nil, nil, infoFieldLabel(label+":"), copyButton, link)
 }
 
 func intString(p *int) string {
